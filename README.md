@@ -2,16 +2,20 @@
 
 C++20 / Qt Quick 本地弹幕覆盖层，Windows x64 优先。
 
-当前是可构建的开发框架：控制窗口、透明置顶预览窗口、滚动示例文字、暂停/继续、项目内数据与缓存路径。**尚未实现 XML 加载、SMTC 会话同步、多轨调度和完整设置。** 单条预览使用 Qt Quick Text，不代表最终批量弹幕渲染架构或性能结论。
+当前为 **0.2 C++ 重构版**，主工作流已落地：异步加载 Bilibili XML、滚动/顶部/底部弹幕、Windows SMTC 会话选择与同步、独立播放/暂停/跳转、设置持久化与旧 INI 导入、日志查看/过滤/导出。
+
+控制界面使用 **Qt 官方 FluentWinUI3**，仅组合导航、设置分组和设置行；弹幕由 C++ 调度和 Qt Quick 公开场景图渲染，没有逐条 QML Timer。无新增第三方依赖，Python 归档不参与构建。
+
+已完成构建、核心/集成测试、原生主题/DPI 截图、真实 Chrome 媒体会话读取及本机部署检查。高对比度、Narrator、独占全屏、真实鼠标穿透和长时间压力仍需验收。性能数据与限制见 [交付状态](docs/FRAMEWORK_STATUS.md)，设计基线见 [UI 约束](docs/UI_DESIGN_SYSTEM.md)。
 
 ## 项目结构
 
 ```text
-src/core/                  纯 C++ 模型与动画时钟
+src/core/                  纯 C++ 时间轴、轨道与对象池
 src/application/           应用编排与 UI 状态
-src/infrastructure/        数据目录与基础设施
+src/infrastructure/        XML、JSON 设置、日志和数据目录
 src/platform/windows/      Windows SDK 适配边界
-src/renderer/              统一动画驱动
+src/renderer/              文字布局缓存与场景图节点
 src/app/                   程序入口和 Qt 对象装配
 qml/                       控制界面与透明覆盖窗
 tests/                     CTest 测试
@@ -65,7 +69,13 @@ pwsh -NoProfile -File scripts/clean.ps1 -Preset windows-debug -WhatIf
 
 部署目录需要官方 Microsoft Visual C++ 2015–2022 x64 运行库，脚本不自动安装。公开发布前还需完成干净机器验证及第三方分发材料，见 [第三方组件说明](docs/THIRD_PARTY.md)。
 
-CTest 包含动画时钟边界测试和 offscreen 窗口加载测试；它不能证明系统级鼠标穿透、真实透明合成、多显示器或媒体同步正确。后续按 [架构方案](docs/CPP_QT_ARCHITECTURE.md) 逐项验证。
+CTest 包含动画时钟、轨道/对象池、XML/设置/播放编排集成，以及 offscreen QML smoke 四项测试。测试快照注入不能替代播放器实测。
+
+原生截图与短时负载可通过 `pwsh -NoProfile -File scripts/validate.ps1 -Benchmark` 复现，输出在 `out/validation/<时间戳>`。可选 `-SessionId Chrome` 只读跟随已有媒体会话，不控制外部播放器；报告含媒体标题，不应直接公开。没有对应会话时该项失败。
+
+使用：浏览并加载 XML，选择媒体会话后点击“同步播放”；不依赖播放器时选择“独立播放”。设置即时生效，数值编辑合并 200 ms 后原子写盘。旧 INI 在设置页手动导入，原文件保留；不自动沿用旧机器的 XML 路径。
+
+默认支持 XML 模式 1/4/5；高级脚本/定位等模式过滤计数。文件上限 512 MiB、100 万条、每条 512 字符。跳转清空在屏弹幕，从新位置继续，不补发历史。最大在屏数量是资源上限，不是流畅度保证。
 
 ## 历史版本
 

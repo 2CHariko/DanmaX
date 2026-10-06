@@ -14,4 +14,4 @@ struct MediaSessionSnapshot {
     std::optional<double> playbackRate;
     std::chrono::steady_clock::time_point sampledAt;
 };
-}
+} // namespace danmaku

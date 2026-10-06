@@ -1,75 +1,55 @@
 import QtQuick
-import QtQuick.Controls.Basic
+import QtQuick.Controls.FluentWinUI3
 import QtQuick.Layouts
-
+import "components"
+import "pages"
+import "theme"
 ApplicationWindow {
     id: root
     required property QtObject backend
+    property int selectedPage: 0
+    property bool navigationOpen: false
+    readonly property bool minimal: width <= Ui.minimalNavigationWidth
+    readonly property bool compact: width < Ui.expandedNavigationWidth
     visible: false
-    width: 820
-    height: 520
-    minimumWidth: 680
-    minimumHeight: 440
-    title: "Local Danmaku · 开发预览"
-    color: "#f4f5f7"
-    font.pixelSize: 14
-    palette.windowText: "#202b38"
-    palette.text: "#202b38"
-    palette.buttonText: "#202b38"
-    palette.button: "#e6ebf0"
-    palette.base: "white"
-    palette.window: "#f4f5f7"
-    palette.highlight: "#2761a7"
-    palette.highlightedText: "white"
+    width: 1080; height: 760
+    minimumWidth: 520; minimumHeight: 480
+    title: "Local Danmaku"
+    function navigate(page) { selectedPage=page; navigationOpen=false; pages.children[page].forceActiveFocus() }
     ColumnLayout {
-        anchors.fill: parent
-        anchors.margins: 28
-        spacing: 18
-        Label { text: "本地弹幕"; font.pixelSize: 28; font.bold: true }
-        Label { text: "C++ / Qt Quick 框架已就绪"; font.pixelSize: 16; color: "#435469" }
-        Frame {
-            Layout.fillWidth: true
-            padding: 18
-            background: Rectangle { color: "white"; border.color: "#d7dce3"; radius: 6 }
-            ColumnLayout {
-                anchors.fill: parent
-                spacing: 12
-                Label { text: "覆盖层预览"; font.bold: true }
-                Label {
-                    Layout.fillWidth: true
-                    text: "显示一条循环滚动的示例文字。覆盖层不接收鼠标输入，可在这里关闭。"
-                    wrapMode: Text.WordWrap
-                }
-                RowLayout {
-                    Button {
-                        text: root.backend.overlayVisible ? "关闭预览" : "显示预览"
-                        onClicked: root.backend.overlayVisible = !root.backend.overlayVisible
-                    }
-                    Button {
-                        enabled: root.backend.overlayVisible
-                        text: root.backend.preview.running ? "暂停" : "继续"
-                        onClicked: root.backend.preview.setRunning(!root.backend.preview.running)
-                    }
-                    Label { text: "动画时间  " + root.backend.preview.elapsedSeconds.toFixed(1) + " s" }
-                }
+        anchors.fill:parent
+        anchors.margins:root.minimal?12:24
+        spacing:12
+        ToolButton { id:menuButton;visible:root.minimal;text:"导航";Accessible.name:"展开导航";checkable:true;checked:root.navigationOpen;Accessible.description:root.navigationOpen?"导航已展开":"导航已收起";onToggled:root.navigationOpen=checked }
+        RowLayout {
+            visible: root.backend.error.length>0 || root.backend.settings.error.length>0
+            Layout.fillWidth:true
+            Label { Layout.fillWidth:true;wrapMode:Text.WordWrap;text:root.backend.error.length>0?root.backend.error:root.backend.settings.error;Accessible.name:"错误："+text }
+            Button { text:root.backend.settings.error.length>0?"重试保存":"关闭";onClicked:root.backend.settings.error.length>0?root.backend.settings.retrySave():root.backend.clearError() }
+        }
+        RowLayout {
+            Layout.fillWidth:true;Layout.fillHeight:true;spacing:24
+            NavigationPane {
+                visible:!root.minimal||root.navigationOpen
+                Layout.preferredWidth:root.compact?72:176
+                Layout.minimumWidth:Layout.preferredWidth
+                Layout.maximumWidth:Layout.preferredWidth
+                Layout.fillHeight:true
+                compact:root.compact;selected:root.selectedPage;fluentIcons:root.backend.hasFluentIcons
+                onNavigate:page=>root.navigate(page)
+            }
+            StackLayout {
+                id:pages
+                Layout.fillWidth:true;Layout.fillHeight:true
+                currentIndex:root.selectedPage
+                PlayerPage { backend:root.backend }
+                LogsPage { backend:root.backend }
+                SettingsPage { backend:root.backend }
             }
         }
-        Label {
-            Layout.fillWidth: true
-            text: "这是框架验证版本。XML 加载、播放器会话同步和多轨弹幕引擎尚未实现。"
-            wrapMode: Text.WordWrap
-            color: "#5c6570"
-        }
-        Item { Layout.fillHeight: true }
-        Label { Layout.fillWidth: true; text: root.backend.platformDescription; wrapMode: Text.WordWrap; font.pixelSize: 12 }
-        Label {
-            Layout.fillWidth: true
-            text: "数据目录：" + root.backend.dataDirectory
-            wrapMode: Text.WrapAnywhere
-            font.pixelSize: 12
-            color: "#5c6570"
-        }
     }
-    OverlayWindow { preview: root.backend.preview; visible: root.backend.overlayVisible }
-    onClosing: root.backend.overlayVisible = false
+    Shortcut { sequence:"Escape";enabled:root.navigationOpen;onActivated:{root.navigationOpen=false;menuButton.forceActiveFocus()} }
+    OverlayWindow { id:overlay;backend:root.backend;visible:root.backend.overlayVisible }
+    Component.onCompleted: root.backend.attach(overlay.renderer,overlay)
+    onClosing:root.backend.stop()
 }

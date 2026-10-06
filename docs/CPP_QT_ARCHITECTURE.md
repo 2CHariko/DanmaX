@@ -1,6 +1,6 @@
 # C++ / Qt 架构与项目内开发环境
 
-状态：架构基线；CMake、项目内工具脚本、C++ 分层目标和 QML 覆盖层预览已实现。完整 XML、SMTC 和批量弹幕渲染仍为后续计划。
+状态：0.2 实现基线。XML、SMTC、时间轴/轨道、公开场景图文字节点、设置及 Fluent 控制面板已落地，验证范围见 `FRAMEWORK_STATUS.md`。
 
 本方案取代 Flutter 迁移方向。旧 Python 版本已归档至 `archive/python-qt/`，Flutter 文档已归档至 `archive/plans/`，内容保留。目标是高效的 Windows 弹幕覆盖层，同时控制依赖数量和构建复杂度。
 
@@ -9,7 +9,7 @@
 | 项目 | 选择 | 原因 |
 |---|---|---|
 | 语言 | C++20 | 使用标准库模型、RAII 和明确所有权；兼容现有 MSVC 工具链 |
-| UI | Qt 6 Quick / QML / Quick Controls | 控制面板与透明弹幕窗使用同一套框架 |
+| UI | Qt 6 Quick / QML / 官方 FluentWinUI3 | 控制面板使用统一 Fluent 规范；弹幕内容独立渲染 |
 | 渲染 | Qt Quick 公开场景图能力 | 优先复用文字布局、GPU 后端和线程基础设施 |
 | 平台 | Windows x64 首发 | 验证 SMTC、窗口穿透和多显示器；核心保留可移植性 |
 | 构建 | CMake + Ninja + MSVC | 单一构建路线，不同时维护 qmake、MinGW 和多套生成器 |
@@ -18,6 +18,8 @@
 | 分发 | 动态 Qt 库的 Release 便携目录 | 首版不增加安装器框架、更新服务或 MSIX |
 
 不设定“换框架即提速”的承诺。先验证覆盖层合成和文字负载，再扩展完整控制面板。
+
+UI 的具体约束以 [UI_DESIGN_SYSTEM.md](UI_DESIGN_SYSTEM.md) 为准：统一编译期 FluentWinUI3，少量导航与设置组合，不增加第三方 Fluent 依赖；官方未覆盖控件的 Fusion 回退要记录和验证。当前页面已迁移；完整无障碍验收仍未完成。
 
 ## 2. 目录规划
 
@@ -59,7 +61,7 @@
 └── archive/                       # Python 实现、样本和历史方案，不参与构建
 ```
 
-不把 `src/core` 拆成大量微型库。建议初始构建目标：`danmaku_core`（纯 C++ 静态库）、`danmaku_runtime`（Qt/平台服务）、`danmaku_app`（QML 与渲染）；测试按职责建立可执行目标即可。这些目标已建立；领域业务将在对应层逐步实现。
+不把 `src/core` 拆成大量微型库。建议初始构建目标：`danmaku_core`（纯 C++ 静态库）、`danmaku_runtime`（Qt/平台服务）、`danmaku_app`（QML 与渲染）；测试按职责建立可执行目标即可。这些目标已建立并承载当前业务。
 
 ## 3. 模块与数据流
 
@@ -75,7 +77,7 @@ QML UI → Application Service → Core
 
 ### 领域核心
 
-- `DanmakuItem`：媒体时间、模式、RGB/ARGB 整数、文本、源记录索引。时间用明确单位的整数或 chrono 类型。
+- `DanmakuItem`：媒体时间、模式、RGB/ARGB 整数、文本、源记录索引。实现中时间为 double 秒，跨平台边界使用 chrono 转换；接口和测试固定单位。
 - `TimelineEngine`：排序索引、游标、跳转与切换语义；按区间产生批次，不逐条跨线程发消息。
 - `TrackAllocator`：按真实文字尺寸、速度、轨道边界分配；明确三种弹幕是否共享可视空间。
 - `ActiveSet`：预留存储、活动状态、剩余寿命、回收和丢弃统计。
@@ -88,6 +90,7 @@ QML UI → Application Service → Core
 - 日志使用 Qt 消息处理能力，提供有界 UI 队列和文件轮转，避免渲染线程同步写盘。
 - 应用服务统一管理 `Idle / Loading / WaitingForSession / Playing / Paused / Error`，每个状态有可解释的 UI 输出。
 - 配置分为即时属性、文字缓存失效、窗口重新配置和文件重载，不统一“停止后延时重启”。
+- 设置 UI 默认即时生效并保存；提交时机、校验、持久化失败和需重启例外由应用服务明确反馈，不提供统一“应用全部”按钮。
 
 ### Windows 适配
 
@@ -100,7 +103,7 @@ QML UI → Application Service → Core
 
 ## 4. 渲染和时间规则
 
-首先实现 `QQuickItem` 承载的弹幕层原型。文字方案优先验证公开 `QSGTextNode` 等可用 API；具体接口须以锁定 Qt 版本编译结果为准。若使用文字位图纹理，必须测量纹理上传成本、缓存容量与 DPI 清晰度。不提前承诺一次绘制调用或跨不同字体/纹理无条件合批。
+已实现 `QQuickItem` 和公开 `QSGTextNode`，使用 `QTextLayout` 缓存布局；节点按弹幕生命周期创建/回收，逐帧只更新坐标。若使用文字位图纹理，必须测量纹理上传成本、缓存容量与 DPI 清晰度。不提前承诺一次绘制调用或跨不同字体/纹理无条件合批。
 
 - 单一帧节奏，以真实 delta 推进状态，不假定定时器恰好 60 Hz。
 - 媒体时间决定投放，动画时间决定移动和寿命。首版定义媒体速率变化时动画是否跟随；推荐跟随已知速率，未知时按 1 倍并显示能力限制。
@@ -152,8 +155,8 @@ Qt/CMake/Ninja 应使用项目内独立版本。MSVC/SDK 后续可选择：
 
 | 预设 | 产物路径 | 用途 |
 |---|---|---|
-| windows-debug | out/build/windows-x64-debug | 日常调试和正确性测试 |
-| windows-release | out/build/windows-x64-release | 性能与部署验证 |
+| windows-debug | out/build/windows-debug | 日常调试和正确性测试 |
+| windows-release | out/build/windows-release | 性能与部署验证 |
 
 已实现的命令入口（使用 PowerShell 7）：
 
@@ -190,3 +193,13 @@ Qt/CMake/Ninja 应使用项目内独立版本。MSVC/SDK 后续可选择：
 - [Qt Windows Deployment](https://doc.qt.io/qt-6/windows-deployment.html)：部署工具及运行库处理。
 - [CMake Presets](https://cmake.org/cmake/help/latest/manual/cmake-presets.7.html)：共享/本地配置、构建目录与环境。
 - [Visual Studio 安装位置](https://learn.microsoft.com/en-us/visualstudio/install/change-installation-locations?view=vs-2022)：部分共享工具和 SDK 仍安装在系统盘的限制。
+
+## 9. 0.2 实现细节与明确降级
+
+- `danmaku::Engine` 合并时间轴、轨道与活动池，避免无必要微型库；滚动统一像素速度，动画随已知媒体速率缩放。固定/滚动共享物理轨道，允许重叠为显式偏好。
+- 文本布局缓存采用估算 16 MiB 的 LRU 预算（1 KiB 基础 + 每 UTF-16 字符约 64 B）；这是估算成本，不是 Qt/驱动实际显存上限。活动布局另由最大在屏 5000 上限约束，字体/描边变化清空，DPR 变化重建渲染节点。颜色保存在节点中，不污染可复用布局。
+- 单个 C++ 16 ms 定时器使用单调 delta 驱动；P95/P99 为 GUI 调度间隔，`frameSwapped` 为呈现回调计数，均不等同于测得的 GPU 帧时长。
+- SMTC 工作线程按 ID 采样，媒体身份暂用标题/作者/时长组合；同名同长媒体的切换可能无法辨别。提供应用 ID 手动输入；前台限制仅对可关联 AUMID/进程名生效，默认关闭，不承诺跟随播放器窗口。
+- JSON 原子写入；数值更新 200 ms 合并持久化，析构前刷新。错误配置首次覆盖前备份；保存失败有重试入口。INI 只读手动导入，跳过不合法旧字段。
+- XML 读取和排序都可合作取消；加载结果一次移交。UI 队列日志最多 1000，过载统计丢弃；文件 2 MiB 轮转一份。记录媒体标题的本地诊断报告不默认提交。
+- 置顶 0/1/2/3 分别为关闭、窗口标志、每秒保持、每秒先撤销再恢复兼容策略；后两项只处理覆盖窗，不激活窗口。独占全屏不保证可见。

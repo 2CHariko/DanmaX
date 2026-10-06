@@ -6,7 +6,8 @@ using namespace std::chrono_literals;
 int main() {
     danmaku::PlaybackClock clock;
     auto check = [](bool condition, const char* message) {
-        if (!condition) std::cerr << message << '\n';
+        if (!condition)
+            std::cerr << message << '\n';
         return condition;
     };
     bool ok = true;
