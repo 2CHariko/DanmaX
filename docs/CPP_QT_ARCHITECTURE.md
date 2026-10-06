@@ -1,0 +1,192 @@
+# C++ / Qt 架构与项目内开发环境
+
+状态：架构基线；CMake、项目内工具脚本、C++ 分层目标和 QML 覆盖层预览已实现。完整 XML、SMTC 和批量弹幕渲染仍为后续计划。
+
+本方案取代 Flutter 迁移方向。旧 Python 版本已归档至 `archive/python-qt/`，Flutter 文档已归档至 `archive/plans/`，内容保留。目标是高效的 Windows 弹幕覆盖层，同时控制依赖数量和构建复杂度。
+
+## 1. 决策
+
+| 项目 | 选择 | 原因 |
+|---|---|---|
+| 语言 | C++20 | 使用标准库模型、RAII 和明确所有权；兼容现有 MSVC 工具链 |
+| UI | Qt 6 Quick / QML / Quick Controls | 控制面板与透明弹幕窗使用同一套框架 |
+| 渲染 | Qt Quick 公开场景图能力 | 优先复用文字布局、GPU 后端和线程基础设施 |
+| 平台 | Windows x64 首发 | 验证 SMTC、窗口穿透和多显示器；核心保留可移植性 |
+| 构建 | CMake + Ninja + MSVC | 单一构建路线，不同时维护 qmake、MinGW 和多套生成器 |
+| 测试 | CTest + Qt Test，核心可用普通 C++ 测试程序 | 无额外测试框架依赖 |
+| 依赖管理 | 版本清单 + PowerShell 准备脚本 | 首版不引入 vcpkg、Conan 或运行时包管理器 |
+| 分发 | 动态 Qt 库的 Release 便携目录 | 首版不增加安装器框架、更新服务或 MSIX |
+
+不设定“换框架即提速”的承诺。先验证覆盖层合成和文字负载，再扩展完整控制面板。
+
+## 2. 目录规划
+
+以下为架构目录；当前实现状态以根 README 和源码为准，尚未使用的资源目录不预建空文件。
+
+```text
+项目根/
+├── AGENTS.md
+├── CMakeLists.txt                  # 根构建入口
+├── CMakePresets.json               # 共享配置，不写本机绝对路径
+├── CMakeUserPresets.json           # 可选本地覆盖，不提交
+├── cmake/                         # Qt、编译器校验与部署辅助
+├── scripts/
+│   ├── bootstrap.ps1               # 显式下载与准备，独立于构建
+│   ├── doctor.ps1                  # 只读诊断，列出所有实际工具路径
+│   ├── build.ps1                   # 配置、编译、测试的统一入口
+│   ├── run.ps1                     # 设置项目内运行目录和缓存
+│   ├── package.ps1                 # 收集 Release 部署依赖
+│   └── clean.ps1                   # 仅清理校验过的产物目录
+├── toolchain/
+│   ├── dependencies.lock.json      # 精确版本、URL、哈希与许可证
+│   └── local.example.json          # 外部系统工具例外的格式示例
+├── src/
+│   ├── core/                      # 纯 C++：模型、时间轴、轨道和生命周期
+│   ├── application/               # 会话编排、设置应用与状态输出
+│   ├── infrastructure/            # XML、配置、日志、任务执行
+│   ├── platform/windows/          # SMTC、前台窗口、覆盖窗策略
+│   ├── renderer/                  # Qt Quick 项、场景图、文字资源
+│   └── app/                       # main、QML 注册和对象装配
+├── qml/                           # 控制面板、设置、会话列表、调试 UI
+├── resources/                     # 图标、翻译等受版本控制的资源
+├── tests/                         # 单元、集成、渲染与性能入口
+├── docs/
+├── .tools/                        # 忽略：qt/<版本>/msvc2022_64、cmake、ninja
+├── .deps/                         # 忽略：确有需要的额外依赖
+├── .cache/                        # 忽略：downloads、tmp、qml 等
+├── .local/                        # 忽略：开发配置、日志、toolchain.local.json
+├── out/                           # 忽略：build、test-results、reports、stage、packages
+└── archive/                       # Python 实现、样本和历史方案，不参与构建
+```
+
+不把 `src/core` 拆成大量微型库。建议初始构建目标：`danmaku_core`（纯 C++ 静态库）、`danmaku_runtime`（Qt/平台服务）、`danmaku_app`（QML 与渲染）；测试按职责建立可执行目标即可。这些目标已建立；领域业务将在对应层逐步实现。
+
+## 3. 模块与数据流
+
+```text
+QML UI → Application Service → Core
+                  ↓             ↑
+             XML / Config    媒体快照、帧时间
+                  ↓             ↑
+            后台任务执行    Windows Media Adapter
+                                ↓
+                  调度结果 → Renderer → Qt Quick Scene Graph
+```
+
+### 领域核心
+
+- `DanmakuItem`：媒体时间、模式、RGB/ARGB 整数、文本、源记录索引。时间用明确单位的整数或 chrono 类型。
+- `TimelineEngine`：排序索引、游标、跳转与切换语义；按区间产生批次，不逐条跨线程发消息。
+- `TrackAllocator`：按真实文字尺寸、速度、轨道边界分配；明确三种弹幕是否共享可视空间。
+- `ActiveSet`：预留存储、活动状态、剩余寿命、回收和丢弃统计。
+- 核心只接收文字测量结果和可视区域，不调用字体、文件、窗口或系统媒体 API。
+
+### 基础设施与应用服务
+
+- XML 通过后台 `QXmlStreamReader` 解析，限制异常文件、超长文本和非有限时间；按批次报告进度。完成后一次性交接不可变数据。
+- 配置采用版本化 JSON、校验和原子保存（Qt `QSaveFile`）；旧 INI 只读导入，保留原文件，不保存旧机器绝对路径作为新默认值。
+- 日志使用 Qt 消息处理能力，提供有界 UI 队列和文件轮转，避免渲染线程同步写盘。
+- 应用服务统一管理 `Idle / Loading / WaitingForSession / Playing / Paused / Error`，每个状态有可解释的 UI 输出。
+- 配置分为即时属性、文字缓存失效、窗口重新配置和文件重载，不统一“停止后延时重启”。
+
+### Windows 适配
+
+- 用 Windows SDK 提供的 C++/WinRT 访问 SMTC；以编译探针验证实际 SDK 头文件和接口，不预先增加 NuGet 依赖。
+- 枚举并选择目标会话，不依赖系统 `current session` 恰好是目标播放器。
+- 快照包含会话身份、媒体身份线索、播放状态、位置、时长、可用播放速率、单调采样时间；无法准确识别媒体切换时明确降级策略。
+- AUMID、进程名、PID 和 HWND 分开建模；建立最佳可用关联并允许明确选择，不能假定它们字符串相等。
+- 覆盖窗的显示器、可视区域、焦点、穿透和置顶由适配层管理。首版提供明确的显示器选择；跟随播放器窗口须另行验证识别和边界行为。
+- 订阅句柄、WinRT apartment、窗口钩子和线程有 RAII 生命周期；停止时合作取消并等待，不使用强制 terminate。
+
+## 4. 渲染和时间规则
+
+首先实现 `QQuickItem` 承载的弹幕层原型。文字方案优先验证公开 `QSGTextNode` 等可用 API；具体接口须以锁定 Qt 版本编译结果为准。若使用文字位图纹理，必须测量纹理上传成本、缓存容量与 DPI 清晰度。不提前承诺一次绘制调用或跨不同字体/纹理无条件合批。
+
+- 单一帧节奏，以真实 delta 推进状态，不假定定时器恰好 60 Hz。
+- 媒体时间决定投放，动画时间决定移动和寿命。首版定义媒体速率变化时动画是否跟随；推荐跟随已知速率，未知时按 1 倍并显示能力限制。
+- 暂停同时冻结位置、寿命、轨道释放条件；播放恢复不补偿暂停期间的墙钟时长。
+- 小幅倒退、跳转、会话切换不能只靠绝对差大于 2 秒判断。结合预测媒体位置、状态及容差处理抖动；跳转重置所有相关状态。
+- 默认跳转策略为清空在屏弹幕并定位到新时间开始投放，不追补整个历史区间；若未来支持重建仍应可见的弹幕，需独立定义算法和测试。
+- 隐藏时停止无意义绘制；媒体跟踪继续，恢复可见时按当前位置重新同步，不一次性补发隐藏期间弹幕。
+- GUI 线程拥有应用/核心可变状态；Qt Quick 同步阶段向渲染侧交接批次。场景图节点和 GPU 资源只在规定的渲染阶段创建、修改、释放，禁止后台线程访问。
+- 文字缓存键包含文本、字体回退相关设置、字号、颜色/描边策略、DPR；缓存设字节预算与回收规则。Qt 自身缓存与项目缓存分开统计。
+- 轨道释放依据尾部位置和最小间距；不能用固定 0.8 系数提前释放。不同速度时还需防追尾；固定弹幕与滚动弹幕交叉避让规则必须可测试。
+
+## 5. “全部放在项目目录”的实施边界
+
+### 可严格控制的部分
+
+Qt SDK、CMake、Ninja、下载文件、可选依赖、项目临时文件、QML 磁盘缓存、构建中间文件、测试结果、打包暂存和开发日志全部放入上述项目内目录。任何后续引入的工具都必须先确认缓存路径可配置。
+
+脚本在进程环境中设置 `TEMP`、`TMP` 为 `.cache/tmp/<任务>`，`QML_DISK_CACHE_PATH` 为 `.cache/qml/<Qt版本>/<配置>`；使用显式项目数据根处理配置和日志，而不是直接依赖默认 AppData 路径。Qt/工具的其他缓存若未提供重定向接口，必须在诊断文档中披露，不能宣称已完全隔离。
+
+### 系统边界
+
+MSVC、Windows SDK 和 Visual Studio Installer 不是完整的便携包。即使把允许配置的安装路径和下载路径放入项目，一些共享组件、注册信息和安装器状态仍留在系统。Windows 图形驱动缓存、系统临时行为也无法由应用保证全部重定向。
+
+因此本项目承诺“项目可控制的依赖和产物全部本地化”，不承诺“操作系统零写入”。若用户要求连编译器及系统安装器都不得引用/写入项目外部，当前 MSVC 方案不满足该条件，必须重新讨论隔离环境，不能悄悄放宽规则。
+
+当前机器的 MSVC、CMake、Ninja 和 Flutter 位于另一个项目 `ririchord/toolchain` 下。它们只能作为环境调查结果，不能成为本项目默认路径，也不直接复制既有 MSVC 安装。
+
+Qt/CMake/Ninja 应使用项目内独立版本。MSVC/SDK 后续可选择：
+
+1. 通过受支持安装方式评估项目专用路径，记录仍在系统的共享部分。
+2. 显式在 `.local/toolchain.local.json` 声明外部 MSVC/SDK 例外；医生脚本报告，构建日志留存。没有声明则构建预检报错，不回退到 PATH 或其他项目。
+
+当前通过 `.local/toolchain.local.json` 显式声明本机已有 MSVC 的系统工具例外，用于框架构建验证；Qt/CMake/Ninja 使用项目内独立副本。没有重装或搬迁系统工具。
+
+### 移动、备份与运行数据
+
+- 路径相对项目根，目录含空格也必须可用；禁止硬编码盘符。
+- 缓存可再生但未必可搬迁；项目移动后重新配置/编译。不得承诺现成 CMake 构建目录可无损复制到任意位置。
+- 备份源码和 `.local` 中有价值的用户配置即可，缓存和工具可由锁定清单重建；离线环境应另行保留已校验下载包。
+- 开发运行写 `.local/`；发布便携包写可执行文件旁 `data/`。位置不可写时明确报错并让用户选择可写数据目录，不静默写入 AppData。
+
+## 6. 依赖与构建规范
+
+基础 Qt 模块预计为 Core、Gui、Qml、Quick、QuickControls2；测试加 Test，只有用到相应能力才添加其他模块。流式 XML、JSON 不需要再装第三方解析器。基础 Qt 安装包可能自带其他模块，但链接与部署仅收集实际用到的部分。
+
+锁定清单必须包含 Qt/编译器 ABI、架构、CMake、Ninja、SDK 版本及下载哈希。当前锁定 Qt 6.11.0 MSVC 2022 x64，构建结果记录在框架验证说明中；这不等于完整播放器产品或性能验收。引入具体版本前核对该版官方平台支持与分发条件。
+
+构建预设：
+
+| 预设 | 产物路径 | 用途 |
+|---|---|---|
+| windows-debug | out/build/windows-x64-debug | 日常调试和正确性测试 |
+| windows-release | out/build/windows-x64-release | 性能与部署验证 |
+
+已实现的命令入口（使用 PowerShell 7）：
+
+```powershell
+.\scripts\doctor.ps1
+.\scripts\bootstrap.ps1
+.\scripts\build.ps1 -Preset windows-debug -Test
+.\scripts\run.ps1 -Preset windows-debug
+.\scripts\package.ps1 -Preset windows-release
+```
+
+- `bootstrap` 为唯一正常联网准备入口，下载先校验再原子解压至版本目录，失败不留下被误认为完整的工具链。
+- `build` 初始化已声明的 MSVC 环境，再调用项目内 CMake/Ninja；输出实际路径与版本，失败返回非零退出码。核心 CMake 不承担安装软件的副作用。
+- 共享预设不提交个人路径；本地覆盖要遵守目录规则，不能绕过锁定的 Qt ABI。
+- 优先简单 Ninja 单配置构建；不引入编译缓存工具，除非测量证明增量构建仍是瓶颈。
+- `package` 使用相同 Qt 的 `windeployqt` 并提供 QML 来源目录，输出到 `out/stage`。检查 MSVC 官方运行库分发方案，不从开发机随意拷贝系统 DLL。
+- 部署目录在无 SDK PATH 的环境下试运行；最终应在没有开发环境的 Windows 环境验证。
+
+## 7. 验收顺序
+
+1. 工具清单、项目内目录、doctor 和最小 CMake/Qt 构建闭环。
+2. 原生能力探针：SMTC 会话、透明窗口、穿透、焦点、置顶、显示器/DPI。
+3. 渲染原型：真实中文、英文、emoji、描边和长文本；500/2000 条活动弹幕，1080p/4K。先报告真实上限再确定产品目标。
+4. 纯 C++ 时间轴、轨道、暂停、跳转和对象回收测试；错误 XML、配置迁移与后台取消测试。
+5. 接入完整控制面板、配置保存和有界日志。
+6. Release 部署、长期运行与播放器实测。
+
+性能记录至少包括 CPU/GPU、内存、帧时间分布、活动数、缓存占用、丢弃数和同步误差。只统计帧回调频率不能证明实际显示帧率；真实呈现和同步误差需要单独的测量方法。
+
+## 8. 官方依据
+
+- [Qt Quick Scene Graph](https://doc.qt.io/qt-6/qtquick-visualcanvas-scenegraph.html)：场景图、渲染线程与生命周期。
+- [QML Disk Cache](https://doc.qt.io/qt-6/qmldiskcache.html)：QML 缓存路径配置；具体版本下需实测。
+- [Qt Windows Deployment](https://doc.qt.io/qt-6/windows-deployment.html)：部署工具及运行库处理。
+- [CMake Presets](https://cmake.org/cmake/help/latest/manual/cmake-presets.7.html)：共享/本地配置、构建目录与环境。
+- [Visual Studio 安装位置](https://learn.microsoft.com/en-us/visualstudio/install/change-installation-locations?view=vs-2022)：部分共享工具和 SDK 仍安装在系统盘的限制。

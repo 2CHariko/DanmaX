@@ -1,0 +1,28 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 31, "patch": 6 },
+  "configurePresets": [
+    {
+      "name": "windows-base", "hidden": true, "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_MAKE_PROGRAM": "${sourceDir}/.tools/ninja/1.12.1/ninja.exe",
+        "CMAKE_PREFIX_PATH": "${sourceDir}/.tools/qt/6.11.0/msvc2022_64",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true, "BUILD_TESTING": true
+      }
+    },
+    { "name": "windows-debug", "inherits": "windows-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
+    { "name": "windows-release", "inherits": "windows-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "windows-core", "inherits": "windows-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "DANMAKU_BUILD_APP": false } }
+  ],
+  "buildPresets": [
+    { "name": "windows-debug", "configurePreset": "windows-debug" },
+    { "name": "windows-release", "configurePreset": "windows-release" },
+    { "name": "windows-core", "configurePreset": "windows-core" }
+  ],
+  "testPresets": [
+    { "name": "windows-debug", "configurePreset": "windows-debug", "output": { "outputOnFailure": true } },
+    { "name": "windows-release", "configurePreset": "windows-release", "output": { "outputOnFailure": true } },
+    { "name": "windows-core", "configurePreset": "windows-core", "output": { "outputOnFailure": true } }
+  ]
+}
