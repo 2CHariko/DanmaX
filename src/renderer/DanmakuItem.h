@@ -9,12 +9,14 @@ class DanmakuItem : public QQuickItem {
     Q_OBJECT
   public:
     explicit DanmakuItem(QQuickItem* parent = nullptr);
-    void configure(const QVariantMap& settings);
+    bool configure(const QVariantMap& settings); // Whether live geometry needs remeasurement.
     void present(const danmaku::Engine& engine);
     danmaku::Engine::Extent measure(const danmaku::Item& item);
     double trackHeight() const;
     int snapshotCount() const { return static_cast<int>(visuals_.size()); }
     quint64 firstSnapshotId() const { return visuals_.empty() ? 0 : visuals_.front().id; }
+    double firstSnapshotX() const { return visuals_.empty() ? 0 : visuals_.front().x; }
+    double firstSnapshotFontSize() const { return visuals_.empty() ? 0 : visuals_.front().layout->font().pixelSize(); }
     bool imageBackend() const { return imageBackend_; }
     int imageNodeCount() const { return imageNodes_.load(); }
     qint64 textureBytes() const { return textureBytes_.load(); }
@@ -34,7 +36,6 @@ class DanmakuItem : public QQuickItem {
   private:
     struct Layout {
         std::shared_ptr<QTextLayout> text;
-        double width{};
     };
     struct Visual {
         quint64 id{};

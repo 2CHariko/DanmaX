@@ -24,6 +24,7 @@ struct Active {
     std::size_t item{};
     Mode mode{};
     double x{}, y{}, width{}, height{}, remaining{};
+    double age{}; // Animation time already displayed, excluding pauses.
 };
 class Engine {
   public:
@@ -34,9 +35,11 @@ class Engine {
     using Measure = std::function<Extent(const Item&)>;
     void load(std::vector<Item> items);
     void configure(Options options, double width, double height);
+    // Preserve timeline, IDs and motion. A measure callback requests live text remeasurement.
+    void reconfigure(Options options, double width, double height, const Measure& measure = {});
     void seek(double position);
     void clear();
-    void tick(double position, double elapsed, bool playing, const Measure& measure);
+    void tick(double position, double elapsed, bool playing, const Measure& measure, bool emitNew = true);
     [[nodiscard]] const std::vector<Item>& items() const {
         return items_;
     }
@@ -53,6 +56,8 @@ class Engine {
     [[nodiscard]] std::uint64_t dropped() const {
         return dropped_;
     }
+    [[nodiscard]] std::uint64_t retiredBySettings() const { return retiredBySettings_; }
+    [[nodiscard]] std::uint64_t suppressedWhileHidden() const { return suppressedWhileHidden_; }
     [[nodiscard]] double position() const {
         return position_;
     }
@@ -61,6 +66,7 @@ class Engine {
     bool spawn(std::size_t index, Extent extent);
     void rebuildOccupancy();
     void indexSlot(std::size_t slot);
+    bool fits(const Active& candidate) const;
     std::vector<Item> items_;
     std::vector<Active> slots_;
     std::vector<std::size_t> free_;
@@ -70,6 +76,6 @@ class Engine {
     double width_{1920}, height_{1080}, position_{}, lastPosition_{};
     bool initialized_{};
     std::size_t cursor_{}, activeCount_{}, overlapTrack_{};
-    std::uint64_t sequence_{}, dropped_{};
+    std::uint64_t sequence_{}, dropped_{}, retiredBySettings_{}, suppressedWhileHidden_{};
 };
 } // namespace danmaku

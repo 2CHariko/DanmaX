@@ -15,7 +15,7 @@
 | 构建 | CMake + Ninja + MSVC | 单一构建路线，不同时维护 qmake、MinGW 和多套生成器 |
 | 测试 | CTest + Qt Test，核心可用普通 C++ 测试程序 | 无额外测试框架依赖 |
 | 依赖管理 | 版本清单 + PowerShell 准备脚本 | 首版不引入 vcpkg、Conan 或运行时包管理器 |
-| 分发 | 动态 Qt 库的 Release 便携目录 | 首版不增加安装器框架、更新服务或 MSIX |
+| 分发 | 用户授权的静态 Qt 单 EXE；保留动态部署目录 | 不增加安装器框架、更新服务或 MSIX |
 
 不设定“换框架即提速”的承诺。先验证覆盖层合成和文字负载，再扩展完整控制面板。
 
@@ -88,10 +88,11 @@ QML UI → Application Service → Core
 ### 基础设施与应用服务
 
 - XML 通过后台 `QXmlStreamReader` 解析，限制异常文件、超长文本和非有限时间；按批次报告进度。完成后一次性交接不可变数据。
-- 配置采用版本化 JSON、校验和原子保存（Qt `QSaveFile`）；旧 INI 只读导入，保留原文件，不保存旧机器绝对路径作为新默认值。
+- 配置采用带详细中文注释的 UTF-8 INI（settings.ini），版本校验和 Qt `QSaveFile` 原子保存；首次运行生成完整默认配置。旧 JSON/INI 不读取、不迁移；程序保存时重建自带注释，不保留未知字段或额外注释。
 - 日志使用 Qt 消息处理能力，提供有界 UI 队列和文件轮转，避免渲染线程同步写盘。
 - 应用服务统一管理 `Idle / Loading / WaitingForSession / Playing / Paused / Error`，每个状态有可解释的 UI 输出。
 - 配置分为即时属性、文字缓存失效、窗口重新配置和文件重载，不统一“停止后延时重启”。
+- 设置更新通过保留状态的核心 `reconfigure()`，不调用时间轴跳转。保留投放游标、活动 ID、滚动横坐标及已显示动画时间；字号/轨道/视口变化局部重排，缩容移除超额较新对象，放不下的对象单独退场并计入 `retiredBySettings`。同一 GUI 事件循环批次合并连续修改，暂停时也更新快照；真实跳转和文件加载继续清空。
 - 设置 UI 默认即时生效并保存；提交时机、校验、持久化失败和需重启例外由应用服务明确反馈，不提供统一“应用全部”按钮。
 
 ### Windows 适配
@@ -112,7 +113,7 @@ QML UI → Application Service → Core
 - 暂停同时冻结位置、寿命、轨道释放条件；播放恢复不补偿暂停期间的墙钟时长。
 - 小幅倒退、跳转、会话切换不能只靠绝对差大于 2 秒判断。结合预测媒体位置、状态及容差处理抖动；跳转重置所有相关状态。
 - 默认跳转策略为清空在屏弹幕并定位到新时间开始投放，不追补整个历史区间；若未来支持重建仍应可见的弹幕，需独立定义算法和测试。
-- 隐藏时停止无意义绘制；媒体跟踪继续，恢复可见时按当前位置重新同步，不一次性补发隐藏期间弹幕。
+- 隐藏/未暴露时停止持续绘制，使用低频维护推进媒体跟踪、已有弹幕的位置/寿命及轨道回收；暂停仍冻结。新弹幕只推进游标，不测量投放，以 `suppressedWhileHidden` 单独统计。恢复可见时刷新仍有效的活动对象并保留 ID，不通过跳转清空，也不批量补发隐藏期间记录；真实跳转/媒体切换仍重置。
 - GUI 线程拥有应用/核心可变状态；Qt Quick 同步阶段向渲染侧交接批次。场景图节点和 GPU 资源只在规定的渲染阶段创建、修改、释放，禁止后台线程访问。
 - 文字缓存键包含文本、字体回退相关设置、字号、颜色/描边策略、DPR；缓存设字节预算与回收规则。Qt 自身缓存与项目缓存分开统计。
 - 轨道释放依据尾部位置和最小间距；不能用固定 0.8 系数提前释放。不同速度时还需防追尾；固定弹幕与滚动弹幕交叉避让规则必须可测试。
@@ -145,7 +146,7 @@ Qt/CMake/Ninja 应使用项目内独立版本。MSVC/SDK 后续可选择：
 - 路径相对项目根，目录含空格也必须可用；禁止硬编码盘符。
 - 缓存可再生但未必可搬迁；项目移动后重新配置/编译。不得承诺现成 CMake 构建目录可无损复制到任意位置。
 - 备份源码和 `.local` 中有价值的用户配置即可，缓存和工具可由锁定清单重建；离线环境应另行保留已校验下载包。
-- 开发运行写 `.local/`；发布便携包写可执行文件旁 `data/`。位置不可写时明确报错并让用户选择可写数据目录，不静默写入 AppData。
+- 开发运行写 `.local/`；静态便携包将设置、日志和 `cache/` 写在 EXE 旁；动态目录/自解压包沿用 `data/`。位置不可写时明确报错，可通过参数指定数据目录，不静默写入 AppData。
 
 ## 6. 依赖与构建规范
 
@@ -159,6 +160,7 @@ Qt/CMake/Ninja 应使用项目内独立版本。MSVC/SDK 后续可选择：
 |---|---|---|
 | windows-debug | out/build/windows-debug | 日常调试和正确性测试 |
 | windows-release | out/build/windows-release | 性能与部署验证 |
+| windows-static-release | out/build/windows-static-release | 静态 Qt/CRT 单 EXE 与独立部署验收 |
 
 已实现的命令入口（使用 PowerShell 7）：
 
@@ -167,14 +169,19 @@ Qt/CMake/Ninja 应使用项目内独立版本。MSVC/SDK 后续可选择：
 .\scripts\bootstrap.ps1
 .\scripts\build.ps1 -Preset windows-debug -Test
 .\scripts\run.ps1 -Preset windows-debug
-.\scripts\package.ps1 -Preset windows-release
+.\scripts\prepare-qt-static.ps1
+.\scripts\build-qt-static.ps1 -Jobs 8
+.\scripts\build.ps1 -Preset windows-static-release -Test
+.\scripts\package.ps1
 ```
 
-- `bootstrap` 为唯一正常联网准备入口，下载先校验再原子解压至版本目录，失败不留下被误认为完整的工具链。
+- `bootstrap` 准备常规动态 SDK、CMake/Ninja；`prepare-qt-static` 独立准备固定 SHA-256 的官方 Qt 源码。只有这两个显式准备步骤下载依赖，配置/构建/打包不联网。
 - `build` 初始化已声明的 MSVC 环境，再调用项目内 CMake/Ninja；输出实际路径与版本，失败返回非零退出码。核心 CMake 不承担安装软件的副作用。
 - 共享预设不提交个人路径；本地覆盖要遵守目录规则，不能绕过锁定的 Qt ABI。
 - 优先简单 Ninja 单配置构建；不引入编译缓存工具，除非测量证明增量构建仍是瓶颈。
-- `package` 使用相同 Qt 的 `windeployqt` 并提供 QML 来源目录，输出到 `out/stage`。检查 MSVC 官方运行库分发方案，不从开发机随意拷贝系统 DLL。
+- 用户已明确要求无需释放运行库的单 EXE，并允许同级配置、日志、缓存和临时文件，因此增加独立静态 Qt/CRT 构建，不改变常规动态开发 SDK。Qt 6.11.0 官方源码及特性由 `toolchain/qt-static.lock.json` 固定，SDK 位于 `.tools/qt/6.11.0/msvc2022_64-static`，基础模块构建位于 `out/build/qt-6.11.0-static/`，Quick/QML 使用短路径 `out/build/qs/qml/`；移动源码或改变编译器后不得复用旧缓存。
+- `package` 默认 `static-exe`，复制静态主程序并检查真实导入表；QML 和静态插件由 Qt 构建系统编入。FluentWinUI3 及官方 Fusion/Basic 回退保留，其他风格在源码配置阶段关闭。选择 Qt 公开 D3D11 后端，关闭 OpenGL/Vulkan，不携带 DXC/DXIL。
+- `-Format directory` 使用相同动态 Qt 的 `windeployqt`，输出到 `out/stage`；`-Format single-exe` 保留 Windows CAB 自解压启动器，依赖位于同级 `data/runtime/`。静态产物无该步骤。许可证、匹配 Qt 源码和应用重新编译材料独立输出；具体边界见 [便携打包](PACKAGING.md)。
 - 部署目录在无 SDK PATH 的环境下试运行；最终应在没有开发环境的 Windows 环境验证。
 
 ## 7. 验收顺序
@@ -199,7 +206,7 @@ Qt/CMake/Ninja 应使用项目内独立版本。MSVC/SDK 后续可选择：
 ## 9. 0.2 实现细节与明确降级
 
 - `danmaku::Engine` 合并时间轴、轨道与活动池，避免无必要微型库；滚动统一像素速度，动画随已知媒体速率缩放。固定/滚动共享物理轨道，允许重叠为显式偏好。
-- 文本布局缓存采用估算 16 MiB 的 LRU 预算（1 KiB 基础 + 每 UTF-16 字符约 64 B）；这是估算成本，不是 Qt/驱动实际显存上限。活动布局另由最大在屏 5000 上限约束，字体/描边变化清空，DPR 变化重建渲染节点。颜色保存在节点中，不污染可复用布局。
+- 文本布局缓存采用估算 16 MiB 的 LRU 预算（1 KiB 基础 + 每 UTF-16 字符约 64 B）；这是估算成本，不是 Qt/驱动实际显存上限。活动布局另由最大在屏 5000 上限约束，字体变化清空布局；描边/行距复用布局并重算占位，字体/描边及 DPR 变化重建必要绘制资源。颜色保存在节点中，不污染可复用布局。
 - 可见播放通过 Qt Quick `afterAnimating` 驱动 GUI 核心更新，采用实际单调 delta；隐藏/未暴露/暂停时使用互斥的 33ms 维护节奏。媒体时钟分段累计倍速动画时间。P95/P99 为 GUI 调度间隔，`frameSwapped` 为呈现回调计数，均不等同于测得的 GPU 帧时长。
 - SMTC 工作线程按 ID 采样，媒体身份暂用标题/作者/时长组合；同名同长媒体的切换可能无法辨别。提供应用 ID 手动输入；前台限制仅对可关联 AUMID/进程名生效，默认关闭，不承诺跟随播放器窗口。
 - JSON 原子写入；数值更新 200 ms 合并持久化，析构前刷新。错误配置首次覆盖前备份；保存失败有重试入口。INI 只读手动导入，跳过不合法旧字段。

@@ -9,12 +9,74 @@
 #include <QQmlApplicationEngine>
 #include <QQuickGraphicsConfiguration>
 #include <QQuickWindow>
+#include <QSGRendererInterface>
 #include <QTimer>
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
+#include <stdexcept>
+#ifdef DANMAKU_STATIC_PORTABLE
+#include <windows.h>
+#include <shellapi.h>
+
+namespace {
+bool preparePortableCache(const QString& cache) {
+    const auto temporary = QDir(cache).filePath("tmp");
+    return QDir().mkpath(temporary) &&
+           _wputenv_s(L"TEMP", reinterpret_cast<const wchar_t*>(temporary.utf16())) == 0 &&
+           _wputenv_s(L"TMP", reinterpret_cast<const wchar_t*>(temporary.utf16())) == 0 &&
+           _wputenv_s(L"QML_DISK_CACHE_PATH", reinterpret_cast<const wchar_t*>(cache.utf16())) == 0;
+}
+} // namespace
+#endif
 
 int main(int argc, char* argv[]) {
+#ifdef DANMAKU_STATIC_PORTABLE
+    // Set process-only cache/temp paths before QGuiApplication can initialize plugins.
+    wchar_t executablePath[32768]{};
+    const DWORD executableLength = GetModuleFileNameW(nullptr, executablePath, 32768);
+    if (!executableLength || executableLength >= 32768)
+        return 1;
+    const QDir executableDirectory(QFileInfo(QString::fromWCharArray(executablePath)).absolutePath());
+    QString earlyData = executableDirectory.absolutePath(), earlyCache;
+    const auto resolveData = [&](const QString& value) {
+        return value.isEmpty() ? executableDirectory.absolutePath() : QFileInfo(value).absoluteFilePath();
+    };
+    const auto resolveCache = [](const QString& value) {
+        return value.isEmpty() ? QString() : QFileInfo(value).absoluteFilePath();
+    };
+    int argumentCount = 0;
+    auto** wideArguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
+    if (!wideArguments)
+        return 1;
+    for (int index = 1; index < argumentCount; ++index) {
+        const QString argument = QString::fromWCharArray(wideArguments[index]);
+        if (argument == "--")
+            break;
+        if (argument == "--data-dir" && index + 1 < argumentCount)
+            earlyData = resolveData(QString::fromWCharArray(wideArguments[++index]));
+        else if (argument.startsWith("--data-dir="))
+            earlyData = resolveData(argument.mid(11));
+        else if (argument == "--cache-dir" && index + 1 < argumentCount)
+            earlyCache = resolveCache(QString::fromWCharArray(wideArguments[++index]));
+        else if (argument.startsWith("--cache-dir="))
+            earlyCache = resolveCache(argument.mid(12));
+    }
+    LocalFree(wideArguments);
+    if (earlyCache.isEmpty())
+        earlyCache = QDir(earlyData).filePath("cache");
+    if (!preparePortableCache(earlyCache)) {
+        std::fprintf(stderr, "Cannot prepare portable cache/temporary directory\n");
+        return 1;
+    }
+    // Select the public D3D11 backend before Qt creates any Quick windows.
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
+    qputenv("QT_PLUGIN_PATH", QByteArray());
+    qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", QByteArray());
+    qputenv("QML_IMPORT_PATH", QByteArray());
+    qputenv("QML2_IMPORT_PATH", QByteArray());
+#endif
     QGuiApplication app(argc, argv);
     QFont uiFont = app.font();
     uiFont.setFamilies({"Segoe UI", "Microsoft YaHei UI"});
@@ -43,7 +105,9 @@ int main(int argc, char* argv[]) {
     try {
         const auto paths =
             AppPaths::prepare(app.applicationFilePath(), parser.value("data-dir"), parser.value("cache-dir"));
+#ifndef DANMAKU_STATIC_PORTABLE
         qputenv("QML_DISK_CACHE_PATH", paths.cache.toUtf8());
+#endif
         qmlRegisterType<DanmakuItem>("LocalDanmaku.Native", 1, 0, "DanmakuCanvas");
         AppController controller(paths.data);
         if (parser.isSet("theme"))

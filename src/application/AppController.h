@@ -10,6 +10,7 @@
 #include <QTimer>
 #include <QWindow>
 #include <thread>
+#include <functional>
 class AppController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QObject* settings READ settings CONSTANT)
@@ -32,7 +33,9 @@ class AppController final : public QObject {
     Q_PROPERTY(QVariantMap metrics READ metrics NOTIFY metricsChanged)
     Q_PROPERTY(bool hasFluentIcons READ hasFluentIcons CONSTANT)
   public:
-    explicit AppController(QString dataDirectory, QObject* parent = nullptr);
+    using ForegroundQuery = std::function<bool(const QString&)>;
+    explicit AppController(QString dataDirectory, QObject* parent = nullptr,
+                           ForegroundQuery foregroundQuery = {});
     ~AppController() override;
     QObject* settings() {
         return &settings_;
@@ -95,7 +98,6 @@ class AppController final : public QObject {
     Q_INVOKABLE void togglePause();
     Q_INVOKABLE void seek(double position);
     Q_INVOKABLE void selectSession(const QString& id);
-    Q_INVOKABLE void importIni(const QString& path);
     Q_INVOKABLE void exportLogs(const QString& path);
     Q_INVOKABLE void clearError();
     void beginDemo(int activeCount = 40);
@@ -113,6 +115,7 @@ class AppController final : public QObject {
   private:
     void tick();
     void configure();
+    void applyRendererSettings();
 
     void fail(const QString& message);
     void updateWindow();
@@ -121,6 +124,7 @@ class AppController final : public QObject {
     SettingsStore settings_;
     LogModel logs_;
     MediaMonitor monitor_;
+    ForegroundQuery foregroundQuery_;
     danmaku::Engine engine_;
     danmaku::MediaClock mediaClock_;
     QElapsedTimer monotonicTime_;
@@ -131,10 +135,11 @@ class AppController final : public QObject {
     std::jthread loader_;
     quint64 loadGeneration_{};
     QVariantList sessions_;
-    QVariantMap metrics_, lastSettings_;
+    QVariantMap metrics_, lastSettings_, appliedRendererSettings_;
+    bool rendererSettingsPending_{};
     QString status_{QStringLiteral("请选择弹幕文件")}, error_, file_, mediaTitle_, mediaIdentity_;
     bool foreground_{true};
-    bool loading_{}, running_{}, playing_{}, manual_{}, visible_{}, wasVisible_{}, demo_{};
+    bool loading_{}, running_{}, playing_{}, manual_{}, visible_{}, snapshotDirty_{true}, demo_{};
     int progress_{}, frames_{};
     double position_{}, duration_{}, rate_{1}, samplePosition_{};
     std::vector<double> frameTimes_;

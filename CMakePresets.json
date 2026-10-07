@@ -13,16 +13,22 @@
     },
     { "name": "windows-debug", "inherits": "windows-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
     { "name": "windows-release", "inherits": "windows-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "windows-static-release", "inherits": "windows-base", "cacheVariables": {
+      "CMAKE_BUILD_TYPE": "Release", "DANMAKU_STATIC_QT": true,
+      "CMAKE_PREFIX_PATH": "${sourceDir}/.tools/qt/6.11.0/msvc2022_64-static"
+    } },
     { "name": "windows-core", "inherits": "windows-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "DANMAKU_BUILD_APP": false } }
   ],
   "buildPresets": [
     { "name": "windows-debug", "configurePreset": "windows-debug" },
     { "name": "windows-release", "configurePreset": "windows-release" },
+    { "name": "windows-static-release", "configurePreset": "windows-static-release" },
     { "name": "windows-core", "configurePreset": "windows-core" }
   ],
   "testPresets": [
     { "name": "windows-debug", "configurePreset": "windows-debug", "output": { "outputOnFailure": true } },
     { "name": "windows-release", "configurePreset": "windows-release", "output": { "outputOnFailure": true } },
+    { "name": "windows-static-release", "configurePreset": "windows-static-release", "output": { "outputOnFailure": true } },
     { "name": "windows-core", "configurePreset": "windows-core", "output": { "outputOnFailure": true } }
   ]
 }

@@ -11,8 +11,15 @@
 #include <QUrl>
 #include <algorithm>
 #include <cmath>
-AppController::AppController(QString dataDirectory, QObject* parent)
-    : QObject(parent), settings_(dataDirectory), logs_(QDir(dataDirectory).filePath("logs")), monitor_(this) {
+AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQuery foregroundQuery)
+    : QObject(parent), settings_(dataDirectory),
+#ifdef DANMAKU_STATIC_PORTABLE
+      logs_(dataDirectory),
+#else
+      logs_(QDir(dataDirectory).filePath("logs")),
+#endif
+      monitor_(this),
+      foregroundQuery_(foregroundQuery ? std::move(foregroundQuery) : ForegroundQuery(MediaMonitor::targetForeground)) {
     connect(&logs_, &LogModel::writeFailed, this, [this](const QString& message) {
         error_ = message;
         emit stateChanged();
@@ -45,7 +52,7 @@ AppController::AppController(QString dataDirectory, QObject* parent)
     // Hidden/paused windows have no continuous frame callbacks. Keep media and
     // foreground tracking alive without driving a second visible animation loop.
     connect(&timer_, &QTimer::timeout, this, [this] {
-        if (!overlay_ || !overlay_->isExposed() || !visible_ || !playing_) {
+        if (!overlay_ || !overlay_->isVisible() || !overlay_->isExposed() || !visible_ || !playing_) {
             ++maintenanceTicks_;
             tick();
         } else if (frameTime_.isValid() && frameTime_.elapsed() > 100) {
@@ -94,10 +101,20 @@ void AppController::attach(QObject* renderer, QObject* overlay) {
     }
     connect(overlay_, &QWindow::widthChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::heightChanged, this, [this] { configure(); });
+    connect(overlay_, &QWindow::visibleChanged, this, [this](bool shown) {
+        snapshotDirty_ = true;
+        if (shown && running_ && visible_ && renderer_) {
+            // Replace the last visible snapshot before exposure, including paused reappearance.
+            renderer_->present(engine_);
+        }
+    });
     if (auto* quick = qobject_cast<QQuickWindow*>(overlay)) {
-        connect(quick, &QQuickWindow::afterAnimating, this, [this] {
+        connect(quick, &QQuickWindow::afterAnimating, this, [this, quick] {
             ++animationCallbacks_;
-            if (visible_ && playing_) { ++frameTicks_; tick(); }
+            if (running_ && visible_ && quick->isVisible() && quick->isExposed() && (playing_ || snapshotDirty_)) {
+                if (playing_) ++frameTicks_;
+                tick();
+            }
         });
         connect(
             quick, &QQuickWindow::frameSwapped, this, [this, quick] {
@@ -130,29 +147,53 @@ void AppController::configure() {
         if (running_ && !manual_)
             status_ = QStringLiteral("等待所选播放器");
     }
-    const QStringList engineKeys{"fontFamily", "fontSize",  "strokeWidth", "speed",  "fixedSeconds",
-                                 "maxActive",  "maxTracks", "lineSpacing", "overlap"};
-    bool rebuild = lastSettings_.isEmpty();
-    for (const auto& key : engineKeys)
-        if (lastSettings_.value(key) != s[key])
-            rebuild = true;
+    const QStringList rendererKeys{"fontFamily", "fontSize", "strokeWidth", "speed", "fixedSeconds",
+                                   "maxActive", "maxTracks", "lineSpacing", "overlap", "opacity"};
+    bool changed = appliedRendererSettings_.isEmpty();
+    for (const auto& key : rendererKeys)
+        if (appliedRendererSettings_.value(key) != s[key]) changed = true;
     if (renderer_) {
-        renderer_->configure(s);
-        if (rebuild || (overlay_ && (lastSettings_.value("width").toInt() != overlay_->width() ||
-                                     lastSettings_.value("height").toInt() != overlay_->height()))) {
-            danmaku::Options o{s["speed"].toDouble(),  s["fixedSeconds"].toDouble(), renderer_->trackHeight(),
-                               s["maxTracks"].toInt(), s["maxActive"].toInt(),       s["overlap"].toBool()};
-            engine_.configure(o, overlay_ ? overlay_->width() : 1920, overlay_ ? overlay_->height() : 1080);
-            renderer_->present(engine_);
+        changed = changed || (overlay_ && (appliedRendererSettings_.value("width").toInt() != overlay_->width() ||
+                                          appliedRendererSettings_.value("height").toInt() != overlay_->height()));
+        if (changed && !rendererSettingsPending_) {
+            // Merge rapid edits and paired width/height notifications before rebuilding geometry.
+            rendererSettingsPending_ = true;
+            QTimer::singleShot(0, this, [this] {
+                if (rendererSettingsPending_) applyRendererSettings();
+            });
         }
     }
     lastSettings_ = s;
-    if (overlay_) {
-        lastSettings_["width"] = overlay_->width();
-        lastSettings_["height"] = overlay_->height();
-    }
     updateWindow();
     emit stateChanged();
+}
+void AppController::applyRendererSettings() {
+    rendererSettingsPending_ = false;
+    if (!renderer_) return;
+    const auto s = settings_.values();
+    const bool measure = renderer_->configure(s);
+    const danmaku::Options o{s["speed"].toDouble(), s["fixedSeconds"].toDouble(), renderer_->trackHeight(),
+                            s["maxTracks"].toInt(), s["maxActive"].toInt(), s["overlap"].toBool()};
+    const QStringList engineKeys{"speed", "fixedSeconds", "maxTracks", "maxActive", "overlap"};
+    bool engineChanged = measure || appliedRendererSettings_.isEmpty();
+    for (const auto& key : engineKeys)
+        if (s[key] != appliedRendererSettings_.value(key)) engineChanged = true;
+    engineChanged = engineChanged || (overlay_ && (appliedRendererSettings_.value("width").toInt() != overlay_->width() ||
+                                                  appliedRendererSettings_.value("height").toInt() != overlay_->height()));
+    if (engineChanged)
+        engine_.reconfigure(o, overlay_ ? overlay_->width() : 1920, overlay_ ? overlay_->height() : 1080,
+                            measure ? danmaku::Engine::Measure([this](const auto& item) { return renderer_->measure(item); })
+                                    : danmaku::Engine::Measure{});
+    // Present even while paused; appearance edits must not depend on playback resuming.
+    renderer_->present(engine_);
+    appliedRendererSettings_ = s;
+    if (overlay_) {
+        appliedRendererSettings_["width"] = overlay_->width();
+        appliedRendererSettings_["height"] = overlay_->height();
+    }
+    metrics_["active"] = static_cast<int>(engine_.activeCount());
+    metrics_["retiredBySettings"] = static_cast<qulonglong>(engine_.retiredBySettings());
+    emit metricsChanged();
 }
 void AppController::updateWindow() {
     if (!overlay_)
@@ -236,6 +277,7 @@ void AppController::cancelLoad() {
     emit stateChanged();
 }
 void AppController::start(bool manual) {
+    if (rendererSettingsPending_) applyRendererSettings();
     if (loading_ || engine_.items().empty() || !renderer_) {
         fail(QStringLiteral("请先加载有效弹幕文件"));
         return;
@@ -246,7 +288,7 @@ void AppController::start(bool manual) {
     running_ = true;
     playing_ = manual;
     visible_ = true;
-    wasVisible_ = true;
+    snapshotDirty_ = true;
     rate_ = 1;
     mediaIdentity_.clear();
     sampleTime_.invalidate();
@@ -260,7 +302,7 @@ void AppController::start(bool manual) {
 void AppController::stop() {
     timer_.stop();
     running_ = playing_ = visible_ = false;
-    wasVisible_ = false;
+    snapshotDirty_ = true;
     engine_.clear();
     if (renderer_)
         renderer_->present(engine_);
@@ -287,10 +329,6 @@ void AppController::seek(double position) {
 }
 void AppController::selectSession(const QString& id) {
     settings_.setValue("targetSession", id);
-}
-void AppController::importIni(const QString& path) {
-    if (settings_.importIni(localPath(path)))
-        logs_.append("INFO", QStringLiteral("已导入旧 INI；原文件保留"));
 }
 void AppController::exportLogs(const QString& path) {
     if (!logs_.exportTo(localPath(path)))
@@ -330,6 +368,7 @@ void AppController::onSample(const MediaSample& s) {
 void AppController::tick() {
     if (!running_ || !renderer_)
         return;
+    if (rendererSettingsPending_) applyRendererSettings();
     const double elapsed = frameTime_.nsecsElapsed() * 1e-9;
     frameTime_.restart();
     if (elapsed > 0 && elapsed < 5) {
@@ -357,34 +396,27 @@ void AppController::tick() {
     }
     const bool checkForeground = !manual_ && settings_.values()["foregroundOnly"].toBool();
     if (checkForeground && (!foregroundTime_.isValid() || foregroundTime_.elapsed() >= 250)) {
-        foreground_ = MediaMonitor::targetForeground(settings_.values()["targetSession"].toString());
+        foreground_ = foregroundQuery_(settings_.values()["targetSession"].toString());
         foregroundTime_.start();
     }
     const bool show = !checkForeground || foreground_;
-    if (show != visible_) {
-        visible_ = show;
-        emit stateChanged();
-    }
-    if (!show) {
-        wasVisible_ = false;
-        return;
-    }
-    if (!wasVisible_) {
-        engine_.seek(position_);
-        mediaClock_.takeMotion();
-        renderer_->present(engine_);
-        wasVisible_ = true;
-    }
+    const bool visibilityChanged = show != visible_;
+    visible_ = show;
+    const bool renderable = show && (visibilityChanged || (overlay_ && overlay_->isVisible() && overlay_->isExposed()));
     const double motion = manual_ ? elapsed : mediaClock_.takeMotion();
     QElapsedTimer stage;
     stage.start();
     engine_.tick(position_, motion, playing_,
-                 [this](const auto& item) { return renderer_->measure(item); });
+                 [this](const auto& item) { return renderer_->measure(item); }, renderable);
     engineMs_ += stage.nsecsElapsed() * 1e-6;
     stage.restart();
-    if (playing_)
+    if (renderable && (playing_ || visibilityChanged || snapshotDirty_)) {
         renderer_->present(engine_);
+        snapshotDirty_ = false;
+    } else if (!renderable) snapshotDirty_ = true;
     snapshotMs_ += stage.nsecsElapsed() * 1e-6;
+    // QML visibility changes happen after the current snapshot has been prepared.
+    if (visibilityChanged) emit stateChanged();
     if (manual_ && !demo_ && playing_) {
         if (engine_.finished()) {
             playing_ = false;
@@ -402,6 +434,8 @@ void AppController::updateMetrics() {
     metrics_ = MediaMonitor::processMetrics();
     metrics_["active"] = static_cast<int>(engine_.activeCount());
     metrics_["dropped"] = static_cast<qulonglong>(engine_.dropped());
+    metrics_["retiredBySettings"] = static_cast<qulonglong>(engine_.retiredBySettings());
+    metrics_["suppressedWhileHidden"] = static_cast<qulonglong>(engine_.suppressedWhileHidden());
     const double interval = metricsTime_.nsecsElapsed() * 1e-9;
     metricsTime_.restart();
     metrics_["updatesPerSecond"] = interval > 0 ? frames_ / interval : 0;
@@ -440,6 +474,7 @@ void AppController::updateMetrics() {
     emit metricsChanged();
 }
 void AppController::beginDemo(int count) {
+    if (rendererSettingsPending_) applyRendererSettings();
     const auto s = settings_.values();
     engine_.configure({s["speed"].toDouble(), s["fixedSeconds"].toDouble(), renderer_->trackHeight(),
                        s["maxTracks"].toInt(), std::clamp(count, 50, 5000), true},

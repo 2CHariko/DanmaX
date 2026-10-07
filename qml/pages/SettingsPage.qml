@@ -2,7 +2,6 @@ import QtQuick
 import "../theme"
 import QtQuick.Controls.FluentWinUI3
 import QtQuick.Layouts
-import QtQuick.Dialogs
 import "../components"
 ScrollView {
     id: page
@@ -74,12 +73,11 @@ ScrollView {
         SettingsSection {
             title: "配置与关于"; Layout.fillWidth: true
             Flow { Layout.fillWidth:true;spacing:8
-                Button { text:"导入旧 INI";onClicked:iniPicker.open() }
                 Button { text:"恢复默认设置";onClicked:resetDialog.open() }
             }
-            Label { text:"Local Danmaku 0.2 · C++20 / Qt 6.11\n配置和日志保存在项目本地数据目录。";wrapMode:Text.WordWrap;Layout.fillWidth:true }
+            Label { text:"配置使用带中文说明的 settings.ini。手动编辑前请退出程序；旧配置不导入。";wrapMode:Text.WordWrap;Layout.fillWidth:true }
+            Label { text:"Local Danmaku 0.2 · C++20 / Qt 6.11\n便携版的配置和日志保存在程序旁；开发运行使用指定数据目录。";wrapMode:Text.WordWrap;Layout.fillWidth:true }
         }
     }
-    FileDialog { id:iniPicker;title:"导入 Python 版配置";nameFilters:["配置文件 (*.ini)"];onAccepted:page.backend.importIni(selectedFile.toString()) }
     Dialog { id:resetDialog;title:"恢复默认设置？";modal:true;anchors.centerIn:parent;standardButtons:Dialog.Ok|Dialog.Cancel;Label{text:"将覆盖当前设置，原弹幕文件不会删除。"} onAccepted:page.backend.settings.reset() }
 }

@@ -42,21 +42,29 @@ function Invoke-ProjectEnvironment([scriptblock] $Action) {
     }
 }
 
-function Get-ToolPaths {
+function Get-ToolPaths([switch] $StaticQt) {
+    $qtSuffix = if ($StaticQt) { 'msvc2022_64-static' } else { 'msvc2022_64' }
     return @{
         CMake = Get-ProjectPath ".tools/cmake/$($DependencyLock.cmakeVersion)/bin/cmake.exe"
         CTest = Get-ProjectPath ".tools/cmake/$($DependencyLock.cmakeVersion)/bin/ctest.exe"
         Ninja = Get-ProjectPath ".tools/ninja/$($DependencyLock.ninjaVersion)/ninja.exe"
-        Qt = Get-ProjectPath ".tools/qt/$($DependencyLock.qtVersion)/msvc2022_64"
+        Qt = Get-ProjectPath ".tools/qt/$($DependencyLock.qtVersion)/$qtSuffix"
     }
 }
 
-function Initialize-Toolchain([switch] $CoreOnly) {
-    $tools = Get-ToolPaths
+function Initialize-Toolchain([switch] $CoreOnly, [switch] $StaticQt) {
+    $tools = Get-ToolPaths -StaticQt:$StaticQt
     foreach ($path in @($tools.CMake, $tools.CTest, $tools.Ninja)) {
         if (-not (Test-Path -LiteralPath $path)) { throw "Missing $path. Run scripts/bootstrap.ps1 first." }
     }
-    if (-not $CoreOnly -and -not (Test-Path -LiteralPath (Join-Path $tools.Qt 'bin/Qt6Core.dll'))) {
+    if ($StaticQt -and -not $CoreOnly) {
+        $staticLockFile = Get-ProjectPath 'toolchain/qt-static.lock.json'
+        $marker = Join-Path $tools.Qt '.installed-static-lock'
+        if (-not (Test-Path -LiteralPath $marker) -or
+            (Get-Content $marker -Raw).Trim() -ne (Get-FileHash -LiteralPath $staticLockFile).Hash) {
+            throw 'Project-local static Qt is missing or outdated. Run prepare-qt-static.ps1 and build-qt-static.ps1.'
+        }
+    } elseif (-not $CoreOnly -and -not (Test-Path -LiteralPath (Join-Path $tools.Qt 'bin/Qt6Core.dll'))) {
         throw 'Project-local Qt is missing. Run scripts/bootstrap.ps1 first.'
     }
     $localFile = Get-ProjectPath '.local/toolchain.local.json'
@@ -85,7 +93,25 @@ function Initialize-Toolchain([switch] $CoreOnly) {
     Write-Host "Qt: $($tools.Qt)"
     Write-Host "MSVC: $env:VCToolsInstallDir"
     Write-Host "Windows SDK: $env:WindowsSdkDir ($env:WindowsSDKVersion)"
+    if ($StaticQt -and -not $CoreOnly) {
+        $identityFile = Join-Path $tools.Qt '.installed-static-identity.json'
+        if (-not (Test-Path -LiteralPath $identityFile) -or
+            (Get-Content -LiteralPath $identityFile -Raw).Trim() -ne (Get-StaticQtBuildIdentity)) {
+            throw 'Static Qt source/toolchain location changed or identity is missing. Revalidate with build-qt-static.ps1; relocated builds require a fresh build directory.'
+        }
+    }
     return $tools
+}
+
+function Get-StaticQtBuildIdentity {
+    return ([ordered]@{
+        projectRoot = $ProjectRoot
+        staticLockSha256 = (Get-FileHash -LiteralPath (Get-ProjectPath 'toolchain/qt-static.lock.json')).Hash
+        dependencyLockSha256 = (Get-FileHash -LiteralPath (Get-ProjectPath 'toolchain/dependencies.lock.json')).Hash
+        compiler = [IO.Path]::GetFullPath((Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/cl.exe'))
+        windowsSdk = [IO.Path]::GetFullPath($env:WindowsSdkDir)
+        windowsSdkVersion = $env:WindowsSDKVersion.TrimEnd('\')
+    } | ConvertTo-Json -Compress)
 }
 
 function Get-MsvcIncludesPrefix {

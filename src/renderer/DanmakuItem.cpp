@@ -37,16 +37,17 @@ DanmakuItem::DanmakuItem(QQuickItem* parent) : QQuickItem(parent) {
     setFlag(ItemHasContents, true);
     setClip(true);
 }
-void DanmakuItem::configure(const QVariantMap& s) {
+bool DanmakuItem::configure(const QVariantMap& s) {
     QFont font(s["fontFamily"].toString());
     font.setPixelSize(s["fontSize"].toInt());
     font.setWeight(QFont::DemiBold);
     const int stroke = s["strokeWidth"].toInt();
+    const bool dimensionsChanged = font_ != font || stroke_ != stroke || spacing_ != s["lineSpacing"].toDouble();
+    if (font_ != font) layouts_.clear();
     if (font_ != font || stroke_ != stroke) {
         font_ = font;
         stroke_ = stroke;
-        layouts_.clear();
-        visuals_.clear();
+        // Keep the current snapshot alive until present() atomically replaces it.
         slotVisuals_.clear();
         previousSlots_.clear();
         ++generation_;
@@ -54,6 +55,7 @@ void DanmakuItem::configure(const QVariantMap& s) {
     spacing_ = s["lineSpacing"].toDouble();
     setOpacity(s["opacity"].toDouble());
     update();
+    return dimensionsChanged;
 }
 DanmakuItem::Layout* DanmakuItem::layout(const danmaku::Item& item) {
     QFont font = font_;
@@ -71,13 +73,14 @@ DanmakuItem::Layout* DanmakuItem::layout(const danmaku::Item& item) {
     auto line = text->createLine();
     line.setLineWidth(100000);
     text->endLayout();
-    auto* entry = new Layout{text, line.naturalTextWidth() + stroke_ * 2};
+    auto* entry = new Layout{text};
     layouts_.insert(key, entry, static_cast<int>(1 + (key.size() * 64 + 1023) / 1024));
     return entry;
 }
 danmaku::Engine::Extent DanmakuItem::measure(const danmaku::Item& item) {
     const auto* entry = layout(item);
-    return {entry->width, QFontMetricsF(entry->text->font()).height() * (1 + spacing_) + stroke_ * 2};
+    return {entry->text->lineAt(0).naturalTextWidth() + stroke_ * 2,
+            QFontMetricsF(entry->text->font()).height() * (1 + spacing_) + stroke_ * 2};
 }
 double DanmakuItem::trackHeight() const {
     return QFontMetricsF(font_).height() * (1 + spacing_) + stroke_ * 2;

@@ -1,6 +1,6 @@
 #requires -Version 7.0
 [CmdletBinding(SupportsShouldProcess)]
-param([ValidateSet('windows-debug','windows-release','windows-core')][string] $Preset = 'windows-debug')
+param([ValidateSet('windows-debug','windows-release','windows-static-release','windows-core')][string] $Preset = 'windows-debug')
 . "$PSScriptRoot/common.ps1"
 $target = Get-ProjectPath "out/build/$Preset"
 $allowedRoot = Get-ProjectPath 'out/build'

@@ -19,7 +19,6 @@ class SettingsStore final : public QObject {
     static QVariantMap defaults();
     Q_INVOKABLE bool setValue(const QString& key, const QVariant& value);
     Q_INVOKABLE bool reset();
-    Q_INVOKABLE bool importIni(const QString& path);
     Q_INVOKABLE bool retrySave();
   signals:
     void changed();
