@@ -5,12 +5,14 @@
 #include <QTextLayout>
 #include <memory>
 #include <atomic>
+struct DanmakuSceneState;
 class DanmakuItem : public QQuickItem {
     Q_OBJECT
   public:
     explicit DanmakuItem(QQuickItem* parent = nullptr);
     bool configure(const QVariantMap& settings); // Whether live geometry needs remeasurement.
     void present(const danmaku::Engine& engine);
+    void clearContent(); // GUI state only; the window releases scene-graph resources.
     danmaku::Engine::Extent measure(const danmaku::Item& item);
     double trackHeight() const;
     int snapshotCount() const { return static_cast<int>(visuals_.size()); }
@@ -20,6 +22,7 @@ class DanmakuItem : public QQuickItem {
     bool imageBackend() const { return imageBackend_; }
     int imageNodeCount() const { return imageNodes_.load(); }
     qint64 textureBytes() const { return textureBytes_.load(); }
+    int sceneEntries() const { return sceneEntries_.load(); }
     int cacheEntries() const {
         return layouts_.size();
     }
@@ -49,6 +52,11 @@ class DanmakuItem : public QQuickItem {
     const bool imageBackend_{qEnvironmentVariable("DANMAKU_RENDER_BACKEND") == "image"};
     std::atomic<int> imageNodes_{};
     std::atomic<qint64> textureBytes_{};
+    std::atomic<int> sceneEntries_{};
+    QMetaObject::Connection invalidationConnection_;
+    QMetaObject::Connection stoppingConnection_;
+    // Accessed only during render-thread signals/synchronization, never on the GUI thread.
+    std::weak_ptr<DanmakuSceneState> renderScene_;
     double spacing_{0.2};
     quint64 generation_{}, hits_{}, misses_{};
     // Estimated layout budget in KiB; active scene nodes additionally bounded by maxActive.

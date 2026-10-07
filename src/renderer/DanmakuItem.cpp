@@ -9,6 +9,10 @@
 #include <algorithm>
 #include <unordered_map>
 
+struct DanmakuSceneState {
+    QSGNode* root{};
+    QQuickWindow* window{};
+};
 namespace {
 struct Entry {
     QSGTransformNode* node{};
@@ -18,24 +22,61 @@ struct Entry {
 };
 class Root final : public QSGNode {
   public:
+    explicit Root(QQuickWindow* window)
+        : state(std::make_shared<DanmakuSceneState>(DanmakuSceneState{this, window})) {}
+    std::shared_ptr<DanmakuSceneState> state;
     quint64 generation{};
     qreal dpr{};
     quint64 frame{};
     std::unordered_map<quint64, Entry> entries;
     TextTextureCache textures;
-    ~Root() override {
+    void clearContent() {
         while (firstChild()) {
             auto* child = firstChild();
             removeChildNode(child);
             delete child;
         }
-        entries.clear();
+        std::unordered_map<quint64, Entry>().swap(entries);
+        textures = TextTextureCache{};
     }
+    ~Root() override { clearContent(); }
 };
 } // namespace
 DanmakuItem::DanmakuItem(QQuickItem* parent) : QQuickItem(parent) {
     setFlag(ItemHasContents, true);
     setClip(true);
+    connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow* window) {
+        disconnect(invalidationConnection_);
+        disconnect(stoppingConnection_);
+        if (window) {
+            stoppingConnection_ = connect(window, &QQuickWindow::sceneGraphAboutToStop, this, [this, window] {
+                // All render loops emit this before hiding. Drop drawing resources here,
+                // including temporary hides; GUI snapshots preserve IDs and paused positions.
+                // A weak lifetime handle prevents access to a root already deleted by Qt.
+                if (const auto scene = renderScene_.lock(); scene && scene->window == window)
+                    static_cast<Root*>(scene->root)->clearContent();
+                sceneEntries_.store(0);
+                imageNodes_.store(0);
+                textureBytes_.store(0);
+            }, Qt::DirectConnection);
+            invalidationConnection_ = connect(window, &QQuickWindow::sceneGraphInvalidated, this, [this] {
+                // This signal runs on the render thread; do not touch GUI snapshots or caches.
+                sceneEntries_.store(0);
+                imageNodes_.store(0);
+                textureBytes_.store(0);
+                renderScene_.reset();
+            }, Qt::DirectConnection);
+        }
+    });
+}
+void DanmakuItem::clearContent() {
+    std::vector<Visual>().swap(visuals_);
+    std::vector<Visual>().swap(slotVisuals_);
+    std::vector<std::size_t>().swap(previousSlots_);
+    layouts_.clear();
+    hits_ = misses_ = 0;
+    ++generation_;
+    update();
 }
 bool DanmakuItem::configure(const QVariantMap& s) {
     QFont font(s["fontFamily"].toString());
@@ -115,16 +156,24 @@ void DanmakuItem::present(const danmaku::Engine& engine) {
 }
 QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
     auto* root = static_cast<Root*>(old);
+    if (visuals_.empty()) {
+        delete root;
+        sceneEntries_.store(0);
+        imageNodes_.store(0);
+        textureBytes_.store(0);
+        return nullptr;
+    }
     const auto dpr = window()->effectiveDevicePixelRatio();
     if (root && (root->generation != generation_ || root->dpr != dpr)) {
         delete root;
         root = nullptr;
     }
     if (!root) {
-        root = new Root;
+        root = new Root(window());
         root->generation = generation_;
         root->dpr = dpr;
     }
+    renderScene_ = root->state;
     ++root->frame;
     root->textures.beginFrame();
     for (const auto& visual : visuals_) {
@@ -187,6 +236,7 @@ QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
     int imageCount = 0;
     for (const auto& entry : root->entries) if (entry.second.texture) ++imageCount;
     imageNodes_.store(imageCount);
+    sceneEntries_.store(static_cast<int>(root->entries.size()));
     textureBytes_.store(root->textures.bytes());
     return root;
 }

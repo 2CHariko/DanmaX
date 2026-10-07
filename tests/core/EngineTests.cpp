@@ -155,5 +155,26 @@ int main() {
         engine.tick(0, 0, true, [](const Item&) { return Engine::Extent(100, 200); });
         check(engine.activeCount() == 0, "An oversized font cannot escape the configured track region");
     }
+    engine.configure(o, 800, 160);
+    engine.load({{0, Mode::Scroll, std::string(512, 'x'), 0xffffff}});
+    engine.tick(0, 0, true, width);
+    const auto oldId = engine.activeSlots()[engine.activeIndices().front()].id;
+    engine.clear();
+    check(engine.items().size() == 1 && engine.activeSlots().size() > 0,
+          "Clearing the visible timeline preserves the loaded file and pool");
+    engine.unload();
+    check(engine.items().empty() && engine.items().capacity() == 0 &&
+              engine.activeSlots().capacity() == 0 && engine.activeIndices().capacity() == 0 &&
+              engine.activeCount() == 0 && engine.position() == 0 && engine.finished() && engine.dropped() == 0,
+          "Unload releases file and pool storage and resets the timeline");
+    engine.unload();
+    engine.reconfigure(o, 800, 160);
+    check(engine.activeSlots().capacity() == 0, "Settings after unload do not recreate the pool");
+    engine.tick(0, 0, true, width);
+    engine.load({{0, Mode::Scroll, "reloaded", 0xffffff}});
+    engine.tick(0, 0, true, width);
+    check(engine.activeCount() == 1 && engine.activeSlots()[engine.activeIndices().front()].id > oldId &&
+              engine.dropped() == 0,
+          "Reload recreates pool and occupancy with the retained options");
     return failures ? 1 : 0;
 }

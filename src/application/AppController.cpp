@@ -71,9 +71,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
 }
 AppController::~AppController() {
     settings_.flushPending();
-    loader_.request_stop();
-    if (loader_.joinable())
-        loader_.join();
+    discardLoad();
     LogModel::uninstall();
 }
 QString AppController::localPath(const QString& path) {
@@ -215,9 +213,6 @@ void AppController::loadFile(const QString& input) {
     const auto path = localPath(input);
     if (path.isEmpty())
         return;
-    loader_.request_stop();
-    if (loader_.joinable())
-        loader_.join();
     stop();
     const auto generation = ++loadGeneration_;
     loading_ = true;
@@ -225,8 +220,9 @@ void AppController::loadFile(const QString& input) {
     error_.clear();
     status_ = QStringLiteral("读取并索引 XML…");
     emit stateChanged();
-    loader_ = std::jthread([this, path, generation](std::stop_token token) {
-        auto result = readDanmakuXml(path, token, [this, generation](int progress) {
+    pendingLoad_ = std::make_shared<XmlResult>();
+    loader_ = std::jthread([this, path, generation, pending = pendingLoad_](std::stop_token token) {
+        *pending = readDanmakuXml(path, token, [this, generation](int progress) {
             QMetaObject::invokeMethod(
                 this,
                 [this, generation, progress] {
@@ -239,9 +235,13 @@ void AppController::loadFile(const QString& input) {
         });
         QMetaObject::invokeMethod(
             this,
-            [this, path, generation, result = std::move(result)]() mutable {
+            [this, path, generation, weak = std::weak_ptr<XmlResult>(pending)] {
                 if (generation != loadGeneration_)
                     return;
+                const auto pending = weak.lock();
+                if (!pending) return;
+                auto& result = *pending;
+                pendingLoad_.reset();
                 loading_ = false;
                 if (result.cancelled) {
                     status_ = QStringLiteral("已取消加载");
@@ -277,11 +277,19 @@ void AppController::loadFile(const QString& input) {
     });
 }
 void AppController::cancelLoad() {
-    ++loadGeneration_;
-    loader_.request_stop();
-    loading_ = false;
+    discardLoad();
     status_ = QStringLiteral("已取消加载");
     emit stateChanged();
+}
+void AppController::discardLoad() {
+    ++loadGeneration_;
+    loader_.request_stop();
+    if (loader_.joinable()) loader_.join();
+    loader_ = std::jthread{};
+    // Queued completion callbacks hold only a weak pointer, never the XML payload.
+    pendingLoad_.reset();
+    loading_ = false;
+    progress_ = 0;
 }
 void AppController::start(bool manual) {
     if (rendererSettingsPending_) applyRendererSettings();
@@ -292,6 +300,10 @@ void AppController::start(bool manual) {
     if (manual && position_ >= duration_)
         position_ = 0;
     manual_ = manual;
+    if (auto* quick = qobject_cast<QQuickWindow*>(overlay_.data())) {
+        quick->setPersistentSceneGraph(true);
+        quick->setPersistentGraphics(true);
+    }
     running_ = true;
     playing_ = manual;
     visible_ = true;
@@ -308,12 +320,33 @@ void AppController::start(bool manual) {
 }
 void AppController::stop() {
     timer_.stop();
-    running_ = playing_ = visible_ = false;
+    running_ = playing_ = visible_ = manual_ = demo_ = false;
     snapshotDirty_ = true;
-    engine_.clear();
-    if (renderer_)
-        renderer_->present(engine_);
-    status_ = total() ? QStringLiteral("已停止") : QStringLiteral("请选择弹幕文件");
+    discardLoad();
+    engine_.unload();
+    if (renderer_) renderer_->clearContent();
+    if (auto* quick = qobject_cast<QQuickWindow*>(overlay_.data())) {
+        // Hiding alone retains Qt's scene graph. Release it on its own render thread,
+        // also when foreground tracking has already hidden the overlay.
+        quick->setPersistentSceneGraph(false);
+        quick->setPersistentGraphics(false);
+        quick->hide();
+        quick->releaseResources();
+    } else if (overlay_) overlay_->hide();
+    mediaClock_ = {};
+    mediaIdentity_.clear();
+    mediaTitle_.clear();
+    position_ = duration_ = samplePosition_ = 0;
+    rate_ = 1;
+    frameTime_.invalidate();
+    sampleTime_.invalidate();
+    foregroundTime_.invalidate();
+    foreground_ = true;
+    std::vector<double>().swap(frameTimes_);
+    frames_ = 0;
+    engineMs_ = snapshotMs_ = 0;
+    status_ = file_.isEmpty() ? QStringLiteral("请选择弹幕文件") : QStringLiteral("已停止，弹幕已卸载；请重新加载");
+    updateMetrics();
     emit stateChanged();
 }
 void AppController::togglePause() {
@@ -463,6 +496,7 @@ void AppController::updateMetrics() {
         metrics_["renderBackend"] = renderer_->imageBackend() ? "image-experimental" : "qt-text";
         metrics_["snapshotCount"] = renderer_->snapshotCount();
         metrics_["imageNodes"] = renderer_->imageNodeCount();
+        metrics_["sceneEntries"] = renderer_->sceneEntries();
         metrics_["textureEstimatedBytes"] = renderer_->textureBytes();
     }
     auto sorted = frameTimes_;

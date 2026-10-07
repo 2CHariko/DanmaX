@@ -11,6 +11,8 @@
 #include <QWindow>
 #include <thread>
 #include <functional>
+#include <memory>
+struct XmlResult;
 class AppController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QObject* settings READ settings CONSTANT)
@@ -116,6 +118,7 @@ class AppController final : public QObject {
     void tick();
     void configure();
     void applyRendererSettings();
+    void discardLoad();
 
     void fail(const QString& message);
     void updateWindow();
@@ -133,6 +136,7 @@ class AppController final : public QObject {
     QTimer timer_, metricsTimer_;
     QElapsedTimer frameTime_, sampleTime_, foregroundTime_, metricsTime_;
     std::jthread loader_;
+    std::shared_ptr<XmlResult> pendingLoad_;
     quint64 loadGeneration_{};
     QVariantList sessions_;
     QVariantMap metrics_, lastSettings_, appliedRendererSettings_;

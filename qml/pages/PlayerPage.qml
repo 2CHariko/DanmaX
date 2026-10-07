@@ -57,7 +57,7 @@ ScrollView {
             Button { text: "同步播放"; enabled: !page.backend.loading && page.backend.total > 0 && page.backend.settings.values.targetSession.length > 0; onClicked: page.backend.start(false) }
             Button { text: "独立播放"; enabled: !page.backend.loading && page.backend.total > 0; onClicked: page.backend.start(true) }
             Button { text: page.backend.playing ? "暂停" : "继续"; enabled: page.backend.running && page.backend.manualMode; onClicked: page.backend.togglePause() }
-            Button { text: "停止"; enabled: page.backend.running; onClicked: page.backend.stop() }
+            Button { text: "停止"; enabled: page.backend.running || page.backend.total > 0; Accessible.description: "停止播放并卸载弹幕，再次播放需要重新加载"; onClicked: page.backend.stop() }
         }
         Label { text: page.backend.mediaTitle; visible: text.length > 0; wrapMode: Text.WordWrap; Layout.fillWidth: true }
         Label { text: page.backend.position.toFixed(1) + " / " + page.backend.duration.toFixed(1) + (page.backend.manualMode ? " 秒（预计，播放至弹幕退场）" : " 秒") }

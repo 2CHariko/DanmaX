@@ -39,6 +39,8 @@ class Engine {
     void reconfigure(Options options, double width, double height, const Measure& measure = {});
     void seek(double position);
     void clear();
+    // Unload the file and release all pool/occupancy storage; keep playback options.
+    void unload();
     void tick(double position, double elapsed, bool playing, const Measure& measure, bool emitNew = true);
     [[nodiscard]] const std::vector<Item>& items() const {
         return items_;

@@ -12,6 +12,8 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QQuickWindow>
+#include <QSGRendererInterface>
+#include <QThread>
 #include <QImage>
 #include <QLocale>
 #include <iostream>
@@ -278,7 +280,14 @@ int main(int argc, char** argv) {
             log.append("WARNING", QString::number(i));
         check(log.count() <= 1000, "Bounded log history");
         check(log.exportTo(dir.filePath("export.txt")), "Log export");
+        std::atomic<int> sceneInvalidations{};
+        std::atomic<bool> renderedOnWorker{};
         QQuickWindow overlay;
+        QObject::connect(&overlay, &QQuickWindow::sceneGraphInvalidated, &controller,
+                         [&] { ++sceneInvalidations; }, Qt::DirectConnection);
+        QObject::connect(&overlay, &QQuickWindow::beforeRendering, &controller,
+                         [&] { renderedOnWorker.store(QThread::currentThread() != app.thread()); },
+                         Qt::DirectConnection);
         DanmakuItem renderer;
         controller.attach(&renderer, &overlay);
         auto appearance = SettingsStore::defaults();
@@ -329,6 +338,13 @@ int main(int argc, char** argv) {
         renderer.setSize(QSizeF(overlay.width(), overlay.height()));
         overlay.show();
         wait(300);
+        if (qEnvironmentVariable("QSG_RHI_BACKEND") == "d3d11")
+            check(overlay.rendererInterface()->graphicsApi() == QSGRendererInterface::Direct3D11,
+                  "Native lifecycle probe uses the requested D3D11 backend");
+        if (qEnvironmentVariable("QSG_RENDER_LOOP") == "threaded")
+            check(renderedOnWorker.load(), "Native lifecycle probe uses a separate rendering thread");
+        else if (qEnvironmentVariable("QSG_RENDER_LOOP") == "basic")
+            check(!renderedOnWorker.load(), "Native lifecycle probe uses the GUI rendering thread");
         controller.start(true);
         wait(80);
         check(controller.position() > 0, "Manual clock advances");
@@ -476,8 +492,58 @@ int main(int argc, char** argv) {
         sample.found = false;
         QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
         check(!controller.playing(), "Missing session freezes playback");
+        const auto invalidationsBeforeStop = sceneInvalidations.load();
         controller.stop();
         check(!controller.running(), "Controller stop");
+        check(controller.total() == 0 && controller.position() == 0 && controller.duration() == 0 &&
+                  !controller.playing() && !controller.manualMode() && !controller.overlayVisible() &&
+                  renderer.cacheEntries() == 0 && renderer.snapshotCount() == 0 && !overlay.isVisible(),
+              "Stop unloads file, cached layouts and timeline while keeping the file path");
+        check(controller.filePath() == path, "Stop preserves the path for explicit reload");
+        wait(100);
+        if (qEnvironmentVariable("QSG_RENDER_LOOP") == "threaded")
+            check(sceneInvalidations.load() > invalidationsBeforeStop,
+                  "Stop invalidates the persistent hidden window on the rendering thread");
+        check(renderer.sceneEntries() == 0 && renderer.imageNodeCount() == 0 && renderer.textureBytes() == 0,
+              "Stop releases the already hidden scene graph and textures");
+        controller.stop();
+        liveSettings->setValue("maxActive", 1000);
+        wait(50);
+        controller.start(true);
+        check(!controller.running() && controller.total() == 0, "A stopped file requires a reload");
+        controller.clearError();
+        success = false;
+        controller.loadFile(path);
+        loop.exec();
+        check(success && controller.total() == 2, "Reload after stop succeeds");
+        controller.start(true);
+        overlay.show();
+        wait(100);
+        check(controller.running() && renderer.snapshotCount() > 0 && renderer.sceneEntries() > 0 &&
+                  overlay.isPersistentSceneGraph() && overlay.isPersistentGraphics(),
+              "Playback after reload recreates resources and restores temporary-hide persistence");
+        controller.stop();
+        wait(50);
+        check(renderer.sceneEntries() == 0 && renderer.textureBytes() == 0,
+              "Stop releases resources while the overlay is visible");
+        const auto completedLoads = loads;
+        controller.loadFile(path);
+        controller.stop();
+        wait(100);
+        check(!controller.loading() && controller.total() == 0 && loads == completedLoads,
+              "Stop during XML loading cancels and rejects stale completion");
+        controller.loadFile(path);
+        // Let the worker finish without dispatching the GUI completion callback.
+        Sleep(100);
+        controller.stop();
+        wait(100);
+        check(!controller.loading() && controller.total() == 0 && loads == completedLoads,
+              "Stop also discards a completed XML payload waiting in the GUI queue");
+        success = false;
+        controller.loadFile(path);
+        loop.exec();
+        check(success && controller.total() == 2, "Loading still works after repeated cancellation");
+        controller.stop();
     }
     {
         // Deterministic foreground results; never move focus or operate a real player.

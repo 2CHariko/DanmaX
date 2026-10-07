@@ -17,6 +17,7 @@ void Engine::load(std::vector<Item> items) {
     retiredBySettings_ = 0;
     suppressedWhileHidden_ = 0;
     seek(0);
+    if (!items_.empty()) reconfigure(options_, width_, height_);
 }
 void Engine::configure(Options options, double width, double height) {
     clear();
@@ -37,6 +38,8 @@ void Engine::reconfigure(Options options, double width, double height, const Mea
     options_ = options;
     width_ = std::max(width, 1.0);
     height_ = std::max(height, 1.0);
+    // Settings may change while no file is loaded. Allocate only on the next load.
+    if (items_.empty()) return;
     if (slots_.size() != static_cast<std::size_t>(options.maxActive)) {
         // Compact by arrival order before shrinking; high-numbered live slots must not vanish.
         std::vector<Active> resized(static_cast<std::size_t>(options.maxActive));
@@ -120,6 +123,17 @@ void Engine::clear() {
         slots_[i - 1].alive = false;
         free_.push_back(i - 1);
     }
+}
+void Engine::unload() {
+    std::vector<Item>().swap(items_);
+    std::vector<Active>().swap(slots_);
+    std::vector<std::size_t>().swap(free_);
+    std::vector<std::size_t>().swap(active_);
+    std::vector<std::vector<std::size_t>>().swap(occupancy_);
+    position_ = lastPosition_ = 0;
+    initialized_ = false;
+    cursor_ = activeCount_ = overlapTrack_ = 0;
+    dropped_ = retiredBySettings_ = suppressedWhileHidden_ = 0;
 }
 void Engine::seek(double position) {
     clear();
