@@ -15,6 +15,10 @@ ColumnLayout {
         Layout.fillWidth: true
     }
     Button { visible: pane.library.server.length === 0; text: "打开在线服务设置"; onClicked: pane.openSettings() }
+    ColumnLayout {
+        visible: pane.library.server.length > 0
+        Layout.fillWidth: true
+        spacing: 12
     RowLayout {
         Layout.fillWidth: true
         TextField {
@@ -32,9 +36,10 @@ ColumnLayout {
             onClicked: pane.library.searchAnime(keyword.text)
         }
     }
-    Label { text: "动画"; font.weight: Font.DemiBold }
-    ComboBox {
+    Label { visible: pane.library.animes.length > 0; text: "动画"; font.weight: Font.DemiBold }
+    AppComboBox {
         id: animeBox
+        visible: pane.library.animes.length > 0
         objectName: "animeChoice"
         Layout.fillWidth: true
         model: pane.library.animes
@@ -46,9 +51,10 @@ ColumnLayout {
         onModelChanged: sync()
         Component.onCompleted: sync()
     }
-    Label { text: "剧集"; font.weight: Font.DemiBold }
-    ComboBox {
+    Label { visible: pane.library.selectedAnime.length > 0; text: "剧集"; font.weight: Font.DemiBold }
+    AppComboBox {
         id: episodeBox
+        visible: pane.library.selectedAnime.length > 0
         objectName: "episodeChoice"
         Layout.fillWidth: true
         model: pane.library.episodes
@@ -65,6 +71,7 @@ ColumnLayout {
         function onChanged() { animeBox.sync(); episodeBox.sync() }
     }
     Flow {
+        visible: pane.library.selectedEpisode.length > 0
         Layout.fillWidth: true
         spacing: 8
         Button {
@@ -77,8 +84,9 @@ ColumnLayout {
             enabled: !pane.library.busy && pane.library.selectedEpisode.length > 0
             onClicked: pane.library.downloadEpisode(true)
         }
-        Button { text: "取消"; visible: pane.library.busy; onClicked: pane.library.cancel() }
     }
+    }
+    Button { text: "取消"; visible: pane.library.busy; onClicked: pane.library.cancel() }
     ProgressBar {
         visible: pane.library.busy
         Layout.fillWidth: true
@@ -88,5 +96,5 @@ ColumnLayout {
     }
     Label { text: pane.library.status; wrapMode: Text.WordWrap; Layout.fillWidth: true; Accessible.name: "在线状态：" + text }
     Label { visible: pane.library.error.length > 0; text: pane.library.error; wrapMode: Text.WordWrap; Layout.fillWidth: true; Accessible.name: "在线错误：" + text }
-    Label { text: "下载后保留缓存并载入弹幕；请使用下方按钮启动播放。"; font.pixelSize: Ui.captionSize; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+    Label { visible: pane.library.server.length > 0; text: "载入后，在播放控制中开始播放。"; color: Ui.secondaryText; font.pixelSize: Ui.captionSize; wrapMode: Text.WordWrap; Layout.fillWidth: true }
 }

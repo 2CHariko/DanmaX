@@ -361,7 +361,7 @@ void AppController::commitItems(std::vector<danmaku::Item> items, const QString&
     engine_.load(std::move(items));
     sourceTitle_ = title;
     duration_ = engine_.items().back().time + 15;
-    status_ = QStringLiteral("已加载 %1 条，请选择同步播放或独立播放").arg(total());
+    status_ = QStringLiteral("已加载 %1 条，选择播放方式后开始播放").arg(total());
     error_.clear();
     logs_.append("INFO", status_);
     emit stateChanged();

@@ -16,6 +16,7 @@ class LogModel final : public QAbstractListModel {
     void configure(bool file, const QString& level);
     void append(const QString& level, const QString& message);
     Q_INVOKABLE void clear();
+    Q_INVOKABLE int countForLevel(const QString& level) const;
     Q_INVOKABLE bool exportTo(const QString& path);
     static void install(LogModel* model);
     static void uninstall();

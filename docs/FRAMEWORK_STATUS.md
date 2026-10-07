@@ -265,3 +265,31 @@ XML、下载和缓存通过同一弹幕提交入口载入；在线准备与失�
 最终过滤统计文案分别报告无效条目、不支持模式和去重数量。该文字调整后重建，动态 Debug 和静态 Release 的在线/应用 smoke 定向均 3/3（22.55 / 15.70 秒），上述最终包包含此调整；DPR 2 截图来自文字调整前的 `031320-964` 包，界面布局与交互代码相同。
 
 最后补齐在线载入取消 XML 准备后的 stateChanged 通知，避免 QML 沿用旧的 loading 状态；新增源切换回归断言。该修正后动态 Debug / 静态 Release 的在线、运行服务和应用 smoke 各 6/6（46.05 / 37.12 秒）通过；最终包重新生成并独立部署验证，静态仍 8/8、动态在线页 smoke 退出 0。
+
+## 整体 UI 分区与操作重排（2026-10-08）
+
+播放、设置、日志三页统一内容表面、语义色与分组；保留官方 Fluent 控件和系统标题栏。播放页重组为来源/方式/控制，单一开始入口、运行时锁定模式、停止并卸载、应用 ID/运行详情折叠；设置按应用外观、弹幕样式、弹幕播放等分组，高级项单层折叠，在线入口定位地址字段；日志增加准确筛选计数、两种空状态及明确全量操作。新增 PageFrame、SectionCard、Disclosure 组合，SettingsRow 宽屏右对齐、窄屏下移。未修改核心调度和渲染生命周期、未迁移配置。
+
+已验证：动态 Debug 和静态 Release 均构建成功；新增生产 Main/QML + 真实 AppController 的 Qt Test 工作流在正常缩放（8.88 秒）及 QT_SCALE_FACTOR=2 + 13.5pt 字体（16.83 秒）通过，无 QML warning。覆盖 Space 启动两种模式、暂停继续、停止卸载、空 XML/文件失败反馈、页签保留、设置导航和字段可见/焦点、Tab、折叠焦点恢复、日志筛选与空状态。动态测试用临时数据目录，并在构建时同步生产 QML；测试产物均在 out。
+
+三页浅深主题、520×480/800/1080 宽及 2× DPI 放大文字截图位于 out/validation/ui-refresh/ 和 out/validation/ui-refresh-dpr2/，已检查代表性宽窄、浅深和放大文字布局。最终静态部署包三页×两种主题×三种宽度共 18/18 原生截图 smoke 通过，无 stderr/QML warning，结果为 out/validation/ui-refresh/deployed/results.json；脚本 scripts/validate-ui.ps1 可复现。截图驱动的 demo 状态不代替真实媒体测试。
+
+静态 Release 在线与两项应用 smoke 最终 3/3（15.88 秒），在线 Qt Test 共 11 passed（含初始化/清理）。动态 UI 工作流通过，runtime_services 定向通过；动态两项应用 smoke 最近一次 2/2 通过。动态 online_danmaku 的 sourcePagesSmoke 多次出现 imageNodes=0 的退出失败，position 正常、qmlWarning=0、窗口数为 2；单独运行在线页测试及缓存页报告正常。统一离屏软件后端后仍曾复现，因此没有把间歇图形失败标记为已修复，也不宣称动态回归全绿。main.cpp 新增失败诊断，保留节点数/位置/QML 警告信息。未产生新性能成绩。
+
+最终静态 EXE：out/packages/LocalDanmaku-static-20261008-040919-018/LocalDanmaku.exe，SHA-256 c4a835d700ce028ee2fdd9b1bb047a2cfbb72d5e49b4a0c481d50940871c6353。打包审计未发现外部 Qt/VC++ DLL 导入，分发材料独立保留。本轮做 UI 定向部署验证，未重跑完整 validate-static 8 项，不能沿用旧包的完整部署成绩。
+
+待验收：系统高对比度、Narrator、真实跨屏 DPI、完整文件选择/在线真实服务及所有对话框键盘路径；此次环境变量 DPI 与局部键盘流程不代表这些能力全部通过。原有真实 SMTC、透明穿透、干净 Windows 和公开发行边界保持。本地 XML 失败前卸载旧内容的原行为保留，在线准备失败保持当前播放。
+
+## 页面滚动条与统一下拉弹出层（2026-10-08）
+
+已实现 ContentScrollBar 和 AppComboBox：播放/设置页滚动条距内容面板右侧 8 逻辑单位，内容预留滑块宽度及 8 单位间隔；日志、缓存列表也独立预留空间。下拉框全部迁移到官方 Fluent ComboBox 的共享适配，保留原 popup/ListView/输入框，使用公开属性限制高度、定位并附加标准滚动条，原字体选择器不再重复适配。仅 popup.background 改为不透明主题纯色、细边框和 8 单位圆角；项目 AGENTS.md 与设计规范已明确此限定例外。长选项保留官方单行省略，增加完整文本提示；补 F4/Alt+↓ 展开关闭。不改变业务、配置、播放或渲染生命周期。
+
+验证：动态 Debug 与静态 Release 构建成功。扩展 ui_workflow Qt Test 正常缩放 21.74 秒通过（两个测试函数，含初始化/清理 4 passed），QT_SCALE_FACTOR=2 + 13.5pt 字体 35.56 秒通过，无 QML warning。覆盖空/短/60 项长列表、末尾选中项可见、标准滚动条拖动和鼠标滚轮、方向键/Enter/Escape/Tab/F4、动态模型、上下展开、展开时缩小窗口、纯色背景 alpha=255 和打开时主题切换；完整设置页检查顶部/中部/末尾滚动、滚动条与卡片间隔、拖到底、宽度稳定。字体真实系统列表验证鼠标展开、F4、输入过程中不保存、Enter 提交及空值失焦恢复。未把 Space 或 Qt 默认 Alt+↓ 当作可编辑 ComboBox 既有支持。
+
+截图：out/validation/scroll-popup/ 与 scroll-popup-dpr2/ 为长剧集模型；out/validation/ui-refresh/ 与 ui-refresh-dpr2/ 的 scroll-*、font-popup-* 为生产设置页。已目视检查代表性宽窄、上下展开、浅深和 2× 放大文字。最终 EXE 的 520/800/1080 宽、浅深主题、页面中部滚动/字体展开共 12/12 原生 smoke 通过，无 stderr，结果 out/validation/scroll-popup/deployed/results.json。scripts/validate-ui.ps1 -ScrollPopup 可复现；--capture-state 仅在 --smoke-test 下应用于验证，不改普通启动流程。
+
+静态 Release 在线与应用两项 smoke 3/3 通过（14.95 秒），在线 Qt Test 11 passed（含初始化/清理）。动态 Debug 的同组定向回归本次 0/3：在线 sourcePagesSmoke 和两项应用 smoke 都报 imageNodes=0，position 正常、qmlWarning=0、windows=2；在线其他用例通过。保留此前已记录的离屏图形失败，不通过更改断言或反复重跑掩盖，不宣称动态回归全绿。生产 UI Qt Test 使用原生窗口/软件后端，部署验证为静态原生窗口，两者均不替代失败的离屏检查。
+
+最终静态包：out/packages/LocalDanmaku-static-20261008-043159-246/LocalDanmaku.exe，36,670,464 字节，SHA-256 18d99f802885ca27d989711f26ed57a4af24e348148efb90ea51f52da59ebf96。独立分发材料在 materials-static-20261008-043159-246，打包导入审计无外部 Qt/VC++ DLL。此次为 UI 定向部署验证，未运行全量核心/性能和完整 validate-static，不沿用旧包成绩。
+
+待实机验收：系统高对比度、Narrator、真实跨屏 DPI、真实在线服务长剧集与完整键盘辅助技术流程；2× 环境变量及模拟剧集不替代这些验收。现有离屏图片节点问题、真实 SMTC/穿透、干净 Windows 与公开发行边界仍保留。

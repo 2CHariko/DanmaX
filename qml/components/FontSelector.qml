@@ -26,59 +26,7 @@ ColumnLayout {
     readonly property bool listed: families.some(function(name) {
         return name.toLowerCase() === selector.family.toLowerCase()
     })
-    property real popupRoom: Ui.fontPopupHeight
-    property bool popupBelow: true
-    property var listScrollBar: null
-    function placePopup() {
-        const window = fontBox.Window.window
-        if (!window)
-            return
-        const origin = fontBox.mapToItem(window.contentItem, 0, 0)
-        const below = Math.max(0, window.height - origin.y - fontBox.height - fontBox.popup.bottomMargin)
-        const above = Math.max(0, origin.y - fontBox.popup.topMargin)
-        const desired = Math.min(Ui.fontPopupHeight,
-            fontBox.popup.contentItem.implicitHeight + fontBox.popup.topPadding + fontBox.popup.bottomPadding)
-        popupBelow = below >= desired || below >= above
-        popupRoom = popupBelow ? below : above
-    }
-
-    Component {
-        id: fontScrollBar
-        ScrollBar {
-            objectName: "fontFamilyScrollBar"
-            policy: size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
-            active: true
-            palette.mid: fontBox.palette.text
-            palette.dark: fontBox.palette.accent
-            Accessible.name: "字体列表滚动条"
-        }
-    }
-    Binding {
-        target: fontBox.popup
-        property: "height"
-        value: Math.min(Ui.fontPopupHeight, selector.popupRoom,
-            fontBox.popup.contentItem.implicitHeight + fontBox.popup.topPadding + fontBox.popup.bottomPadding)
-    }
-    Binding {
-        target: fontBox.popup
-        property: "y"
-        value: selector.popupBelow ? fontBox.height : -fontBox.popup.height
-    }
-    Connections {
-        target: fontBox.popup
-        function onAboutToShow() { selector.placePopup() }
-        function onOpened() {
-            if (fontBox.currentIndex >= 0)
-                fontBox.popup.contentItem.positionViewAtIndex(fontBox.currentIndex, ListView.Contain)
-        }
-    }
-    Connections {
-        target: fontBox.Window.window
-        function onHeightChanged() { if (fontBox.popup.visible) selector.placePopup() }
-        function onWidthChanged() { if (fontBox.popup.visible) selector.placePopup() }
-    }
-
-    ComboBox {
+    AppComboBox {
         id: fontBox
         objectName: "fontFamilyCombo"
         Layout.preferredWidth: 240
@@ -89,20 +37,6 @@ ColumnLayout {
         Accessible.description: "选择系统字体，或输入名称并按 Enter 确认。"
         onActivated: selector.familySelected(currentText)
         onAccepted: selector.commit()
-        delegate: ItemDelegate {
-            required property string modelData
-            required property int index
-            width: ListView.view.width - (selector.listScrollBar && selector.listScrollBar.visible
-                ? selector.listScrollBar.width : 0)
-            text: modelData
-            highlighted: fontBox.highlightedIndex === index
-            hoverEnabled: fontBox.hoverEnabled
-        }
-        Component.onCompleted: {
-            const list = popup.contentItem
-            selector.listScrollBar = fontScrollBar.createObject(list)
-            list.ScrollBar.vertical = selector.listScrollBar
-        }
     }
     Connections {
         target: fontBox.contentItem

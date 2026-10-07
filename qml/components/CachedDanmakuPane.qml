@@ -35,15 +35,15 @@ ColumnLayout {
         model: pane.filteredEntries
         keyNavigationEnabled: true
         boundsBehavior: Flickable.StopAtBounds
-        ScrollBar.vertical: ScrollBar {}
+        ScrollBar.vertical: ContentScrollBar { id: cacheScrollBar; Accessible.name: "缓存列表滚动条" }
         delegate: ColumnLayout {
             required property var modelData
             required property int index
-            width: cachedList.width - 16
+            width: Math.max(0, cachedList.width - cacheScrollBar.width - Ui.scrollGap)
             spacing: 4
             Label { text: modelData.animeTitle + " · " + modelData.episodeTitle; font.weight: Font.DemiBold; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-            Label { text: (modelData.server || "未知来源") + " · " + (modelData.count || 0) + " 条"; font.pixelSize: Ui.captionSize; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-            Label { text: modelData.downloadedAt ? new Date(modelData.downloadedAt).toLocaleString(Qt.locale(), Locale.ShortFormat) : "下载时间未知"; font.pixelSize: Ui.captionSize; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            Label { text: (modelData.server || "未知来源") + " · " + (modelData.count || 0) + " 条"; color: Ui.secondaryText; font.pixelSize: Ui.captionSize; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
+            Label { text: modelData.downloadedAt ? new Date(modelData.downloadedAt).toLocaleString(Qt.locale(), Locale.ShortFormat) : "下载时间未知"; color: Ui.secondaryText; font.pixelSize: Ui.captionSize; wrapMode: Text.WordWrap; Layout.fillWidth: true }
             Label { visible: !modelData.valid; text: modelData.error || "缓存不可载入"; wrapMode: Text.WordWrap; Layout.fillWidth: true; Accessible.name: "缓存错误：" + text }
             RowLayout {
                 Button {
@@ -64,6 +64,7 @@ ColumnLayout {
                     }
                 }
             }
+            Rectangle { Layout.fillWidth: true; Layout.topMargin: 8; implicitHeight: 1; color: Ui.borderColor }
         }
     }
     Button { text: "取消"; visible: pane.library.busy; onClicked: pane.library.cancel() }

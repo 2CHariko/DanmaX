@@ -16,10 +16,11 @@ ApplicationWindow {
     width: 1080; height: 760
     minimumWidth: 520; minimumHeight: 480
     title: "Local Danmaku"
-    function navigate(page) { selectedPage=page; navigationOpen=false; pages.children[page].forceActiveFocus() }
+    color: Ui.windowSurface
+    function navigate(page) { selectedPage=page; navigationOpen=false; pages.children[page].focusHeading() }
     ColumnLayout {
         anchors.fill:parent
-        anchors.margins:root.minimal?12:24
+        anchors.margins:root.minimal?12:16
         spacing:12
         ToolButton { id:menuButton;visible:root.minimal;text:"导航";Accessible.name:"展开导航";checkable:true;checked:root.navigationOpen;Accessible.description:root.navigationOpen?"导航已展开":"导航已收起";onToggled:root.navigationOpen=checked }
         RowLayout {
@@ -29,7 +30,7 @@ ApplicationWindow {
             Button { text:root.backend.settings.error.length>0?"重试保存":"关闭";onClicked:root.backend.settings.error.length>0?root.backend.settings.retrySave():root.backend.clearError() }
         }
         RowLayout {
-            Layout.fillWidth:true;Layout.fillHeight:true;spacing:24
+            Layout.fillWidth:true;Layout.fillHeight:true;spacing:16
             NavigationPane {
                 visible:!root.minimal||root.navigationOpen
                 Layout.preferredWidth:root.compact?72:176
@@ -39,13 +40,20 @@ ApplicationWindow {
                 compact:root.compact;selected:root.selectedPage;fluentIcons:root.backend.hasFluentIcons
                 onNavigate:page=>root.navigate(page)
             }
+            Rectangle {
+                Layout.fillWidth:true;Layout.fillHeight:true
+                color: Ui.contentSurface
+                radius: 8
             StackLayout {
                 id:pages
-                Layout.fillWidth:true;Layout.fillHeight:true
+                anchors.fill:parent
+                anchors.margins:root.minimal?12:24
+                anchors.rightMargin:0
                 currentIndex:root.selectedPage
-                PlayerPage { backend:root.backend; sourceTab: root.sourceTab; onOpenSettings: root.navigate(2) }
-                LogsPage { backend:root.backend }
-                SettingsPage { backend:root.backend }
+                PlayerPage { backend:root.backend; sourceTab: root.sourceTab; onOpenSettings: { root.navigate(2); Qt.callLater(settingsPage.focusOnlineSettings) } }
+                LogsPage { backend:root.backend; Layout.rightMargin:root.minimal?12:24 }
+                SettingsPage { id:settingsPage; objectName:"settingsPage"; backend:root.backend }
+            }
             }
         }
     }

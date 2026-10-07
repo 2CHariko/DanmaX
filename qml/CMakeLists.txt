@@ -8,6 +8,8 @@ endif()
 set_source_files_properties(theme/Ui.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(danmaku_app URI LocalDanmaku VERSION 1.0
     QML_FILES Main.qml OverlayWindow.qml theme/Ui.qml
+    components/PageFrame.qml components/SectionCard.qml components/Disclosure.qml
+    components/AppComboBox.qml components/ContentScrollBar.qml
     components/SettingsSection.qml components/SettingsRow.qml components/NavigationPane.qml components/FontSelector.qml
     components/OnlineDanmakuPane.qml components/CachedDanmakuPane.qml
     pages/PlayerPage.qml pages/LogsPage.qml pages/SettingsPage.qml)

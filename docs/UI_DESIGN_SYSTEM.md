@@ -25,7 +25,7 @@ import QtQuick.Controls.FluentWinUI3
 纯布局、纯内容渲染文件无需强行导入 Controls。禁止项目代码同时显式导入 Basic、Fusion、Material、Universal、Windows 或动态的 `QtQuick.Controls` 来混搭皮肤；不提供用户切换控件风格的入口。浅色/深色切换是主题切换，不是风格切换。[S2]
 
 - Button、Switch、CheckBox、RadioButton、ComboBox、Slider、SpinBox、TextField、Menu、Dialog 等优先使用风格提供的控件。
-- 不替换标准控件的 `background` / `contentItem` 去重画 Fluent 外观；不按截图硬编码其内边距、描边、圆角和状态颜色。
+- 不替换标准控件主体的 `background` / `contentItem` 去重画 Fluent 外观；不按截图硬编码其内边距、描边、圆角和状态颜色。明确例外：共享 AppComboBox 可替换原 `popup.background` 为统一纯色主题表面，消除官方图片噪点的大尺寸拉伸；原 popup、列表 contentItem、输入框和选项状态继续使用官方实现。
 - 保留默认的 hover、pressed、disabled、checked、selected、focus 状态和键盘行为。突出动作使用已有语义属性或受支持的调色接口，不另画一套“主按钮”。
 - 自建组件优先组合标准控件。只有导航标记、设置容器表面等缺失的组合视觉允许集中绘制，并纳入状态、主题与无障碍检查。
 - Qt FluentWinUI3 基于部分图片资源，不保证所有像素都能通过 palette 修改；不承诺任意换肤。[S1]
@@ -156,3 +156,24 @@ Windows 设置指南推荐的 SettingsCard / SettingsExpander 来自 Windows Com
 - [S13：Microsoft Animations in Windows apps](https://learn.microsoft.com/en-us/windows/apps/design/motion/motion-in-practice)
 - [S14：Microsoft Accessibility overview](https://learn.microsoft.com/en-us/windows/apps/design/accessibility/accessibility)
 - [S15：Qt 6.11 Accessible QML Type](https://doc.qt.io/qt-6.11/qml-qtquick-accessible.html)
+
+## 10. 整体布局与工作流（2026-10-08）
+
+- 三页共用窗口/内容/分组表面与语义文字。颜色取自系统调色板，普通主题的辅助文字和细边框集中混合；高对比度直接使用系统文字色。Windows 的 alternateBase 可能带明显色相，不作为中性卡片底色。
+- PageFrame 管理标题、单列滚动与 1040 内容宽度；SectionCard 用于播放功能分区；Disclosure 使用标准 Button 组合单层折叠，收起时恢复内部焦点到触发按钮。设置行按可用宽度重排。
+- 播放页按来源、方式、控制组织。默认跟随播放器；待启动时选择模式并点击开始，运行时锁定模式，独立模式可暂停/跳转，同步进度只读。停止按钮明确标注“停止并卸载”。应用 ID 和运行指标默认折叠。
+- 在线配置入口通过 Main 导航并定位服务地址。未配置时不展示搜索表单；搜索结果、剧集与下载操作按状态出现，忙碌时取消始终可见。
+- 设置分为应用外观、弹幕样式、弹幕播放、同步与窗口、在线弹幕、高级设置、配置与关于；高级设置内文字缓存和诊断各自单层折叠。配置键与保存语义不变。
+- 日志保持精确级别筛选与全量导出；显示总数、匹配数及空状态。新增 LogModel.countForLevel 只读接口，不改变日志存储。
+- 本地 XML 原有行为是在准备前停止卸载，失败不会恢复旧来源；在线准备失败保留当前播放。此次布局调整没有统一这两种后端语义。
+- 可重复验证入口：动态构建的 ui_workflow CTest，以及 scripts/validate-ui.ps1 对指定静态部署 EXE 的三页浅深主题、520/800/1080 宽截图。系统高对比度、Narrator 与真实跨屏 DPI 必须另行验收。
+
+## 11. 滚动与下拉弹出层（2026-10-08）
+
+- 所有业务下拉框复用 AppComboBox（官方 Fluent ComboBox 派生组合）。使用公开 popup/ListView 属性与 ScrollBar 附加属性，保留原始列表与输入框 contentItem；字体组件只维护编辑、补全和提交，不重复实现弹出层。
+- 默认弹出高度上限 360 逻辑单位，随语义文本缩放；向下空间不够时优先向上，尺寸及位置受窗口四边 8 单位安全边距约束。宽度跟随输入框并限制到窗口，打开后窗口/模型变化重新计算；选中和键盘高亮项保持可见。
+- 下拉选项使用官方 ItemDelegate，单行省略、完整文本 tooltip 和可访问名称；预留固定滚动条宽度及 8 单位间隙。空/短列表隐藏滑块，长列表显示并可拖动，不因显示/隐藏改变选项宽度。
+- 唯一背景例外：下拉 popup.background 使用语义纯色不透明表面、细边框、8 单位圆角。高对比度直接使用系统窗口/文字色；不能将例外扩展到按钮、输入框主体或其他弹出层。不得修改 SDK、依赖私有 Config/StyleImage 或显式导入另一种 Controls 风格。
+- 页面滚动条距内容面板右边 8 单位，内容至少让出滑块宽度和 8 单位间隔；列表各自在所属区域预留空间。使用 ContentScrollBar 统一公开 palette/显示策略，保留官方 Fusion 回退的形状和拖动行为；记录其视觉差异，不宣称原生 WinUI 滚动条。
+- 截图/交互验收必须包括页面滚动中部/底部和下拉展开，覆盖空短长列表、末尾当前项、上下展开、动态模型、窗口缩小、鼠标拖动/滚轮、键盘及浅深/DPI/文字缩放。初始页面截图不足以验收。
+- 共享下拉框补充 F4 / Alt+↓ 展开或关闭；其余方向键、Enter、Escape、字体编辑/补全仍交给官方控件。字体框不能用 Space 作为展开测试，因为它是可编辑输入。

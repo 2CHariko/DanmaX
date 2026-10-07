@@ -46,6 +46,12 @@ LogModel::LogModel(QString directory, QObject* parent) : QAbstractListModel(pare
     QDir().mkpath(directory);
     file_ = QDir(directory).filePath("app.log");
 }
+int LogModel::countForLevel(const QString& level) const {
+    int result = 0;
+    for (const auto& row : rows_)
+        if (level.isEmpty() || row.level == level) ++result;
+    return result;
+}
 int LogModel::rowCount(const QModelIndex& p) const {
     return p.isValid() ? 0 : count();
 }

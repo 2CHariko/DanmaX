@@ -9,6 +9,7 @@
 #include <QQmlApplicationEngine>
 #include <QQuickGraphicsConfiguration>
 #include <QQuickWindow>
+#include <QQuickItem>
 #include <QSGRendererInterface>
 #include <QTimer>
 #include <algorithm>
@@ -102,6 +103,7 @@ int main(int argc, char* argv[]) {
     parser.addOption({"source-tab", "Initial source tab: xml, online, cache (UI validation)", "tab", "xml"});
     parser.addOption({"theme", "Theme for isolated UI validation", "theme"});
     parser.addOption({"window-width", "Width for layout validation", "pixels"});
+    parser.addOption({"capture-state", "UI smoke capture state: settings-middle or font-popup", "state"});
     parser.process(app);
     try {
         const auto paths =
@@ -157,6 +159,27 @@ int main(int argc, char* argv[]) {
         if (parser.isSet("window-width"))
             mainWindow->setWidth(parser.value("window-width").toInt());
         mainWindow->show();
+        if (parser.isSet("smoke-test") && parser.isSet("capture-state")) {
+            QTimer::singleShot(300, &app, [&, mainWindow] {
+                mainWindow->setProperty("selectedPage", 2);
+                QTimer::singleShot(100, &app, [&, mainWindow] {
+                    auto* page = mainWindow->findChild<QObject*>("settingsPage");
+                    if (!page) { qmlWarning = true; return; }
+                    if (parser.value("capture-state") == "settings-middle") {
+                        auto* bar = page->property("verticalBar").value<QObject*>();
+                        if (bar) bar->setProperty("position", 0.4);
+                        else qmlWarning = true;
+                    } else if (parser.value("capture-state") == "font-popup") {
+                        auto* font = mainWindow->findChild<QQuickItem*>("fontFamilyCombo");
+                        if (!font) { qmlWarning = true; return; }
+                        QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(font)));
+                        auto* popup = font->property("popup").value<QObject*>();
+                        if (popup) QMetaObject::invokeMethod(popup, "open");
+                        else qmlWarning = true;
+                    } else qmlWarning = true;
+                });
+            });
+        }
         if (parser.isSet("file")) {
             QObject::connect(&controller, &AppController::loadCompleted, &app, [&](bool success) {
                 if (success)
@@ -188,6 +211,10 @@ int main(int argc, char* argv[]) {
                                 passed = quick->grabWindow().save(parser.value("capture-overlay")) && passed;
                 if (parser.isSet("report"))
                     controller.writeReport(parser.value("report"));
+                if (!passed)
+                    std::fprintf(stderr, "Smoke failed: position=%.3f qmlWarning=%d windows=%lld imageNodes=%d\n",
+                                 controller.position(), qmlWarning, static_cast<long long>(app.allWindows().size()),
+                                 controller.metrics().value("imageNodes").toInt());
                 controller.stop();
                 app.exit(passed ? 0 : 2);
             });
