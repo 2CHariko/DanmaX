@@ -88,6 +88,7 @@ QML UI → Application Service → Core
 ### 基础设施与应用服务
 
 - XML 通过后台 `QXmlStreamReader` 解析，限制异常文件、超长文本和非有限时间；按批次报告进度。完成后一次性交接不可变数据。
+- Bilibili 下载兼容：在 Qt XML 读取前用有界 64 KiB 流式设备将原始非法 C0 控制字符替换为空格；保留 TAB/LF/CR，按 UTF-16/32 字节序处理多字节编码，不重写源文件、不修补结构性 XML 错误。模式 1/2/3 映射滚动，4/5 映射固定；其他模式不降级。明确缺失的颜色（空/undefined/null）回退白色。加载结果分别统计无效记录、不支持模式、字符修复及采用默认颜色的可播放记录；100 万条上限包含被过滤记录，错误/取消不交接部分数据。
 - 配置采用带详细中文注释的 UTF-8 INI（settings.ini），版本校验和 Qt `QSaveFile` 原子保存；首次运行生成完整默认配置。旧 JSON/INI 不读取、不迁移；程序保存时重建自带注释，不保留未知字段或额外注释。
 - 日志使用 Qt 消息处理能力，提供有界 UI 队列和文件轮转，避免渲染线程同步写盘。
 - 应用服务统一管理 `Idle / Loading / WaitingForSession / Playing / Paused / Error`，每个状态有可解释的 UI 输出。

@@ -235,6 +235,30 @@ int main(int argc, char** argv) {
         AppController controller(dir.path());
         QEventLoop loop;
         bool success = false;
+        QObject::connect(&controller, &AppController::loadCompleted, &loop, [&](bool ok) {
+            success = ok;
+            loop.quit();
+        });
+        auto recovered = QStringLiteral(
+            "<i><d p=\"0,1,25,undefined,1,0,user,123\">中文😀</d>"
+            "<d p=\"1,5,36,255\">top</d><d p=\"2,7,25,0\">advanced").toUtf8();
+        recovered += char(0x16);
+        recovered += "</d></i>";
+        const auto recoveredPath = write("bilibili-recovered.xml", recovered);
+        QTimer::singleShot(10000, &loop, &QEventLoop::quit);
+        controller.loadFile(recoveredPath);
+        loop.exec();
+        check(success && controller.total() == 2 && !controller.loading() && controller.error().isEmpty(),
+              "Asynchronous Bilibili recovery reaches application state");
+        check(controller.status().contains(QStringLiteral("不支持的模式 1")) &&
+                  controller.status().contains(QStringLiteral("修复 1 个非法控制字符")) &&
+                  controller.status().contains(QStringLiteral("1 条缺失颜色使用白色")),
+              "Application reports unsupported modes, sanitation and fallback colors");
+    }
+    {
+        AppController controller(dir.path());
+        QEventLoop loop;
+        bool success = false;
         int loads = 0;
         QObject::connect(&controller, &AppController::loadCompleted, &loop, [&](bool ok) {
             success = ok;

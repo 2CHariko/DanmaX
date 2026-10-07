@@ -262,6 +262,13 @@ void AppController::loadFile(const QString& input) {
                 demo_ = false;
                 settings_.setValue("lastFile", path);
                 status_ = QStringLiteral("已加载 %1 条，过滤 %2 条").arg(total()).arg(result.skipped);
+                if (result.skipped > 0)
+                    status_ += QStringLiteral("（无效 %1，不支持的模式 %2）")
+                                   .arg(result.invalidRecords).arg(result.unsupportedModes);
+                if (result.sanitizedCharacters > 0)
+                    status_ += QStringLiteral("，修复 %1 个非法控制字符").arg(result.sanitizedCharacters);
+                if (result.defaultedColors > 0)
+                    status_ += QStringLiteral("，%1 条缺失颜色使用白色").arg(result.defaultedColors);
                 logs_.append("INFO", status_);
                 emit stateChanged();
                 emit loadCompleted(true);

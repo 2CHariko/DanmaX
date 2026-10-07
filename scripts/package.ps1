@@ -9,8 +9,14 @@ Invoke-ProjectEnvironment {
         throw 'static-exe requires windows-static-release; directory/single-exe require windows-release.'
     }
     $tools = Initialize-Toolchain -StaticQt:($Format -eq 'static-exe')
+    # Build from current sources so deleting out/ is recoverable and an existing
+    # executable cannot silently package stale changes. Dependency preparation
+    # remains a separate explicit step; configuration/build never downloads.
+    $includePrefix = Get-MsvcIncludesPrefix
+    Invoke-Checked $tools.CMake @('--preset', $Preset, "-DDANMAKU_MSVC_INCLUDES_PREFIX=$includePrefix")
+    Invoke-Checked $tools.CMake @('--build', '--preset', $Preset, '--target', 'danmaku_app', '--parallel')
     $exe = Get-ProjectPath "out/build/$Preset/bin/danmaku_app.exe"
-    if (-not (Test-Path -LiteralPath $exe)) { throw 'Build Release before packaging.' }
+    if (-not (Test-Path -LiteralPath $exe)) { throw 'Application build did not produce the packaging executable.' }
     $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
     if ($Format -eq 'static-exe') {
         $output = Get-ProjectPath "out/packages/LocalDanmaku-static-$timestamp"

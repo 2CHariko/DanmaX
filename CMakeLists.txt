@@ -73,6 +73,15 @@ if(DANMAKU_BUILD_APP)
     # never scans downloaded Qt sources, archives or build outputs below the root.
     add_subdirectory(qml)
     if(BUILD_TESTING)
+        find_package(Qt6 6.11.0 EXACT REQUIRED COMPONENTS Test
+            PATHS "${danmaku_qt_directory}/lib/cmake/Qt6" NO_DEFAULT_PATH)
+        add_executable(xml_loader_tests tests/runtime/XmlLoaderTests.cpp
+            src/infrastructure/XmlLoader.cpp)
+        target_include_directories(xml_loader_tests PRIVATE src)
+        target_link_libraries(xml_loader_tests PRIVATE Qt6::Core Qt6::Test)
+        danmaku_compile_options(xml_loader_tests)
+        add_test(NAME xml_loader COMMAND xml_loader_tests)
+        set_tests_properties(xml_loader PROPERTIES TIMEOUT 120)
         add_executable(runtime_tests tests/runtime/RuntimeTests.cpp)
         target_link_libraries(runtime_tests PRIVATE danmaku_runtime)
         if(DANMAKU_STATIC_QT)

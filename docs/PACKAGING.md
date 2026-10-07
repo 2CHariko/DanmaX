@@ -29,6 +29,8 @@ pwsh -NoProfile -File scripts/validate-static.ps1 -Executable out/packages/Local
 
 默认输出 `out/packages/LocalDanmaku-static-<时间戳>/LocalDanmaku.exe`，应用源码、匹配的 Qt 源码归档、许可证、重新编译说明、实际 DLL 导入表和包摘要放在独立的 `out/packages/materials-static-<时间戳>/`。每次创建新目录，不覆盖已有包。只运行程序时可单独移动 EXE；公开分发时还须按实际组件许可证提供对应材料。
 
+`package.ps1` 会先按所选格式重新配置并增量构建当前主程序，再生成包；删除 `out/` 或其中的构建/打包目录后，直接重新执行打包命令即可恢复这些产物。项目内工具、Qt SDK、静态源码及已校验下载归档必须仍存在，依赖缺失仍按准备脚本处理，不在打包阶段自动联网。需要回归测试时另外执行对应预设的 `build.ps1 -Test`。
+
 ## 静态包运行目录
 
 ```text
