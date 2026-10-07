@@ -1,5 +1,8 @@
 #include "platform/windows/MediaMonitor.h"
 #include <windows.h>
+#include <shobjidl.h>
+#include <shellapi.h>
+#include <propkey.h>
 #include <QFileInfo>
 #include <algorithm>
 #include <appmodel.h>
@@ -139,10 +142,34 @@ void MediaMonitor::run(std::stop_token stop) {
         uninit_apartment();
 }
 bool MediaMonitor::targetForeground(const QString& id) {
+    const auto foreground = GetForegroundWindow();
     DWORD pid = 0;
-    GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+    GetWindowThreadProcessId(foreground, &pid);
     if (pid == GetCurrentProcessId())
         return true;
+    return windowMatchesSession(reinterpret_cast<quintptr>(foreground), id);
+}
+bool MediaMonitor::windowMatchesSession(quintptr handle, const QString& id) {
+    if (!handle || id.isEmpty())
+        return false;
+    const auto window = reinterpret_cast<HWND>(handle);
+    // Packaged players can be hosted by ApplicationFrameHost, whose process has no player AUMID.
+    // The window property store carries the identity of the actual hosted application.
+    winrt::com_ptr<IPropertyStore> properties;
+    if (SUCCEEDED(SHGetPropertyStoreForWindow(window, IID_PPV_ARGS(properties.put())))) {
+        PROPVARIANT value{};
+        const HRESULT result = properties->GetValue(PKEY_AppUserModel_ID, &value);
+        const QString windowId = SUCCEEDED(result) && value.vt == VT_LPWSTR && value.pwszVal
+                                     ? QString::fromWCharArray(value.pwszVal)
+                                     : QString{};
+        PropVariantClear(&value);
+        if (windowId == id)
+            return true;
+        if (!windowId.isEmpty() && id.contains(QLatin1Char('!')))
+            return false;
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
     HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (!process)
         return false;

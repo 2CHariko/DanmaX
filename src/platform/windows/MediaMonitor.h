@@ -17,6 +17,7 @@ class MediaMonitor final : public QObject {
     ~MediaMonitor() override;
     void select(QString id);
     static bool targetForeground(const QString& applicationId);
+    static bool windowMatchesSession(quintptr handle, const QString& id);
     static QVariantMap processMetrics();
     static void maintainTopmost(quintptr handle, int strategy);
     static QVariantMap windowMetrics(quintptr handle);

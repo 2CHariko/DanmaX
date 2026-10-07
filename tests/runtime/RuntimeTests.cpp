@@ -5,12 +5,24 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QGuiApplication>
+#include <windows.h>
+#include <shobjidl.h>
+#include <shellapi.h>
+#include <propkey.h>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QQuickWindow>
 #include <iostream>
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
+    // Optional read-only probe for a real hosted player window; no playback or focus changes.
+    if (argc == 4 && QString::fromLocal8Bit(argv[1]) == "--window-match") {
+        bool ok=false;
+        const auto handle=QString::fromLocal8Bit(argv[2]).toULongLong(&ok);
+        const bool matched=ok && MediaMonitor::windowMatchesSession(static_cast<quintptr>(handle),QString::fromLocal8Bit(argv[3]));
+        std::cout << (matched ? "matched" : "not matched") << '\n';
+        return matched ? 0 : 1;
+    }
     QTemporaryDir dir;
     int failed = 0;
     auto check = [&](bool v, const char* message) {
@@ -19,6 +31,32 @@ int main(int argc, char** argv) {
             ++failed;
         }
     };
+    {
+        const HWND window = CreateWindowExW(0, L"STATIC", L"Window identity test", 0, 0, 0, 1, 1, nullptr,
+                                            nullptr, GetModuleHandleW(nullptr), nullptr);
+        check(window != nullptr, "Create hidden identity test window");
+        IPropertyStore* properties = nullptr;
+        if (window && SUCCEEDED(SHGetPropertyStoreForWindow(window, IID_PPV_ARGS(&properties)))) {
+            wchar_t appId[] = L"Test.Player_family!Player";
+            PROPVARIANT value{};
+            value.vt = VT_LPWSTR;
+            value.pwszVal = appId;
+            check(SUCCEEDED(properties->SetValue(PKEY_AppUserModel_ID, value)), "Set hosted window AUMID");
+            check(MediaMonitor::windowMatchesSession(reinterpret_cast<quintptr>(window),
+                                                     "Test.Player_family!Player"),
+                  "Match hosted player by window AUMID");
+            check(!MediaMonitor::windowMatchesSession(reinterpret_cast<quintptr>(window),
+                                                      "Other.Player_family!Player"),
+                  "Reject another hosted application");
+            check(MediaMonitor::windowMatchesSession(reinterpret_cast<quintptr>(window), "runtime_tests.exe"),
+                  "Preserve desktop executable matching when shell app ID differs");
+            properties->Release();
+        } else
+            check(false, "Access window property store");
+        if (window)
+            DestroyWindow(window);
+        check(!MediaMonitor::windowMatchesSession(0, "Test.Player_family!Player"), "Reject missing window");
+    }
     auto write = [&](const QString& name, const QByteArray& bytes) {
         QFile f(dir.filePath(name));
         check(f.open(QIODevice::WriteOnly), "Create test fixture");

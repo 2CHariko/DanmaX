@@ -33,7 +33,7 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/XmlLoader.cpp src/infrastructure/XmlLoader.h
         src/infrastructure/SettingsStore.cpp src/infrastructure/SettingsStore.h
         src/infrastructure/LogModel.cpp src/infrastructure/LogModel.h)
-    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick windowsapp psapi)
+    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick windowsapp psapi shell32 ole32)
     danmaku_compile_options(danmaku_runtime)
     qt_add_executable(danmaku_app WIN32 src/app/main.cpp)
     set_source_files_properties(qml/theme/Ui.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
