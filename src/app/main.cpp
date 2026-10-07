@@ -172,7 +172,7 @@ int main(int argc, char* argv[]) {
             QTimer::singleShot(duration, &app, [&] {
                 bool passed = controller.position() > 0 && !qmlWarning && app.allWindows().size() >= 2;
                 if (parser.isSet("smoke-test") && !parser.isSet("file") &&
-                    qEnvironmentVariable("DANMAKU_RENDER_BACKEND") == "image")
+                    qEnvironmentVariable("DANMAKU_RENDER_BACKEND") != "text")
                     passed = passed && controller.metrics().value("imageNodes").toInt() > 0;
                 if (parser.isSet("media-session"))
                     passed = passed && !controller.manualMode() && !controller.mediaTitle().isEmpty();

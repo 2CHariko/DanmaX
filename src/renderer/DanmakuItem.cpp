@@ -175,6 +175,19 @@ QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
     }
     renderScene_ = root->state;
     ++root->frame;
+    // Retire expired references before preparing replacements so stale textures
+    // cannot occupy the budget needed by this frame's live comments.
+    for (const auto& visual : visuals_)
+        if (auto it = root->entries.find(visual.id); it != root->entries.end())
+            it->second.frame = root->frame;
+    for (auto it = root->entries.begin(); it != root->entries.end();) {
+        if (it->second.frame != root->frame) {
+            root->removeChildNode(it->second.node);
+            delete it->second.node;
+            it = root->entries.erase(it);
+        } else ++it;
+    }
+    root->textures.retireUnused();
     root->textures.beginFrame();
     for (const auto& visual : visuals_) {
         if (!visual.id)
@@ -219,18 +232,28 @@ QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
             }
             it = root->entries.emplace(visual.id, Entry{group, visual.layout, 0, raster}).first;
         }
+        if (imageBackend_ && !it->second.texture && it->second.frame != 0) {
+            // A cold burst can exceed the per-frame preparation/upload budgets.
+            // Upgrade a fallback on later frames without changing ID, order or position.
+            auto raster = root->textures.acquire(window(), *visual.layout, visual.color, stroke_, dpr);
+            if (raster) {
+                auto* group = it->second.node;
+                while (auto* child = group->firstChild()) {
+                    group->removeChildNode(child);
+                    delete child;
+                }
+                auto* imageNode = new QSGSimpleTextureNode;
+                imageNode->setTexture(raster->texture.get());
+                imageNode->setRect(QRectF(QPointF(), raster->size));
+                imageNode->setFiltering(QSGTexture::Linear);
+                group->appendChildNode(imageNode);
+                it->second.texture = std::move(raster);
+            }
+        }
         it->second.frame = root->frame;
         QMatrix4x4 matrix;
         matrix.translate(static_cast<float>(visual.x), static_cast<float>(visual.y));
         it->second.node->setMatrix(matrix);
-    }
-    for (auto it = root->entries.begin(); it != root->entries.end();) {
-        if (it->second.frame != root->frame) {
-            root->removeChildNode(it->second.node);
-            delete it->second.node;
-            it = root->entries.erase(it);
-        } else
-            ++it;
     }
     root->textures.retireUnused();
     int imageCount = 0;

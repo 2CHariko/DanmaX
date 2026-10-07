@@ -447,7 +447,7 @@ int main(int argc, char** argv) {
               "Paused visible text changes pixels without changing identity or movement");
         if (renderer.imageBackend())
             check(renderer.imageNodeCount() == renderer.snapshotCount() && renderer.imageNodeCount() > 0,
-                  "Experimental image backend refreshes live resources after style edits");
+                  "Cached raster backend refreshes live resources after style edits");
         const auto artifactDir = qEnvironmentVariable("DANMAKU_SETTINGS_TEST_ARTIFACTS");
         if (!artifactDir.isEmpty()) {
             QDir().mkpath(artifactDir);

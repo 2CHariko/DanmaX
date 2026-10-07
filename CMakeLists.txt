@@ -93,6 +93,18 @@ if(DANMAKU_BUILD_APP)
         add_test(NAME runtime_image_services COMMAND runtime_tests "${CMAKE_SOURCE_DIR}/tests/fixtures/sample.xml")
         set_tests_properties(runtime_image_services PROPERTIES TIMEOUT 30
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;DANMAKU_RENDER_BACKEND=image")
+        add_test(NAME runtime_text_services COMMAND runtime_tests "${CMAKE_SOURCE_DIR}/tests/fixtures/sample.xml")
+        set_tests_properties(runtime_text_services PROPERTIES TIMEOUT 30
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;DANMAKU_RENDER_BACKEND=text")
+        add_executable(renderer_tests tests/runtime/RendererTests.cpp)
+        target_link_libraries(renderer_tests PRIVATE danmaku_runtime Qt6::Test)
+        if(DANMAKU_STATIC_QT)
+            qt_import_plugins(renderer_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin)
+        endif()
+        danmaku_compile_options(renderer_tests)
+        add_test(NAME renderer_cache COMMAND renderer_tests)
+        set_tests_properties(renderer_cache PROPERTIES TIMEOUT 60
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
         add_test(NAME application_smoke COMMAND danmaku_app --smoke-test
             --data-dir "${CMAKE_BINARY_DIR}/test-data" --cache-dir "${CMAKE_BINARY_DIR}/test-cache")
         set_tests_properties(application_smoke PROPERTIES TIMEOUT 20

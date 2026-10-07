@@ -18,7 +18,8 @@ Window {
             id:debugText;anchors.centerIn:parent;color:"white";font.pixelSize:14
             text:overlay.backend.status+"\n"+overlay.backend.mediaTitle+"\n"+overlay.backend.position.toFixed(1)+" s"
                 +"\n在屏 "+(overlay.backend.metrics.active||0)+" / 丢弃 "+(overlay.backend.metrics.dropped||0)
-                +"\n更新 "+(overlay.backend.metrics.updatesPerSecond||0)+" Hz / P95 "+Number(overlay.backend.metrics.p95Ms||0).toFixed(1)+" ms"
+                +"\n呈现 "+Number(overlay.backend.metrics.presentedPerSecond||0).toFixed(1)+" Hz / 更新 "+Number(overlay.backend.metrics.updatesPerSecond||0).toFixed(1)+" Hz"
+                +"\n更新间隔 P95 "+Number(overlay.backend.metrics.p95Ms||0).toFixed(1)+" ms"
                 +"\n内存 "+Number(overlay.backend.metrics.memoryMiB||0).toFixed(1)+" MiB"
         }
     }

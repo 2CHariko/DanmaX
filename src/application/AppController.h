@@ -149,5 +149,6 @@ class AppController final : public QObject {
     std::vector<double> frameTimes_;
     double engineMs_{}, snapshotMs_{};
     quint64 renderedFrames_{};
+    quint64 lastMetricsRenderedFrames_{};
     quint64 animationCallbacks_{}, mediaSamples_{}, sampleResets_{}, frameTicks_{}, maintenanceTicks_{};
 };

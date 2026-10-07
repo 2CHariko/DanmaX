@@ -479,6 +479,8 @@ void AppController::updateMetrics() {
     const double interval = metricsTime_.nsecsElapsed() * 1e-9;
     metricsTime_.restart();
     metrics_["updatesPerSecond"] = interval > 0 ? frames_ / interval : 0;
+    metrics_["presentedPerSecond"] = interval > 0 ? (renderedFrames_ - lastMetricsRenderedFrames_) / interval : 0;
+    lastMetricsRenderedFrames_ = renderedFrames_;
     metrics_["presentedFrames"] = static_cast<qulonglong>(renderedFrames_);
     metrics_["animationCallbacks"] = static_cast<qulonglong>(animationCallbacks_);
     metrics_["mediaSamples"] = static_cast<qulonglong>(mediaSamples_);
@@ -493,9 +495,10 @@ void AppController::updateMetrics() {
         metrics_["cacheEntries"] = renderer_->cacheEntries();
         metrics_["cacheHits"] = static_cast<qulonglong>(renderer_->cacheHits());
         metrics_["cacheMisses"] = static_cast<qulonglong>(renderer_->cacheMisses());
-        metrics_["renderBackend"] = renderer_->imageBackend() ? "image-experimental" : "qt-text";
+        metrics_["renderBackend"] = renderer_->imageBackend() ? "cached-raster" : "qt-text";
         metrics_["snapshotCount"] = renderer_->snapshotCount();
         metrics_["imageNodes"] = renderer_->imageNodeCount();
+        metrics_["textFallbackNodes"] = renderer_->sceneEntries() - renderer_->imageNodeCount();
         metrics_["sceneEntries"] = renderer_->sceneEntries();
         metrics_["textureEstimatedBytes"] = renderer_->textureBytes();
     }
@@ -545,7 +548,7 @@ void AppController::writeReport(const QString& path) {
     metrics_["qtVersion"] = qVersion();
     metrics_["requestedCount"] = total();
     metrics_["metricNote"] =
-        "p95/p99 are GUI tick intervals, not GPU frame times; CPU normalized across logical processors";
+        "p95/p99 are GUI tick intervals; presentedPerSecond counts overlay frameSwapped, not optical FPS; CPU normalized across logical processors";
     if (overlay_) {
         metrics_["refreshRate"] = overlay_->screen()->refreshRate();
         metrics_.insert(MediaMonitor::windowMetrics(overlay_->winId()));

@@ -49,7 +49,9 @@ class DanmakuItem : public QQuickItem {
     Layout* layout(const danmaku::Item& item);
     QFont font_;
     int stroke_{1};
-    const bool imageBackend_{qEnvironmentVariable("DANMAKU_RENDER_BACKEND") == "image"};
+    // Cached whole-comment textures avoid separate outline/fill glyph batches.
+    // Keep the public Qt text path available for comparison and budget fallbacks.
+    const bool imageBackend_{qEnvironmentVariable("DANMAKU_RENDER_BACKEND") != "text"};
     std::atomic<int> imageNodes_{};
     std::atomic<qint64> textureBytes_{};
     std::atomic<int> sceneEntries_{};
