@@ -18,6 +18,9 @@ class SettingsStore final : public QObject {
     }
     static QVariantMap defaults();
     Q_INVOKABLE bool setValue(const QString& key, const QVariant& value);
+    Q_INVOKABLE bool setDanmakuServers(const QStringList& addresses) {
+        return setValue(QStringLiteral("danmakuServers"), addresses);
+    }
     Q_INVOKABLE bool reset();
     Q_INVOKABLE bool retrySave();
   signals:

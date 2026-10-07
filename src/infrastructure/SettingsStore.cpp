@@ -6,6 +6,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QLocale>
 #include <QSaveFile>
 #include <QSettings>
@@ -21,8 +23,8 @@ struct Setting {
 };
 const QList<Setting>& schema() {
     static const QList<Setting> fields{
-        {"Online", "danmakuServer", "",
-         "弹弹play兼容服务的基础地址，默认：空（未配置）。支持 http/https 和路径前缀。\n不包含 /api/v2、查询参数或账号密码；完成编辑后保存。仅接入允许匿名访问的兼容服务。"},
+        {"Online", "danmakuServers", QStringList{"https://danmaku-api.152468.xyz"},
+         "有序兼容服务地址列表，使用 JSON 数组字符串；空数组禁用在线服务。\n默认：https://danmaku-api.152468.xyz。失败或无结果时顺序回退，共享弹弹play ID。\n支持 http/https 和路径前缀，不包含 /api/v2、查询参数或账号密码。旧 danmakuServer 不读取。"},
         {"Appearance", "theme", "system",
          "应用主题：system=跟随系统，light=浅色，dark=深色。默认：system。\nWindows 高对比度启用时优先跟随系统，不强制浅色或深色。"},
         {"Appearance", "fontFamily", "Microsoft YaHei",
@@ -72,6 +74,21 @@ const QList<Setting>& schema() {
     return fields;
 }
 QVariant checked(const QString& key, const QVariant& value, const QVariant& fallback) {
+    if (key == "danmakuServers") {
+        if (value.metaType().id() != QMetaType::QStringList && value.metaType().id() != QMetaType::QVariantList)
+            return {};
+        QStringList servers;
+        if (value.metaType().id() == QMetaType::QVariantList)
+            for (const auto& entry : value.toList()) if (entry.metaType().id() != QMetaType::QString) return {};
+        for (const auto& address : value.toStringList()) {
+            auto server = normalizeDanmakuServer(address);
+            // A root slash is equivalent for configuration; retain legacy cache-key normalization.
+            while (server.endsWith('/')) server.chop(1);
+            if (address.size() > 4096 || server.isEmpty() || servers.contains(server)) return {};
+            servers.append(server);
+        }
+        return servers;
+    }
     static const QMap<QString, QPair<double, double>> ranges{
         {"fontSize", {10, 72}},   {"strokeWidth", {0, 6}},   {"opacity", {0.05, 1}},
         {"speed", {30, 1500}},    {"fixedSeconds", {1, 30}}, {"maxActive", {50, 5000}},
@@ -92,11 +109,6 @@ QVariant checked(const QString& key, const QVariant& value, const QVariant& fall
     if (value.metaType().id() != QMetaType::QString)
         return {};
     const auto text = value.toString();
-    if (key == "danmakuServer") {
-        if (text.trimmed().isEmpty()) return QString();
-        const auto server = normalizeDanmakuServer(text);
-        return server.isEmpty() || text.size() > 4096 ? QVariant{} : QVariant(server);
-    }
     if (key == "theme" && text != "system" && text != "light" && text != "dark")
         return {};
     if (key == "debugPosition" &&
@@ -109,6 +121,11 @@ QVariant checked(const QString& key, const QVariant& value, const QVariant& fall
     return text;
 }
 QVariant checkedIni(const Setting& field, QVariant raw) {
+    if (QString::fromLatin1(field.key) == "danmakuServers") {
+        const auto doc = QJsonDocument::fromJson(raw.toString().toUtf8());
+        if (!doc.isArray()) return {};
+        raw = doc.array().toVariantList();
+    }
     if (field.initial.metaType().id() == QMetaType::Bool) {
         const auto text = raw.toString().trimmed().toLower();
         if (text != "true" && text != "false" && text != "1" && text != "0")
@@ -124,7 +141,9 @@ QString iniValue(const QVariant& value) {
         return QString::number(value.toInt());
     if (value.metaType().id() == QMetaType::Double)
         return QLocale::c().toString(value.toDouble(), 'g', QLocale::FloatingPointShortest);
-    auto text = value.toString();
+    auto text = value.metaType().id() == QMetaType::QStringList
+        ? QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(value.toStringList())).toJson(QJsonDocument::Compact))
+        : value.toString();
     // QSettings reserves @ prefixes for typed values. @@ decodes to a literal @.
     if (text.startsWith('@'))
         text.prepend('@');

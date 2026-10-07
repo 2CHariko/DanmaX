@@ -550,6 +550,9 @@ int main(int argc, char** argv) {
         loop.exec();
         check(success && controller.total() == 2, "Reload after stop succeeds");
         controller.start(true);
+        wait(120);
+        check(controller.position() == 0 && renderer.snapshotCount() == 0,
+              "Independent startup waits for first exposure without consuming time-zero comments");
         overlay.show();
         wait(100);
         check(controller.running() && renderer.snapshotCount() > 0 && renderer.sceneEntries() > 0 &&

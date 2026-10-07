@@ -212,9 +212,12 @@ int main(int argc, char* argv[]) {
                 if (parser.isSet("report"))
                     controller.writeReport(parser.value("report"));
                 if (!passed)
-                    std::fprintf(stderr, "Smoke failed: position=%.3f qmlWarning=%d windows=%lld imageNodes=%d\n",
+                    std::fprintf(stderr, "Smoke failed: position=%.3f qmlWarning=%d windows=%lld imageNodes=%d active=%d suppressedWhileHidden=%llu maintenanceTicks=%llu\n",
                                  controller.position(), qmlWarning, static_cast<long long>(app.allWindows().size()),
-                                 controller.metrics().value("imageNodes").toInt());
+                                 controller.metrics().value("imageNodes").toInt(),
+                                 controller.metrics().value("active").toInt(),
+                                 controller.metrics().value("suppressedWhileHidden").toULongLong(),
+                                 controller.metrics().value("maintenanceTicks").toULongLong());
                 controller.stop();
                 app.exit(passed ? 0 : 2);
             });

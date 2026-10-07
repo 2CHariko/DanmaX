@@ -9,14 +9,15 @@ ColumnLayout {
     signal openSettings()
     spacing: 8
     Label {
-        visible: pane.library.server.length === 0
+        visible: pane.library.servers.length === 0
         text: "请先配置允许匿名访问的弹弹play兼容服务。"
         wrapMode: Text.WordWrap
         Layout.fillWidth: true
     }
-    Button { visible: pane.library.server.length === 0; text: "打开在线服务设置"; onClicked: pane.openSettings() }
+    Label { visible: pane.library.activeServer.length > 0; text: "当前服务：" + pane.library.activeServer; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
+    Button { visible: pane.library.servers.length === 0; text: "打开在线服务设置"; onClicked: pane.openSettings() }
     ColumnLayout {
-        visible: pane.library.server.length > 0
+        visible: pane.library.servers.length > 0
         Layout.fillWidth: true
         spacing: 12
     RowLayout {
@@ -32,7 +33,7 @@ ColumnLayout {
         }
         Button {
             text: "搜索"
-            enabled: pane.library.server.length > 0 && keyword.text.trim().length > 0
+            enabled: pane.library.servers.length > 0 && keyword.text.trim().length > 0
             onClicked: pane.library.searchAnime(keyword.text)
         }
     }
@@ -96,5 +97,5 @@ ColumnLayout {
     }
     Label { text: pane.library.status; wrapMode: Text.WordWrap; Layout.fillWidth: true; Accessible.name: "在线状态：" + text }
     Label { visible: pane.library.error.length > 0; text: pane.library.error; wrapMode: Text.WordWrap; Layout.fillWidth: true; Accessible.name: "在线错误：" + text }
-    Label { visible: pane.library.server.length > 0; text: "载入后，在播放控制中开始播放。"; color: Ui.secondaryText; font.pixelSize: Ui.captionSize; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+    Label { visible: pane.library.servers.length > 0; text: "载入后，在播放控制中开始播放。"; color: Ui.secondaryText; font.pixelSize: Ui.captionSize; wrapMode: Text.WordWrap; Layout.fillWidth: true }
 }

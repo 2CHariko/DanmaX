@@ -11,7 +11,8 @@
 
 class DanmakuLibrary final : public QObject {
     Q_OBJECT
-    Q_PROPERTY(QString server READ server NOTIFY changed)
+    Q_PROPERTY(QStringList servers READ servers NOTIFY changed)
+    Q_PROPERTY(QString activeServer READ activeServer NOTIFY changed)
     Q_PROPERTY(QVariantList animes READ animes NOTIFY changed)
     Q_PROPERTY(QVariantList episodes READ episodes NOTIFY changed)
     Q_PROPERTY(QVariantList cachedEntries READ cachedEntries NOTIFY cacheChanged)
@@ -26,7 +27,8 @@ class DanmakuLibrary final : public QObject {
   public:
     explicit DanmakuLibrary(QString cacheRoot, QObject* parent = nullptr, int timeoutMs = 30000);
     ~DanmakuLibrary() override;
-    QString server() const { return server_; }
+    QStringList servers() const { return servers_; }
+    QString activeServer() const { return server_; }
     QVariantList animes() const { return animes_; }
     QVariantList episodes() const { return episodes_; }
     QVariantList cachedEntries() const { return entries_; }
@@ -38,7 +40,7 @@ class DanmakuLibrary final : public QObject {
     int progress() const { return progress_; }
     QString status() const { return status_; }
     QString error() const { return error_; }
-    void setServer(const QString& address);
+    void setServers(const QStringList& addresses);
     Q_INVOKABLE void searchAnime(const QString& keyword);
     Q_INVOKABLE void selectAnime(const QString& id);
     Q_INVOKABLE void selectEpisode(const QString& id);
@@ -61,6 +63,8 @@ class DanmakuLibrary final : public QObject {
     };
     void begin(const QString& status, bool sourceLoad = false);
     void fail(const QString& error);
+    void startAttempts(std::function<void()> attempt);
+    void nextAttempt(const QString& reason = {});
     void request(const QString& path, const QString& query,
                  std::function<void(QByteArray)> completed);
     void work(std::function<Work(std::stop_token)> action, std::function<void(Work)> completed);
@@ -69,6 +73,10 @@ class DanmakuLibrary final : public QObject {
     QVariantMap episodeMetadata() const;
     void invalidate();
     QString directory_, server_, animeId_, episodeId_, status_, error_;
+    QStringList servers_, attemptErrors_;
+    qsizetype attemptIndex_{-1};
+    QString operationStatus_;
+    std::function<void()> attempt_;
     QVariantList animes_, episodes_, entries_;
     QNetworkAccessManager network_;
     QPointer<QNetworkReply> reply_;

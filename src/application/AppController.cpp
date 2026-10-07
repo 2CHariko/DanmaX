@@ -27,7 +27,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     });
     LogModel::install(&logs_);
     file_ = settings_.values()["lastFile"].toString();
-    library_.setServer(settings_.values()["danmakuServer"].toString());
+    library_.setServers(settings_.values()["danmakuServers"].toStringList());
     connect(&library_, &DanmakuLibrary::sourceLoadStarted, this, [this] {
         discardLoad();
         onlineLoadGeneration_ = loadGeneration_;
@@ -169,7 +169,7 @@ void AppController::clearError() {
 }
 void AppController::configure() {
     const auto s = settings_.values();
-    library_.setServer(s["danmakuServer"].toString());
+    library_.setServers(s["danmakuServers"].toStringList());
     logs_.configure(s["logToFile"].toBool(), s["logLevel"].toString());
     monitor_.select(s["targetSession"].toString());
     if (lastSettings_.value("targetSession") != s["targetSession"]) {
@@ -333,6 +333,7 @@ void AppController::start(bool manual) {
     if (manual && position_ >= duration_)
         position_ = 0;
     manual_ = manual;
+    awaitingInitialExposure_ = manual && overlay_ && !overlay_->isExposed();
     if (auto* quick = qobject_cast<QQuickWindow*>(overlay_.data())) {
         quick->setPersistentSceneGraph(true);
         quick->setPersistentGraphics(true);
@@ -369,6 +370,7 @@ void AppController::commitItems(std::vector<danmaku::Item> items, const QString&
 void AppController::resetPlayback() {
     timer_.stop();
     running_ = playing_ = visible_ = manual_ = demo_ = false;
+    awaitingInitialExposure_ = false;
     snapshotDirty_ = true;
     engine_.unload();
     sourceTitle_.clear();
@@ -457,7 +459,14 @@ void AppController::tick() {
     if (!running_ || !renderer_)
         return;
     if (rendererSettingsPending_) applyRendererSettings();
-    const double elapsed = frameTime_.nsecsElapsed() * 1e-9;
+    // Independent playback begins on first exposure. Before that, the hidden-window
+    // maintenance path must not consume time-zero comments. Later hides still advance.
+    if (awaitingInitialExposure_ && (!overlay_ || !overlay_->isVisible() || !overlay_->isExposed())) {
+        frameTime_.restart();
+        return;
+    }
+    const double elapsed = awaitingInitialExposure_ ? 0 : frameTime_.nsecsElapsed() * 1e-9;
+    awaitingInitialExposure_ = false;
     frameTime_.restart();
     if (elapsed > 0 && elapsed < 5) {
         frameTimes_.push_back(elapsed * 1000);

@@ -89,6 +89,105 @@ void writeBytes(const QString& path, const QByteArray& bytes) {
 class OnlineDanmakuTests final : public QObject {
     Q_OBJECT
   private slots:
+    void orderedSettingsRoundTrip() {
+        QTemporaryDir root;
+        writeBytes(root.filePath("settings.ini"), "[Meta]\nformatVersion=1\n[Online]\ndanmakuServer=\"https://old.test\"\n");
+        SettingsStore settings(root.path());
+        QCOMPARE(settings.values()["danmakuServers"].toStringList(), QStringList{"https://danmaku-api.152468.xyz"});
+        QVERIFY(!settings.setValue("danmakuServer", "https://old.test"));
+        const QStringList expected{"https://b.test/prefix", "http://a.test:8080"};
+        QVERIFY(settings.setValue("danmakuServers", QStringList{" https://B.test:443/prefix/ ", "http://a.test:8080/"}));
+        QCOMPARE(settings.values()["danmakuServers"].toStringList(), expected);
+        QVERIFY(!settings.setValue("danmakuServers", QStringList{"https://a.test", "https://A.test/"}));
+        QVERIFY(!settings.setValue("danmakuServers", QVariantList{42}));
+        QVERIFY(!settings.setValue("danmakuServers", QStringList{""}));
+        QCOMPARE(settings.values()["danmakuServers"].toStringList(), expected);
+        SettingsStore restored(root.path());
+        QCOMPARE(restored.values()["danmakuServers"].toStringList(), expected);
+        QVERIFY(settings.setValue("danmakuServers", QStringList{}));
+        SettingsStore empty(root.path());
+        QVERIFY(empty.values()["danmakuServers"].toStringList().isEmpty());
+        QVERIFY(settings.reset());
+        SettingsStore reset(root.path());
+        QCOMPARE(reset.values(), SettingsStore::defaults());
+        writeBytes(root.filePath("settings.ini"), "[Meta]\nformatVersion=1\n[Online]\ndanmakuServers=\"not JSON\"\n");
+        SettingsStore invalid(root.path());
+        QVERIFY(!invalid.error().isEmpty());
+        QCOMPARE(invalid.values()["danmakuServers"], SettingsStore::defaults()["danmakuServers"]);
+    }
+    void orderedFallback_data() {
+        QTest::addColumn<int>("failure");
+        for (int i = 0; i < 7; ++i) QTest::newRow(qPrintable(QString::number(i))) << i;
+    }
+    void orderedFallback() {
+        QFETCH(int, failure);
+        QTemporaryDir root; FakeServer first, second, unused;
+        first.response = [failure](QByteArray target) {
+            if (failure == 0) return Response{503, "failed"};
+            if (failure == 1) return Response{401, "auth"};
+            if (failure == 2) return Response{200, "{"};
+            if (failure == 3) return Response{200, R"({"success":false})"};
+            if (failure == 4) return Response{200, "", -1};
+            if (failure == 5) return Response{200, "", 0, "Content-Length: 67108865\r\n"};
+            if (target.contains("/search/")) return Response{200, R"({"animes":[]})"};
+            if (target.contains("/bangumi/")) return Response{200, R"({"episodes":[]})"};
+            return Response{200, R"({"comments":[]})"};
+        };
+        QStringList order;
+        const auto bad = first.response, good = second.response;
+        first.response = [&](QByteArray target) { order.append("first"); return bad(target); };
+        second.response = [&](QByteArray target) { order.append("second"); return good(target); };
+        DanmakuLibrary library(root.path(), nullptr, 250);
+        library.setServers({first.base(), second.base(), unused.base()});
+        QVERIFY(first.targets.isEmpty()); QVERIFY(second.targets.isEmpty());
+        library.searchAnime("测试"); QTRY_VERIFY(!library.busy()); QCOMPARE(library.animes().size(), 1);
+        library.selectAnime("42"); QTRY_VERIFY(!library.busy()); QCOMPARE(library.episodes().size(), 1);
+        library.selectEpisode("42001");
+        QSignalSpy ready(&library, &DanmakuLibrary::sourceReady);
+        library.downloadEpisode(true); QTRY_COMPARE(ready.count(), 1);
+        const auto result = library.takeReadyResult(); QVERIFY(result);
+        QCOMPARE(result->metadata["server"].toString(), second.base());
+        QCOMPARE(library.activeServer(), second.base());
+        QCOMPARE(order, (QStringList{"first", "second", "first", "second", "first", "second"}));
+        QVERIFY(unused.targets.isEmpty());
+        QTRY_VERIFY(!library.scanning()); QVERIFY(library.selectedCached());
+        library.downloadEpisode(); QTRY_COMPARE(ready.count(), 2);
+        QCOMPARE(order.size(), 6); // Second service cache is used before any network request.
+        library.downloadEpisode(true); QTRY_COMPARE(ready.count(), 3); QCOMPARE(order.size(), 8);
+        auto primary = parseOnlineDanmaku(commentBody("primary")); primary.metadata = result->metadata;
+        primary.metadata["server"] = first.base();
+        QVERIFY(saveCachedDanmaku(root.filePath("danmaku"), primary).isEmpty());
+        library.downloadEpisode(); QTRY_COMPARE(ready.count(), 4);
+        QCOMPARE(library.takeReadyResult()->metadata["server"].toString(), first.base());
+        QCOMPARE(order.size(), 8);
+    }
+    void fallbackCancellationAndExhaustion() {
+        QTemporaryDir root; FakeServer first, second;
+        first.response = [](QByteArray) { return Response{503, "failed", 100}; };
+        second.response = [](QByteArray) { return Response{403, "auth"}; };
+        DanmakuLibrary library(root.path()); library.setServers({first.base(), second.base()});
+        library.searchAnime("cancel"); QTRY_COMPARE(first.targets.size(), 1);
+        library.cancel(); QTest::qWait(150); QVERIFY(second.targets.isEmpty()); QVERIFY(!library.busy());
+        library.searchAnime("change"); QTRY_COMPARE(first.targets.size(), 2);
+        library.setServers({second.base()}); QTest::qWait(150); QVERIFY(second.targets.isEmpty());
+        library.setServers({first.base(), second.base()});
+        library.searchAnime("all fail"); QTRY_VERIFY(!library.busy());
+        QVERIFY(library.error().contains(first.base())); QVERIFY(library.error().contains(second.base()));
+        QVERIFY(library.error().contains("503")); QVERIFY(library.error().contains("认证"));
+        const auto count = first.targets.size();
+        library.searchAnime(" "); QVERIFY(!library.busy()); QCOMPARE(first.targets.size(), count);
+        first.close(); // Connection refused also falls back.
+        second.response = [](QByteArray) { return Response{200, R"({"animes":[{"animeId":42,"animeTitle":"ok"}]})"}; };
+        library.searchAnime("network"); QTRY_VERIFY(!library.busy()); QCOMPARE(library.animes().size(), 1);
+        library.setServers({second.base()});
+        const auto before = second.targets.size();
+        const auto connection = connect(&library, &DanmakuLibrary::changed, &library, [&] {
+            if (library.busy() && library.status().contains("（1/1）")) library.cancel();
+        });
+        library.searchAnime("cancel from status"); QTest::qWait(80);
+        QVERIFY(!library.busy()); QCOMPARE(second.targets.size(), before);
+        disconnect(connection);
+    }
     void serverValidationAndTls() {
         QCOMPARE(normalizeDanmakuServer(" https://EXAMPLE.test:443/prefix/ "), QString("https://example.test/prefix"));
         for (const auto& address : {"file:///x", "localhost", "https://a.test/?token=x", "https://user:pw@a.test", "https://a.test/#x"})
@@ -97,9 +196,9 @@ class OnlineDanmakuTests final : public QObject {
         QVERIFY(QSslSocket::supportsSsl());
         QTemporaryDir root;
         SettingsStore settings(root.path());
-        QVERIFY(!settings.setValue("danmakuServer", "not a URL"));
-        QVERIFY(settings.setValue("danmakuServer", "https://example.test/prefix/"));
-        QCOMPARE(settings.values().value("danmakuServer").toString(), QString("https://example.test/prefix"));
+        QVERIFY(!settings.setValue("danmakuServers", QStringList{"not a URL"}));
+        QVERIFY(settings.setValue("danmakuServers", QStringList{"https://example.test/prefix/"}));
+        QCOMPARE(settings.values().value("danmakuServers").toStringList(), QStringList{"https://example.test/prefix"});
     }
     void parserBoundariesAndDeduplication() {
         QJsonArray array{
@@ -152,13 +251,13 @@ class OnlineDanmakuTests final : public QObject {
         auto trusted = original; trusted.addCaCertificate(certificate);
         QSslConfiguration::setDefaultConfiguration(trusted);
         QTemporaryDir root;
-        DanmakuLibrary library(root.path()); library.setServer(server.base()); library.searchAnime("HTTPS");
+        DanmakuLibrary library(root.path()); library.setServers({server.base()}); library.searchAnime("HTTPS");
         QTRY_VERIFY_WITH_TIMEOUT(!library.busy(), 15000);
         const auto error = library.error(); const auto size = library.animes().size();
         QSslConfiguration::setDefaultConfiguration(original);
         QVERIFY2(error.isEmpty(), qPrintable(error)); QCOMPARE(size, 1);
         // Production uses normal certificate verification; an untrusted server must fail.
-        DanmakuLibrary untrusted(root.filePath("untrusted")); untrusted.setServer(server.base()); untrusted.searchAnime("HTTPS");
+        DanmakuLibrary untrusted(root.filePath("untrusted")); untrusted.setServers({server.base()}); untrusted.searchAnime("HTTPS");
         QTRY_VERIFY_WITH_TIMEOUT(!untrusted.busy(), 15000); QVERIFY(!untrusted.error().isEmpty());
     }
     void cacheIntegrityAndAtomicReplacement() {
@@ -196,7 +295,7 @@ class OnlineDanmakuTests final : public QObject {
         QTemporaryDir root; FakeServer server; QVERIFY(server.isListening());
         QString key;
         {
-            DanmakuLibrary library(root.path()); library.setServer(server.base());
+            DanmakuLibrary library(root.path()); library.setServers({server.base()});
             QSignalSpy ready(&library, &DanmakuLibrary::sourceReady);
             library.searchAnime("测试 中文"); QTRY_VERIFY(!library.busy());
             QCOMPARE(library.animes().size(), 1);
@@ -228,7 +327,7 @@ class OnlineDanmakuTests final : public QObject {
     void failuresCancellationAndStaleResponses() {
         QTemporaryDir root; FakeServer server;
         DanmakuLibrary library(root.path(), nullptr, 200);
-        library.setServer(server.base());
+        library.setServers({server.base()});
         for (const auto status : {401, 403, 500}) {
             server.response = [status](QByteArray) { return Response{status, "error"}; };
             library.searchAnime("测试"); QTRY_VERIFY(!library.busy());
@@ -237,7 +336,7 @@ class OnlineDanmakuTests final : public QObject {
         server.response = [](QByteArray) { return Response{200, "{"}; };
         library.searchAnime("测试"); QTRY_VERIFY(!library.busy()); QVERIFY(!library.error().isEmpty());
         server.response = [](QByteArray) { return Response{200, R"({"animes":[]})"}; };
-        library.searchAnime("测试"); QTRY_VERIFY(!library.busy()); QVERIFY(library.error().isEmpty()); QVERIFY(library.animes().isEmpty());
+        library.searchAnime("测试"); QTRY_VERIFY(!library.busy()); QVERIFY(!library.error().isEmpty()); QVERIFY(library.animes().isEmpty());
         server.response = [](QByteArray) { return Response{200, "", -1}; };
         library.searchAnime("测试"); QTRY_VERIFY(!library.busy()); QVERIFY(library.error().contains("超时"));
         server.response = [](QByteArray) { return Response{200, R"({"animes":[{"animeId":1,"animeTitle":"旧结果"}]})", 100}; };
@@ -247,15 +346,15 @@ class OnlineDanmakuTests final : public QObject {
         server.response = [](QByteArray) { return Response{200, R"({"animes":[{"animeId":2,"animeTitle":"新结果"}]})"}; };
         library.searchAnime("新查询"); QTRY_VERIFY(!library.busy()); QTest::qWait(120);
         QCOMPARE(library.animes().first().toMap()["title"].toString(), QString("新结果"));
-        library.searchAnime("查询"); library.setServer("https://different.test"); QTest::qWait(80);
+        library.searchAnime("查询"); library.setServers({"https://different.test"}); QTest::qWait(80);
         QVERIFY(library.animes().isEmpty()); QVERIFY(!library.busy());
-        library.setServer(server.base());
+        library.setServers({server.base()});
         server.response = [](QByteArray) { return Response{200, "", 0, "Content-Length: 67108865\r\n"}; };
         library.searchAnime("超限"); QTRY_VERIFY(!library.busy()); QVERIFY(library.error().contains("64 MiB"));
     }
     void alternateEpisodeFormatAndCacheWriteFailure() {
-        QTemporaryDir root; FakeServer server;
-        DanmakuLibrary library(root.path()); library.setServer(server.base());
+        QTemporaryDir root; FakeServer server, unused;
+        DanmakuLibrary library(root.path()); library.setServers({server.base(), unused.base()});
         library.searchAnime("测试"); QTRY_VERIFY(!library.busy());
         server.response = [](QByteArray target) {
             if (target.contains("/bangumi/")) return Response{200, R"({"episodes":[{"episodeId":"42001","episodeTitle":"第1话"}]})"};
@@ -268,6 +367,7 @@ class OnlineDanmakuTests final : public QObject {
         library.downloadEpisode(true); QTRY_COMPARE(ready.count(), 1);
         auto result = library.takeReadyResult(); QVERIFY(result); QCOMPARE(result->items.size(), std::size_t(2));
         QVERIFY(!result->warning.isEmpty()); QVERIFY(library.status().contains("缓存失败"));
+        QVERIFY(unused.targets.isEmpty());
         // Changing animation while a delayed episode list arrives discards the old list.
         server.response = [](QByteArray) { return Response{200, R"({"episodes":[{"episodeId":999,"episodeTitle":"旧集数"}]})", 100}; };
         library.selectAnime("42"); QTest::qWait(20); library.cancel(); QTest::qWait(150);
@@ -277,7 +377,7 @@ class OnlineDanmakuTests final : public QObject {
         QTemporaryDir root; FakeServer server;
         AppController controller(root.path(), nullptr, [](const QString&) { return true; }, root.filePath("cache"));
         auto* library = qobject_cast<DanmakuLibrary*>(controller.library()); QVERIFY(library);
-        QVERIFY(qobject_cast<SettingsStore*>(controller.settings())->setValue("danmakuServer", server.base()));
+        QVERIFY(qobject_cast<SettingsStore*>(controller.settings())->setValue("danmakuServers", QStringList{server.base()}));
         library->searchAnime("测试"); QTRY_VERIFY(!library->busy()); library->selectAnime("42"); QTRY_VERIFY(!library->busy()); library->selectEpisode("42001");
         QSignalSpy loaded(&controller, &AppController::loadCompleted);
         library->downloadEpisode(); QTRY_COMPARE(loaded.count(), 1);
@@ -309,7 +409,7 @@ class OnlineDanmakuTests final : public QObject {
         QSignalSpy state(&controller, &AppController::stateChanged);
         library->loadCached(cachedKey); QVERIFY(!controller.loading()); QVERIFY(state.count() > 0);
         QTRY_VERIFY(!library->busy()); QCOMPARE(controller.total(), 2); QVERIFY(!controller.running());
-        auto* quitting = new DanmakuLibrary(root.filePath("quit")); quitting->setServer(server.base());
+        auto* quitting = new DanmakuLibrary(root.filePath("quit")); quitting->setServers({server.base()});
         quitting->searchAnime("退出"); delete quitting; QTest::qWait(120);
     }
     void sourcePagesSmoke() {

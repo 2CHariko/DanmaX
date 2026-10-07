@@ -9,7 +9,7 @@ PageFrame {
     readonly property var values: backend.settings.values
     title: "设置"
     description: "修改后即时生效并保存。"
-    function focusOnlineSettings() { reveal(serverInput) }
+    function focusOnlineSettings() { reveal(serverRows.count ? serverRows.itemAt(0).input : addServerButton) }
     function put(key, value) { backend.settings.setValue(key, value) }
 
         SettingsSection {
@@ -67,21 +67,120 @@ PageFrame {
         }
         SettingsSection {
             title: "在线弹幕"; Layout.fillWidth: true
-            SettingsRow {
-                title: "兼容服务地址"
-                description: "填写允许匿名访问的弹弹play兼容服务基础地址，支持 HTTP/HTTPS 和路径前缀。"
-                TextField {
-                    id: serverInput
-                    objectName: "danmakuServerInput"
-                    Layout.fillWidth: true
-                    implicitWidth: 280
-                    text: page.values.danmakuServer
-                    placeholderText: "https://服务器/路径前缀"
-                    Accessible.name: "在线弹幕兼容服务地址"
-                    onEditingFinished: {
-                        page.backend.settings.setValue("danmakuServer", text)
-                        text = Qt.binding(() => page.values.danmakuServer)
+            Label {
+                text: "按列表顺序尝试；失败或无结果时回退。各服务须共享弹弹play动画和剧集 ID。"
+                Layout.fillWidth: true; wrapMode: Text.WordWrap
+            }
+            ListModel { id: serverModel }
+            QtObject {
+                id: serverEditor
+                property bool committing: false
+                property string snapshot: ""
+                function reload() {
+                    const encoded = JSON.stringify(page.values.danmakuServers)
+                    if (committing || encoded === snapshot) return
+                    snapshot = encoded
+                    serverModel.clear()
+                    for (const address of page.values.danmakuServers)
+                        serverModel.append({address: address, saved: address, issue: ""})
+                }
+                function save() {
+                    const addresses = []
+                    for (let i = 0; i < serverModel.count; ++i)
+                        if (serverModel.get(i).saved.length) addresses.push(serverModel.get(i).saved)
+                    const previous = JSON.stringify(page.values.danmakuServers)
+                    committing = true
+                    const ok = page.backend.settings.setDanmakuServers(addresses)
+                    snapshot = JSON.stringify(page.values.danmakuServers)
+                    committing = false
+                    // Persistence errors are shown by SettingsStore; retain accepted runtime values.
+                    return ok || previous !== snapshot
+                }
+                function edit(index, text) {
+                    const previous = serverModel.get(index).saved
+                    serverModel.setProperty(index, "address", text)
+                    if (!text.trim().length) {
+                        serverModel.setProperty(index, "issue", "地址不能为空；不需要此项时请删除。")
+                        return
                     }
+                    serverModel.setProperty(index, "saved", text)
+                    if (!save()) {
+                        serverModel.setProperty(index, "saved", previous)
+                        serverModel.setProperty(index, "issue", "地址无效、重复或保存失败，请检查地址及配置错误提示。")
+                        return
+                    }
+                    let savedIndex = -1
+                    for (let i = 0; i <= index; ++i)
+                        if (serverModel.get(i).saved.length) ++savedIndex
+                    const normalized = page.values.danmakuServers[savedIndex]
+                    serverModel.setProperty(index, "saved", normalized)
+                    serverModel.setProperty(index, "address", normalized)
+                    serverModel.setProperty(index, "issue", "")
+                }
+                function move(index, destination) {
+                    serverModel.move(index, destination, 1)
+                    save()
+                }
+                function remove(index) {
+                    const next = Math.min(index, serverModel.count - 2)
+                    serverModel.remove(index)
+                    save()
+                    if (next >= 0) serverRows.itemAt(next).input.forceActiveFocus()
+                    else addServerButton.forceActiveFocus()
+                }
+            }
+            Component.onCompleted: serverEditor.reload()
+            Connections { target: page.backend.settings; function onChanged() { serverEditor.reload() } }
+            Repeater {
+                id: serverRows
+                model: serverModel
+                ColumnLayout {
+                    id: serverRow
+                    required property int index
+                    required property string address
+                    required property string issue
+                    property alias input: serverInput
+                    Layout.fillWidth: true
+                    TextField {
+                        id: serverInput
+                        objectName: serverRow.index === 0 ? "danmakuServerInput" : "danmakuServerInput" + serverRow.index
+                        Layout.fillWidth: true
+                        text: serverRow.address
+                        maximumLength: 4096
+                        placeholderText: "https://服务器/路径前缀"
+                        Accessible.name: "在线弹幕服务地址 " + (serverRow.index + 1)
+                        onEditingFinished: serverEditor.edit(serverRow.index, text)
+                    }
+                    Flow {
+                        Layout.fillWidth: true; spacing: 8
+                        Button {
+                            text: "上移"; objectName: "serverUp" + serverRow.index
+                            enabled: serverRow.index > 0
+                            Accessible.name: "上移服务 " + (serverRow.index + 1)
+                            onClicked: serverEditor.move(serverRow.index, serverRow.index - 1)
+                        }
+                        Button {
+                            text: "下移"; objectName: "serverDown" + serverRow.index
+                            enabled: serverRow.index < serverModel.count - 1
+                            Accessible.name: "下移服务 " + (serverRow.index + 1)
+                            onClicked: serverEditor.move(serverRow.index, serverRow.index + 1)
+                        }
+                        Button {
+                            text: "删除"; objectName: "serverRemove" + serverRow.index
+                            Accessible.name: "删除服务 " + (serverRow.index + 1)
+                            onClicked: serverEditor.remove(serverRow.index)
+                        }
+                    }
+                    Label { visible: text.length > 0; text: serverRow.issue; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                }
+            }
+            Button {
+                id: addServerButton
+                objectName: "addDanmakuServer"
+                text: "添加服务地址"
+                onClicked: {
+                    serverModel.append({address: "", saved: "", issue: ""})
+                    page.reveal(serverRows.itemAt(serverModel.count - 1).input)
                 }
             }
             Label { text: "缓存长期保留，可在播放页离线选择、重新下载或删除；本版本不提供在线账号登录。"; Layout.fillWidth: true; wrapMode: Text.WordWrap }

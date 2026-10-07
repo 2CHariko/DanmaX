@@ -34,7 +34,7 @@ DanmakuLibrary::DanmakuLibrary(QString cacheRoot, QObject* parent, int timeoutMs
         reply_ = nullptr;
         disconnect(reply, nullptr, this, nullptr);
         reply->abort(); reply->deleteLater();
-        fail(QStringLiteral("请求超时，请重试"));
+        nextAttempt(QStringLiteral("请求超时，请重试"));
     });
     refreshCache();
 }
@@ -47,6 +47,7 @@ DanmakuLibrary::~DanmakuLibrary() {
 }
 void DanmakuLibrary::invalidate() {
     ++generation_;
+    attempt_ = {}; attemptErrors_.clear(); attemptIndex_ = -1;
     deadline_.stop();
     if (reply_) {
         auto* reply = reply_.data(); reply_ = nullptr;
@@ -73,13 +74,42 @@ void DanmakuLibrary::fail(const QString& error) {
     busy_ = false; progress_ = -1; error_ = error; status_ = QStringLiteral("操作失败");
     emit changed();
 }
-void DanmakuLibrary::setServer(const QString& address) {
-    const auto server = normalizeDanmakuServer(address);
-    if (server_ == server) return;
-    invalidate(); server_ = server;
+void DanmakuLibrary::setServers(const QStringList& addresses) {
+    QStringList servers;
+    for (const auto& address : addresses) {
+        auto normalized = normalizeDanmakuServer(address);
+        while (normalized.endsWith('/')) normalized.chop(1);
+        if (normalized.isEmpty() || servers.contains(normalized)) return;
+        servers.append(normalized);
+    }
+    if (servers_ == servers) return;
+    invalidate(); servers_ = servers; server_.clear();
     animeId_.clear(); episodeId_.clear(); animes_.clear(); episodes_.clear(); error_.clear();
-    status_ = server_.isEmpty() ? QStringLiteral("请先在设置中填写兼容服务地址") : QStringLiteral("请输入动画名称");
+    status_ = servers_.isEmpty() ? QStringLiteral("请先在设置中填写兼容服务地址") : QStringLiteral("请输入动画名称");
     emit changed(); emit cacheChanged();
+}
+void DanmakuLibrary::startAttempts(std::function<void()> attempt) {
+    attempt_ = std::move(attempt); attemptIndex_ = -1; attemptErrors_.clear();
+    operationStatus_ = status_;
+    nextAttempt();
+}
+void DanmakuLibrary::nextAttempt(const QString& reason) {
+    if (!attempt_ || !busy_) return;
+    if (!reason.isEmpty()) attemptErrors_.append(server_ + QStringLiteral("：") + reason);
+    if (++attemptIndex_ >= servers_.size()) {
+        attempt_ = {};
+        fail(attemptErrors_.isEmpty() ? QStringLiteral("请先在设置中填写兼容服务地址")
+                                     : attemptErrors_.join('\n'));
+        return;
+    }
+    server_ = servers_[attemptIndex_]; progress_ = -1;
+    status_ = operationStatus_ + QStringLiteral("（%1/%2）\n%3").arg(attemptIndex_ + 1).arg(servers_.size()).arg(server_);
+    const auto generation = generation_;
+    emit changed();
+    if (generation != generation_ || !busy_ || !attempt_) return;
+    // Copy before invoking: a synchronous failure may release the stored callback.
+    const auto attempt = attempt_;
+    attempt();
 }
 void DanmakuLibrary::request(const QString& path, const QString& query,
                             std::function<void(QByteArray)> completed) {
@@ -123,7 +153,7 @@ void DanmakuLibrary::request(const QString& path, const QString& query,
             else if (reply->error() != QNetworkReply::NoError) error = QStringLiteral("网络请求失败：") + reply->errorString();
             else if (status != 200) error = QStringLiteral("服务未返回有效 HTTP 响应");
             reply->deleteLater();
-            if (!error.isEmpty()) { fail(error); return; }
+            if (!error.isEmpty()) { nextAttempt(error); return; }
             completed(std::move(*bytes));
         });
     deadline_.start(timeoutMs_);
@@ -152,7 +182,7 @@ void DanmakuLibrary::searchAnime(const QString& keyword) {
     if (keyword.trimmed().isEmpty()) { fail(QStringLiteral("请输入动画名称")); return; }
     if (keyword.size() > 512) { fail(QStringLiteral("搜索关键词过长")); return; }
     QUrlQuery query; query.addQueryItem("keyword", keyword.trimmed());
-    request("/api/v2/search/anime", query.query(QUrl::FullyEncoded), [this](QByteArray bytes) {
+    startAttempts([this, query] { request("/api/v2/search/anime", query.query(QUrl::FullyEncoded), [this](QByteArray bytes) {
         work([bytes = std::move(bytes)](std::stop_token stop) {
             Work output;
             const auto doc = QJsonDocument::fromJson(bytes);
@@ -170,12 +200,14 @@ void DanmakuLibrary::searchAnime(const QString& keyword) {
             }
             return output;
         }, [this](Work output) {
-            if (!output.error.isEmpty()) { fail(output.error); return; }
+            if (!output.error.isEmpty()) { nextAttempt(output.error); return; }
+            if (output.list.isEmpty()) { nextAttempt(QStringLiteral("没有可用结果")); return; }
+            attempt_ = {};
             animes_ = std::move(output.list); busy_ = false;
-            status_ = animes_.isEmpty() ? QStringLiteral("没有找到动画，请换个关键词") : QStringLiteral("请选择动画");
+            status_ = QStringLiteral("请选择动画"); progress_ = -1;
             emit changed();
         });
-    });
+    }); });
 }
 void DanmakuLibrary::selectAnime(const QString& id) {
     bool found{};
@@ -183,7 +215,7 @@ void DanmakuLibrary::selectAnime(const QString& id) {
     if (!found) return;
     begin(QStringLiteral("正在读取剧集…")); animeId_ = id; episodeId_.clear(); episodes_.clear();
     emit changed(); emit cacheChanged();
-    request("/api/v2/bangumi/" + id, {}, [this](QByteArray bytes) {
+    startAttempts([this, id] { request("/api/v2/bangumi/" + id, {}, [this](QByteArray bytes) {
         work([bytes = std::move(bytes)](std::stop_token stop) {
             Work output;
             const auto doc = QJsonDocument::fromJson(bytes); const auto object = doc.object();
@@ -203,12 +235,14 @@ void DanmakuLibrary::selectAnime(const QString& id) {
             }
             return output;
         }, [this](Work output) {
-            if (!output.error.isEmpty()) { fail(output.error); return; }
+            if (!output.error.isEmpty()) { nextAttempt(output.error); return; }
+            if (output.list.isEmpty()) { nextAttempt(QStringLiteral("没有可用结果")); return; }
+            attempt_ = {};
             episodes_ = std::move(output.list); busy_ = false;
-            status_ = episodes_.isEmpty() ? QStringLiteral("该动画没有可选剧集") : QStringLiteral("请选择剧集");
+            status_ = QStringLiteral("请选择剧集"); progress_ = -1;
             emit changed();
         });
-    });
+    }); });
 }
 void DanmakuLibrary::selectEpisode(const QString& id) {
     for (const auto& entry : episodes_) {
@@ -227,26 +261,34 @@ QVariantMap DanmakuLibrary::episodeMetadata() const {
     return metadata;
 }
 bool DanmakuLibrary::selectedCached() const {
-    if (server_.isEmpty() || episodeId_.isEmpty()) return false;
-    const auto key = danmakuCacheKey(server_, episodeId_.toLongLong());
-    for (const auto& entry : entries_) if (entry.toMap().value("key") == key && entry.toMap().value("valid").toBool()) return true;
+    if (episodeId_.isEmpty()) return false;
+    for (const auto& server : servers_) {
+        const auto key = danmakuCacheKey(server, episodeId_.toLongLong());
+        for (const auto& entry : entries_)
+            if (entry.toMap().value("key") == key && entry.toMap().value("valid").toBool()) return true;
+    }
     return false;
 }
 void DanmakuLibrary::downloadEpisode(bool refresh) {
-    if (animeId_.isEmpty() || episodeId_.isEmpty() || server_.isEmpty()) { fail(QStringLiteral("请先选择动画和剧集")); return; }
+    if (animeId_.isEmpty() || episodeId_.isEmpty() || servers_.isEmpty()) { fail(QStringLiteral("请先选择动画和剧集")); return; }
     begin(refresh ? QStringLiteral("正在重新下载…") : QStringLiteral("正在检查缓存…"), true);
-    const auto metadata = episodeMetadata();
-    if (refresh) { fetchEpisode(metadata); return; }
-    const auto key = danmakuCacheKey(server_, episodeId_.toLongLong());
-    work([directory = directory_, key](std::stop_token stop) {
-        Work output; output.result = std::make_shared<OnlineDanmakuResult>(readCachedDanmaku(directory, key, stop)); return output;
-    }, [this, metadata](Work output) {
-        if (output.result && output.result->error.isEmpty() && !output.result->cancelled) acceptResult(std::move(output.result));
-        else fetchEpisode(metadata);
+    const auto fetch = [this] { startAttempts([this] { fetchEpisode(episodeMetadata()); }); };
+    if (refresh) { fetch(); return; }
+    work([directory = directory_, servers = servers_, episode = episodeId_](std::stop_token stop) {
+        Work output;
+        for (const auto& server : servers) {
+            if (stop.stop_requested()) return Work{};
+            auto result = std::make_shared<OnlineDanmakuResult>(
+                readCachedDanmaku(directory, danmakuCacheKey(server, episode.toLongLong()), stop));
+            if (result->error.isEmpty() && !result->cancelled) { output.result = std::move(result); break; }
+        }
+        return output;
+    }, [this, fetch](Work output) {
+        if (output.result) acceptResult(std::move(output.result));
+        else fetch();
     });
 }
 void DanmakuLibrary::fetchEpisode(QVariantMap metadata) {
-    status_ = QStringLiteral("正在下载弹幕…"); emit changed();
     request("/api/v2/comment/" + metadata.value("episodeId").toString(), "withRelated=true&chConvert=0",
         [this, metadata](QByteArray bytes) {
             work([bytes = std::move(bytes), metadata, directory = directory_](std::stop_token stop) {
@@ -257,7 +299,12 @@ void DanmakuLibrary::fetchEpisode(QVariantMap metadata) {
                 output.result->warning = saveCachedDanmaku(directory, *output.result, stop);
                 output.result->cancelled = stop.stop_requested();
                 return output;
-            }, [this](Work output) { acceptResult(std::move(output.result)); refreshCache(); });
+            }, [this](Work output) {
+                if (!output.result || output.result->cancelled) return;
+                if (!output.result->error.isEmpty()) { nextAttempt(output.result->error); return; }
+                attempt_ = {};
+                acceptResult(std::move(output.result)); refreshCache();
+            });
         });
 }
 void DanmakuLibrary::acceptResult(std::shared_ptr<OnlineDanmakuResult> result) {
@@ -267,6 +314,7 @@ void DanmakuLibrary::acceptResult(std::shared_ptr<OnlineDanmakuResult> result) {
     status_ = QStringLiteral("已载入 %1 条，无效 %2 条，不支持模式 %3 条，去重 %4 条")
         .arg(result->items.size()).arg(result->invalid).arg(result->unsupported).arg(result->duplicates);
     if (!result->warning.isEmpty()) { status_ += QStringLiteral("；已载入但缓存失败"); error_ = result->warning; }
+    server_ = result->metadata.value("server").toString();
     ready_ = std::move(result);
     emit sourceReady(); emit changed();
 }

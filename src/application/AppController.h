@@ -159,6 +159,7 @@ class AppController final : public QObject {
     bool rendererSettingsPending_{};
     QString status_{QStringLiteral("请选择弹幕文件")}, error_, file_, mediaTitle_, mediaIdentity_;
     bool foreground_{true};
+    bool awaitingInitialExposure_{};
     bool loading_{}, running_{}, playing_{}, manual_{}, visible_{}, snapshotDirty_{true}, demo_{};
     int progress_{}, frames_{};
     double position_{}, duration_{}, rate_{1}, samplePosition_{};

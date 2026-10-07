@@ -45,11 +45,15 @@ ApplicationWindow {
         QVERIFY(!engine.rootObjects().isEmpty());
         auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
         QVERIFY(QTest::qWaitForWindowExposed(window));
+        window->requestActivate();
+        QVERIFY(QTest::qWaitForWindowActive(window));
         auto* combo = window->findChild<QQuickItem*>("probeChoice");
         QVERIFY(combo);
         auto* popup = combo->property("popup").value<QObject*>();
         auto* list = qobject_cast<QQuickItem*>(combo->property("popupList").value<QObject*>());
         QVERIFY(popup && list);
+        QSignalSpy hiding(popup, SIGNAL(aboutToHide()));
+        QSignalSpy opened(popup, SIGNAL(opened()));
         auto* bar = list->findChild<QQuickItem*>("comboPopupScrollBar");
         QVERIFY(bar);
         auto bounds = [&] {
@@ -93,11 +97,25 @@ ApplicationWindow {
         QTRY_VERIFY(!popup->property("visible").toBool());
         QCOMPARE(combo->property("currentIndex").toInt(), 58);
         QVERIFY(combo->hasActiveFocus());
+        const auto openAfterResize = [&] {
+            // Native resize/exposure and activation are asynchronous. Open only after
+            // one frame of the resized window, with the same focus a user click supplies.
+            QSignalSpy frames(window, &QQuickWindow::frameSwapped);
+            window->requestActivate();
+            QVERIFY(QTest::qWaitForWindowActive(window));
+            window->update();
+            QTRY_VERIFY(!frames.isEmpty());
+            combo->forceActiveFocus();
+            QTRY_VERIFY(combo->hasActiveFocus());
+            QVERIFY(QMetaObject::invokeMethod(popup, "open"));
+        };
         for (const int width : {1080, 520}) {
             window->resize(width, 480);
             window->setProperty("anchorY", 400);
-            QMetaObject::invokeMethod(popup, "open");
-            QTRY_VERIFY(popup->property("opened").toBool());
+            openAfterResize();
+            QTRY_VERIFY2(popup->property("opened").toBool(), qPrintable(QString("width=%1 visible=%2 hides=%3 opens=%4 active=%5 height=%6")
+                .arg(width).arg(popup->property("visible").toBool()).arg(hiding.count()).arg(opened.count())
+                .arg(window->isActive()).arg(popup->property("height").toReal())));
             bounds();
             QVERIFY(popup->property("y").toReal() < 0);
             QVERIFY(window->grabWindow().save(output + QString("/upward-%1.png").arg(width)));
@@ -111,7 +129,7 @@ ApplicationWindow {
         window->setProperty("anchorY", 40);
         combo->setProperty("model", QVariantList{rows.first(), rows.at(1)});
         combo->setProperty("currentIndex", 0);
-        QMetaObject::invokeMethod(popup, "open");
+        openAfterResize();
         QTRY_VERIFY(popup->property("opened").toBool());
         bounds();
         QVERIFY(!bar->isVisible());
@@ -157,7 +175,13 @@ ApplicationWindow {
         QVERIFY(window);
         window->show();
         QVERIFY(QTest::qWaitForWindowExposed(window));
-        auto find = [&](const char* name) { return window->findChild<QQuickItem*>(QString::fromLatin1(name)); };
+        // Repeater delegates belong to the visual tree, not necessarily the QObject tree.
+        std::function<QQuickItem*(QQuickItem*, const QString&)> findVisual = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
+            if (parent->objectName() == name) return parent;
+            for (auto* child : parent->childItems()) if (auto* match = findVisual(child, name)) return match;
+            return nullptr;
+        };
+        auto find = [&](const char* name) { return findVisual(window->contentItem(), QString::fromLatin1(name)); };
         auto activate = [&](QQuickItem* item) {
             QVERIFY(item);
             item->forceActiveFocus();
@@ -237,11 +261,51 @@ ApplicationWindow {
         QVERIFY(player);
         QVERIFY(QMetaObject::invokeMethod(player, "openSettings"));
         QTRY_COMPARE(window->property("selectedPage").toInt(), 2);
+        QTRY_VERIFY(find("danmakuServerInput"));
         QTRY_VERIFY(find("danmakuServerInput")->hasActiveFocus());
         const auto serverPosition = find("danmakuServerInput")->mapToScene(QPointF());
         QVERIFY(serverPosition.y() >= 0 && serverPosition.y() < window->height());
         QTest::keyClick(window, Qt::Key_Tab);
         QVERIFY(!find("danmakuServerInput")->hasActiveFocus());
+        const auto defaults = settings->values()["danmakuServers"].toStringList();
+        activate(find("addDanmakuServer"));
+        QTRY_VERIFY(find("danmakuServerInput1"));
+        QCOMPARE(settings->values()["danmakuServers"].toStringList(), defaults);
+        auto editServer = [&](const char* name, const QString& value) {
+            auto* input = find(name); QVERIFY(input);
+            input->setProperty("text", value);
+            QVERIFY(QMetaObject::invokeMethod(input, "editingFinished"));
+        };
+        editServer("danmakuServerInput1", "bad address");
+        QCOMPARE(find("danmakuServerInput1")->property("text").toString(), QString("bad address"));
+        QCOMPARE(settings->values()["danmakuServers"].toStringList(), defaults);
+        editServer("danmakuServerInput1", defaults.first());
+        QCOMPARE(settings->values()["danmakuServers"].toStringList(), defaults);
+        editServer("danmakuServerInput1", "https://backup.test");
+        QCOMPARE(settings->values()["danmakuServers"].toStringList().size(), 2);
+        auto* onlineFrame = find("danmakuServerInput")->parentItem();
+        while (onlineFrame && !onlineFrame->property("bodyItem").isValid()) onlineFrame = onlineFrame->parentItem();
+        QVERIFY(onlineFrame);
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            settings->setValue("theme", theme);
+            window->resize(520, 640);
+            QVERIFY(QMetaObject::invokeMethod(onlineFrame, "reveal", Q_ARG(QVariant, QVariant::fromValue(find("danmakuServerInput")))));
+            QTest::qWait(100);
+            QVERIFY(window->grabWindow().save(output + "/online-servers-" + theme + ".png"));
+        }
+        activate(find("serverUp1"));
+        QCOMPARE(settings->values()["danmakuServers"].toStringList().first(), QString("https://backup.test"));
+        activate(find("serverDown0"));
+        QCOMPARE(settings->values()["danmakuServers"].toStringList().first(), defaults.first());
+        activate(find("serverRemove1"));
+        QCOMPARE(settings->values()["danmakuServers"].toStringList(), defaults);
+        activate(find("serverRemove0"));
+        QVERIFY(settings->values()["danmakuServers"].toStringList().isEmpty());
+        QVERIFY(find("addDanmakuServer")->hasActiveFocus());
+        QVERIFY(QMetaObject::invokeMethod(onlineFrame, "focusOnlineSettings"));
+        QVERIFY(find("addDanmakuServer")->hasActiveFocus());
+        QVERIFY(settings->setDanmakuServers(defaults));
+        QTRY_VERIFY(find("danmakuServerInput"));
         window->setProperty("selectedPage", 1);
         logs->clear();
         QTRY_COMPARE(find("logEmptyState")->property("text").toString(), QString::fromUtf8("暂无日志"));
