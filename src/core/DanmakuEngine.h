@@ -11,6 +11,7 @@ struct Item {
     Mode mode{Mode::Scroll};
     std::string text;
     std::uint32_t color{0xffffff};
+    int fontSize{25}; // XML source size; 25 maps to the configured base font.
 };
 struct Options {
     double speed{180}, fixedSeconds{5}, trackHeight{36};
@@ -26,7 +27,11 @@ struct Active {
 };
 class Engine {
   public:
-    using Measure = std::function<double(const Item&)>;
+    struct Extent {
+        double width{}, height{};
+        Extent(double w, double h = 0) : width(w), height(h) {}
+    };
+    using Measure = std::function<Extent(const Item&)>;
     void load(std::vector<Item> items);
     void configure(Options options, double width, double height);
     void seek(double position);
@@ -38,6 +43,7 @@ class Engine {
     [[nodiscard]] const std::vector<Active>& activeSlots() const {
         return slots_;
     }
+    [[nodiscard]] const std::vector<std::size_t>& activeIndices() const { return active_; }
     [[nodiscard]] std::size_t activeCount() const {
         return activeCount_;
     }
@@ -52,14 +58,18 @@ class Engine {
     }
 
   private:
-    bool spawn(std::size_t index, double width);
+    bool spawn(std::size_t index, Extent extent);
+    void rebuildOccupancy();
+    void indexSlot(std::size_t slot);
     std::vector<Item> items_;
     std::vector<Active> slots_;
     std::vector<std::size_t> free_;
+    std::vector<std::size_t> active_;
+    std::vector<std::vector<std::size_t>> occupancy_;
     Options options_;
     double width_{1920}, height_{1080}, position_{}, lastPosition_{};
     bool initialized_{};
-    std::size_t cursor_{}, activeCount_{}, nextTrack_{};
+    std::size_t cursor_{}, activeCount_{}, overlapTrack_{};
     std::uint64_t sequence_{}, dropped_{};
 };
 } // namespace danmaku

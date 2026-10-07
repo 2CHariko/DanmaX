@@ -53,6 +53,10 @@ if(DANMAKU_BUILD_APP)
             --data-dir "${CMAKE_BINARY_DIR}/test-data" --cache-dir "${CMAKE_BINARY_DIR}/test-cache")
         set_tests_properties(application_smoke PROPERTIES TIMEOUT 20
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
+        add_test(NAME application_image_smoke COMMAND danmaku_app --smoke-test
+            --data-dir "${CMAKE_BINARY_DIR}/test-image-data" --cache-dir "${CMAKE_BINARY_DIR}/test-image-cache")
+        set_tests_properties(application_image_smoke PROPERTIES TIMEOUT 20
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;DANMAKU_RENDER_BACKEND=image")
     endif()
 endif()
 if(BUILD_TESTING)

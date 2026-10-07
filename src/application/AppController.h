@@ -1,5 +1,6 @@
 #pragma once
 #include "core/DanmakuEngine.h"
+#include "core/MediaClock.h"
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
 #include "platform/windows/MediaMonitor.h"
@@ -121,6 +122,8 @@ class AppController final : public QObject {
     LogModel logs_;
     MediaMonitor monitor_;
     danmaku::Engine engine_;
+    danmaku::MediaClock mediaClock_;
+    QElapsedTimer monotonicTime_;
     QPointer<DanmakuItem> renderer_;
     QPointer<QWindow> overlay_;
     QTimer timer_, metricsTimer_;
@@ -135,5 +138,7 @@ class AppController final : public QObject {
     int progress_{}, frames_{};
     double position_{}, duration_{}, rate_{1}, samplePosition_{};
     std::vector<double> frameTimes_;
+    double engineMs_{}, snapshotMs_{};
     quint64 renderedFrames_{};
+    quint64 animationCallbacks_{}, mediaSamples_{}, sampleResets_{}, frameTicks_{}, maintenanceTicks_{};
 };

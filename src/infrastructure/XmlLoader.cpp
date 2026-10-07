@@ -31,12 +31,14 @@ XmlResult readDanmakuXml(const QString& path, std::stop_token stop,
             continue;
         const auto fields = xml.attributes().value("p").toString().split(',');
         auto text = xml.readElementText(QXmlStreamReader::ErrorOnUnexpectedElement).trimmed();
-        bool timeOk = false, modeOk = false, colorOk = false;
+        bool timeOk = false, modeOk = false, sizeOk = false, colorOk = false;
         const double time = fields.value(0).toDouble(&timeOk);
         const int mode = fields.value(1).toInt(&modeOk);
+        const int fontSize = fields.value(2).toInt(&sizeOk);
         const auto color = fields.value(3).toULongLong(&colorOk);
         if (!timeOk || !std::isfinite(time) || time < 0 || time > 604800 || !modeOk ||
-            (mode != 1 && mode != 4 && mode != 5) || !colorOk || color > 0xffffff || text.isEmpty() ||
+            (mode != 1 && mode != 4 && mode != 5) || !sizeOk || fontSize < 1 || fontSize > 200 ||
+            !colorOk || color > 0xffffff || text.isEmpty() ||
             text.size() > 512) {
             ++result.skipped;
             continue;
@@ -44,7 +46,7 @@ XmlResult readDanmakuXml(const QString& path, std::stop_token stop,
         text.replace('\n', ' ');
         text.replace('\r', ' ');
         result.items.push_back({time, static_cast<danmaku::Mode>(mode), text.toUtf8().toStdString(),
-                                static_cast<std::uint32_t>(color)});
+                                static_cast<std::uint32_t>(color), fontSize});
         if (++count > 1000000) {
             result.error = QStringLiteral("弹幕条数超过 100 万限制");
             return result;

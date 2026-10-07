@@ -27,6 +27,7 @@ ScrollView {
             }
             SettingsRow {
                 title: "字号"
+                description: "普通弹幕的基准字号；小字和大字按文件中的比例缩放。"
                 SpinBox { from: 10; to: 72; value: page.values.fontSize; editable: true; Accessible.name: "弹幕字号"; onValueModified: page.put("fontSize", value) }
             }
             SettingsRow {
@@ -54,7 +55,7 @@ ScrollView {
             }
             SettingsRow { title: "固定弹幕时长（秒）"; SpinBox { from:1;to:30;value:page.values.fixedSeconds;Accessible.name:"固定弹幕时长";onValueModified:page.put("fixedSeconds",value) } }
             SettingsRow { title: "轨道额外行距（%）"; SpinBox { from:0;to:200;value:Math.round(page.values.lineSpacing*100);Accessible.name:"轨道额外行距";onValueModified:page.put("lineSpacing",value/100) } }
-            SettingsRow { title: "允许弹幕重叠"; description: "关闭时，滚动与固定弹幕共享防重叠轨道。"; Switch { checked:page.values.overlap;Accessible.name:"允许弹幕重叠";onToggled:page.put("overlap",checked) } }
+            SettingsRow { title: "允许弹幕重叠"; description: "优先使用空闲轨道；轨道满时，开启则允许重叠，关闭则丢弃新弹幕。"; Switch { checked:page.values.overlap;Accessible.name:"允许弹幕重叠";onToggled:page.put("overlap",checked) } }
         }
         SettingsSection {
             title: "同步与窗口"; Layout.fillWidth: true

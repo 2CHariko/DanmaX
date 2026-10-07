@@ -65,5 +65,95 @@ int main() {
     check(!engine.finished(), "Do not truncate slow comments at an arbitrary tail duration");
     engine.tick(100, 84, true, width);
     check(engine.finished(), "Finish only after the last active comment leaves");
+    o = {};
+    o.trackHeight = 40;
+    o.maxTracks = 1;
+    engine.configure(o, 800, 60);
+    engine.load({{0, Mode::Bottom, "bottom", 0}, {0, Mode::Top, "top", 0}});
+    engine.tick(0, 0, true, width);
+    check(engine.activeCount() == 1, "Partial physical lane overlap blocks opposite fixed types");
+    check(engine.activeIndices().size() == engine.activeCount(), "Compact active index matches count");
+    engine.tick(6, 6, true, width);
+    check(engine.activeIndices().empty(), "Expired indices removed");
+    engine.seek(0);
+    engine.tick(0, 0, true, width);
+    check(engine.activeIndices().size() == 1, "Seek resets occupancy and reuses slots");
+    engine.configure(o, 800, 80);
+    engine.seek(0);
+    engine.tick(0, 0, true, width);
+    check(engine.activeCount() == 2, "Touching physical lanes do not collide");
+    for (const bool overlap : {false, true}) {
+        o = {};
+        o.speed = 100;
+        o.trackHeight = 40;
+        o.maxTracks = 4;
+        o.overlap = overlap;
+        engine.configure(o, 800, 200);
+        engine.load({{0, Mode::Scroll, "first", 0}, {0.5, Mode::Scroll, "second", 0},
+                     {1.2, Mode::Scroll, "reuse", 0}});
+        engine.tick(0, 0, true, width);
+        engine.tick(0.5, 0.5, true, width);
+        check(engine.activeSlots()[engine.activeIndices().back()].y == 40,
+              "Use next lane while the first scrolling tail still blocks entry");
+        engine.tick(1.2, 0.7, true, width);
+        check(engine.activeCount() == 3 && engine.activeSlots()[engine.activeIndices().back()].y == 0,
+              "Reuse the first safe lane instead of forming a diagonal staircase");
+        const auto before = engine.activeSlots()[engine.activeIndices().back()];
+        engine.tick(1.2, 5, false, width);
+        const auto paused = engine.activeSlots()[engine.activeIndices().back()];
+        check(before.x == paused.x && before.y == paused.y, "Pause freezes reused lanes");
+        engine.seek(0);
+        engine.tick(0, 0, true, width);
+        check(engine.activeSlots()[engine.activeIndices().front()].y == 0,
+              "Seek restarts lane allocation from the top");
+        engine.load({{0, Mode::Scroll, "scroll", 0}, {0, Mode::Top, "top", 0},
+                     {0, Mode::Bottom, "bottom", 0}});
+        engine.tick(0, 0, true, width);
+        check(engine.activeCount() == 3 && engine.activeSlots()[engine.activeIndices()[1]].y == 40 &&
+                  engine.activeSlots()[engine.activeIndices()[1]].x == 350 &&
+                  engine.activeSlots()[engine.activeIndices()[2]].y == 160 &&
+                  engine.activeSlots()[engine.activeIndices()[2]].x == 350,
+              "Fixed comments remain centered and anchored to their own edge");
+        engine.load({{0, Mode::Top, "one", 0}, {0, Mode::Top, "two", 0},
+                     {0, Mode::Top, "three", 0}, {0, Mode::Top, "four", 0},
+                     {0, Mode::Top, "overflow", 0}});
+        engine.tick(0, 0, true, width);
+        check(engine.activeCount() == (overlap ? 5u : 4u) && engine.dropped() == (overlap ? 0u : 1u),
+              "Overlap setting controls full-lane fallback without dropping when enabled");
+        if (overlap) {
+            engine.seek(0);
+            engine.tick(0, 0, true, width);
+            check(engine.activeSlots()[engine.activeIndices().back()].y == 0,
+                  "Seek also resets overlap fallback allocation");
+        }
+    }
+    o.overlap = false;
+    o.maxTracks = 4;
+    engine.configure(o, 800, 160);
+    engine.load({{0, Mode::Top, "large", 0}, {0, Mode::Scroll, "normal", 0}});
+    const auto sized = [](const Item& item) {
+        return Engine::Extent(100, item.text == "large" ? 60 : 40);
+    };
+    engine.tick(0, 0, true, sized);
+    check(engine.activeCount() == 2 && engine.activeSlots()[engine.activeIndices()[0]].height == 60 &&
+              engine.activeSlots()[engine.activeIndices()[1]].y == 80,
+          "Large source fonts reserve every intersected physical lane");
+    engine.load({{0, Mode::Bottom, "large", 0}, {0, Mode::Bottom, "normal", 0}});
+    engine.tick(0, 0, true, sized);
+    check(engine.activeCount() == 2 && engine.activeSlots()[engine.activeIndices()[0]].y == 100 &&
+              engine.activeSlots()[engine.activeIndices()[1]].y == 40,
+          "Large bottom fonts stay inside the viewport and block intersecting lanes");
+    for (const bool overlap : {false, true}) {
+        o.overlap = overlap;
+        engine.configure(o, 800, 30);
+        engine.load({{0, Mode::Top, "large", 0}});
+        engine.tick(0, 0, true, sized);
+        check(engine.activeCount() == 0 && engine.dropped() == 1,
+              "A viewport shorter than one lane never emits out-of-bounds comments");
+        engine.configure(o, 800, 160);
+        engine.load({{0, Mode::Top, "large", 0}});
+        engine.tick(0, 0, true, [](const Item&) { return Engine::Extent(100, 200); });
+        check(engine.activeCount() == 0, "An oversized font cannot escape the configured track region");
+    }
     return failures ? 1 : 0;
 }

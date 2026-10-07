@@ -12,7 +12,7 @@
 #include <algorithm>
 #include <cmath>
 AppController::AppController(QString dataDirectory, QObject* parent)
-    : QObject(parent), settings_(dataDirectory), logs_(QDir(dataDirectory).filePath("logs")), monitor_() {
+    : QObject(parent), settings_(dataDirectory), logs_(QDir(dataDirectory).filePath("logs")), monitor_(this) {
     connect(&logs_, &LogModel::writeFailed, this, [this](const QString& message) {
         error_ = message;
         emit stateChanged();
@@ -40,8 +40,21 @@ AppController::AppController(QString dataDirectory, QObject* parent)
         updateWindow();
     });
     timer_.setTimerType(Qt::PreciseTimer);
-    timer_.setInterval(16);
-    connect(&timer_, &QTimer::timeout, this, &AppController::tick);
+    monotonicTime_.start();
+    timer_.setInterval(33);
+    // Hidden/paused windows have no continuous frame callbacks. Keep media and
+    // foreground tracking alive without driving a second visible animation loop.
+    connect(&timer_, &QTimer::timeout, this, [this] {
+        if (!overlay_ || !overlay_->isExposed() || !visible_ || !playing_) {
+            ++maintenanceTicks_;
+            tick();
+        } else if (frameTime_.isValid() && frameTime_.elapsed() > 100) {
+            // Recovery after exposure/device scheduling changes: request a frame,
+            // never advance a second animation clock from this timer.
+            if (auto* quick = qobject_cast<QQuickWindow*>(overlay_.data()))
+                quick->update();
+        }
+    });
     metricsTimer_.setInterval(1000);
     connect(&metricsTimer_, &QTimer::timeout, this, &AppController::updateMetrics);
     metricsTime_.start();
@@ -81,9 +94,20 @@ void AppController::attach(QObject* renderer, QObject* overlay) {
     }
     connect(overlay_, &QWindow::widthChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::heightChanged, this, [this] { configure(); });
-    if (auto* quick = qobject_cast<QQuickWindow*>(overlay))
+    if (auto* quick = qobject_cast<QQuickWindow*>(overlay)) {
+        connect(quick, &QQuickWindow::afterAnimating, this, [this] {
+            ++animationCallbacks_;
+            if (visible_ && playing_) { ++frameTicks_; tick(); }
+        });
         connect(
-            quick, &QQuickWindow::frameSwapped, this, [this] { ++renderedFrames_; }, Qt::QueuedConnection);
+            quick, &QQuickWindow::frameSwapped, this, [this, quick] {
+                ++renderedFrames_;
+                // Item::update during afterAnimating can be consumed by the current
+                // sync. Request the NEXT frame after presentation, on the GUI thread.
+                if (running_ && playing_ && visible_ && quick->isExposed())
+                    quick->update();
+            }, Qt::QueuedConnection);
+    }
     configure();
 }
 void AppController::fail(const QString& message) {
@@ -247,6 +271,7 @@ void AppController::togglePause() {
     if (!running_ || !manual_)
         return;
     playing_ = !playing_;
+    if (playing_ && renderer_) renderer_->update();
     frameTime_.restart();
     status_ = playing_ ? QStringLiteral("独立播放") : QStringLiteral("已暂停");
     emit stateChanged();
@@ -274,7 +299,9 @@ void AppController::exportLogs(const QString& path) {
 void AppController::onSample(const MediaSample& s) {
     if (!running_ || manual_)
         return;
+    ++mediaSamples_;
     if (!s.found || s.id != settings_.values()["targetSession"].toString()) {
+        mediaClock_.freeze(monotonicTime_.nsecsElapsed() * 1e-9);
         playing_ = false;
         status_ = QStringLiteral("等待所选播放器");
         sampleTime_.invalidate();
@@ -283,7 +310,9 @@ void AppController::onSample(const MediaSample& s) {
     }
     const double actual = std::max(0.0, s.position + settings_.values()["timeOffset"].toDouble());
     const bool changed = mediaIdentity_ != s.identity;
-    if (changed || std::abs(actual - position_) > 0.75 || (actual < position_ - 0.25)) {
+    if (mediaClock_.synchronize(actual, s.rate, s.playing,
+                                monotonicTime_.nsecsElapsed() * 1e-9, changed)) {
+        ++sampleResets_;
         engine_.seek(actual);
         if(renderer_)renderer_->present(engine_);
     }
@@ -293,6 +322,7 @@ void AppController::onSample(const MediaSample& s) {
     position_ = samplePosition_ = actual;
     rate_ = s.rate;
     playing_ = s.playing;
+    if (playing_ && renderer_) renderer_->update();
     sampleTime_.start();
     status_ = playing_ ? QStringLiteral("跟随播放器") : QStringLiteral("播放器已暂停");
     emit stateChanged();
@@ -308,6 +338,7 @@ void AppController::tick() {
             frameTimes_.erase(frameTimes_.begin(), frameTimes_.begin() + 600);
     }
     if (!manual_ && sampleTime_.isValid() && sampleTime_.elapsed() > 2500) {
+        mediaClock_.freeze(monotonicTime_.nsecsElapsed() * 1e-9);
         playing_ = false;
         status_ = QStringLiteral("媒体同步超时");
         emit stateChanged();
@@ -315,8 +346,10 @@ void AppController::tick() {
     if (playing_) {
         if (manual_)
             position_ += elapsed;
-        else if (sampleTime_.isValid())
-            position_ = samplePosition_ + sampleTime_.nsecsElapsed() * 1e-9 * rate_;
+        else if (sampleTime_.isValid()) {
+            mediaClock_.advance(monotonicTime_.nsecsElapsed() * 1e-9);
+            position_ = mediaClock_.position();
+        }
     }
     if (manual_ && demo_ && position_ > duration_) {
         position_ = 0;
@@ -338,13 +371,20 @@ void AppController::tick() {
     }
     if (!wasVisible_) {
         engine_.seek(position_);
+        mediaClock_.takeMotion();
         renderer_->present(engine_);
         wasVisible_ = true;
     }
-    engine_.tick(position_, elapsed * (manual_ ? 1 : rate_), playing_,
+    const double motion = manual_ ? elapsed : mediaClock_.takeMotion();
+    QElapsedTimer stage;
+    stage.start();
+    engine_.tick(position_, motion, playing_,
                  [this](const auto& item) { return renderer_->measure(item); });
+    engineMs_ += stage.nsecsElapsed() * 1e-6;
+    stage.restart();
     if (playing_)
         renderer_->present(engine_);
+    snapshotMs_ += stage.nsecsElapsed() * 1e-6;
     if (manual_ && !demo_ && playing_) {
         if (engine_.finished()) {
             playing_ = false;
@@ -366,11 +406,23 @@ void AppController::updateMetrics() {
     metricsTime_.restart();
     metrics_["updatesPerSecond"] = interval > 0 ? frames_ / interval : 0;
     metrics_["presentedFrames"] = static_cast<qulonglong>(renderedFrames_);
+    metrics_["animationCallbacks"] = static_cast<qulonglong>(animationCallbacks_);
+    metrics_["mediaSamples"] = static_cast<qulonglong>(mediaSamples_);
+    metrics_["sampleResets"] = static_cast<qulonglong>(sampleResets_);
+    metrics_["frameTicks"] = static_cast<qulonglong>(frameTicks_);
+    metrics_["maintenanceTicks"] = static_cast<qulonglong>(maintenanceTicks_);
+    metrics_["engineMeanMs"] = frames_ ? engineMs_ / frames_ : 0;
+    metrics_["snapshotMeanMs"] = frames_ ? snapshotMs_ / frames_ : 0;
+    engineMs_ = snapshotMs_ = 0;
     frames_ = 0;
     if (renderer_) {
         metrics_["cacheEntries"] = renderer_->cacheEntries();
         metrics_["cacheHits"] = static_cast<qulonglong>(renderer_->cacheHits());
         metrics_["cacheMisses"] = static_cast<qulonglong>(renderer_->cacheMisses());
+        metrics_["renderBackend"] = renderer_->imageBackend() ? "image-experimental" : "qt-text";
+        metrics_["snapshotCount"] = renderer_->snapshotCount();
+        metrics_["imageNodes"] = renderer_->imageNodeCount();
+        metrics_["textureEstimatedBytes"] = renderer_->textureBytes();
     }
     auto sorted = frameTimes_;
     std::sort(sorted.begin(), sorted.end());

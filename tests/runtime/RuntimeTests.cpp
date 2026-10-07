@@ -69,8 +69,16 @@ int main(int argc, char** argv) {
     auto result = readDanmakuXml(path);
     check(result.error.isEmpty() && result.items.size() == 2 && result.skipped == 3, "XML filtering");
     check(result.items[0].time == 0 && result.items[0].text == "hello & world" &&
-              result.items[0].color == 255,
-          "XML sorting, entities and color");
+              result.items[0].color == 255 && result.items[0].mode == danmaku::Mode::Scroll &&
+              result.items[1].mode == danmaku::Mode::Top && result.items[0].fontSize == 25,
+          "XML sorting, entities, color and mode mapping");
+    const auto sizes = readDanmakuXml(write("sizes.xml",
+        R"(<i><d p="0,1,18,16777215">same</d><d p="0,5,36,16776960">same</d><d p="0,4,25,0">bottom</d><d p="0,1,,0">missing size</d><d p="0,1,0,0">zero</d><d p="0,1,nan,0">invalid</d><d p="0,1,201,0">huge</d></i>)"));
+    check(sizes.error.isEmpty() && sizes.items.size() == 3 && sizes.skipped == 4,
+          "XML validates source font size without accepting malformed records");
+    check(sizes.items.size() == 3 && sizes.items[0].fontSize == 18 && sizes.items[1].fontSize == 36 &&
+              sizes.items[2].mode == danmaku::Mode::Bottom,
+          "XML preserves source font sizes, equal-time order and bottom mode");
     check(!readDanmakuXml(write("bad.xml", "<i><d>")).error.isEmpty(), "Malformed XML error");
     check(!readDanmakuXml(write("dtd.xml", "<!DOCTYPE i [<!ENTITY x 'x'>]><i/>")).error.isEmpty(),
           "Reject DTD");
@@ -126,13 +134,32 @@ int main(int argc, char** argv) {
         auto appearance = SettingsStore::defaults();
         renderer.configure(appearance);
         danmaku::Item text{0, danmaku::Mode::Scroll, "cache check", 0xffffff};
-        const auto firstWidth = renderer.measure(text);
+        const auto firstWidth = renderer.measure(text).width;
         renderer.measure(text);
         check(renderer.cacheEntries() == 1 && renderer.cacheHits() > 0, "Text layout reuse");
         appearance["fontSize"] = 48;
         renderer.configure(appearance);
-        check(renderer.cacheEntries() == 0 && renderer.measure(text) > firstWidth,
+        check(renderer.cacheEntries() == 0 && renderer.measure(text).width > firstWidth,
               "Font change invalidates layout");
+        const auto normal = renderer.measure(text);
+        text.fontSize = 18;
+        const auto smallExtent = renderer.measure(text);
+        text.fontSize = 36;
+        const auto large = renderer.measure(text);
+        check(smallExtent.width < normal.width && smallExtent.height < normal.height &&
+                  large.width > normal.width && large.height > normal.height && renderer.cacheEntries() == 3,
+              "Source font size scales width and height and separates identical text layouts");
+        text.fontSize = 25;
+        danmaku::Engine scene;
+        scene.configure({}, 800, 600);
+        scene.load({text});
+        scene.tick(0, 0, true, [&](const auto& item) { return renderer.measure(item); });
+        renderer.present(scene);
+        check(renderer.snapshotCount() == 1 && renderer.firstSnapshotId() != 0,
+              "New comment is present in its first compact snapshot");
+        scene.clear();
+        renderer.present(scene);
+        check(renderer.snapshotCount() == 0, "Clear retires snapshot and layout references");
         controller.start(true);
         auto wait = [&](int ms) {
             QEventLoop delay;
@@ -145,9 +172,16 @@ int main(int argc, char** argv) {
         const auto paused = controller.position();
         wait(80);
         check(controller.position() == paused, "Manual pause freezes position");
+        controller.togglePause();
+        wait(80);
+        check(controller.position() > paused && controller.position() < paused + 0.5,
+              "Resume restarts frame requests without counting paused time");
+        controller.togglePause();
         controller.seek(1);
         check(controller.position() == 1, "Manual seek");
         controller.selectSession("test-session");
+        // Isolate injected snapshots from real machine session discovery.
+        QObject::disconnect(controller.findChild<MediaMonitor*>(), nullptr, &controller, nullptr);
         controller.start(false);
         MediaSample sample;
         sample.found = true;
@@ -168,6 +202,39 @@ int main(int argc, char** argv) {
         sample.position = 0;
         QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
         check(controller.position() == 0, "Media change resets timeline");
+        overlay.resize(800, 600);
+        renderer.setParentItem(overlay.contentItem());
+        renderer.setSize(QSizeF(800, 600));
+        int swaps = 0;
+        const auto frameConnection = QObject::connect(&overlay, &QQuickWindow::frameSwapped,
+            &controller, [&] { ++swaps; }, Qt::QueuedConnection);
+        overlay.show();
+        renderer.update();
+        // Exclude cold window/device creation from the bounded cadence check.
+        wait(300);
+        sample.identity = "frame-cadence";
+        sample.position = 0;
+        QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
+        swaps = 0;
+        wait(600);
+        if (swaps < 8 || controller.position() <= 0.3)
+            std::cerr << "sync frame probe: swaps=" << swaps << " position=" << controller.position()
+                      << " playing=" << controller.playing() << " exposed=" << overlay.isExposed() << '\n';
+        check(swaps >= 8 && controller.position() > 0.3,
+              "One playing media snapshot sustains frames without more samples");
+        sample.playing = false;
+        sample.position = controller.position();
+        QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
+        wait(100);
+        const int pausedSwaps = swaps;
+        wait(150);
+        check(swaps <= pausedSwaps + 1, "Paused sync stops requesting continuous frames");
+        sample.playing = true;
+        QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
+        wait(300);
+        check(swaps >= pausedSwaps + 5, "One resume sample restarts continuous frames");
+        QObject::disconnect(frameConnection);
+        overlay.hide();
         sample.found = false;
         QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
         check(!controller.playing(), "Missing session freezes playback");
