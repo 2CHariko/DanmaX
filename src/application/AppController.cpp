@@ -146,7 +146,8 @@ void AppController::configure() {
             status_ = QStringLiteral("等待所选播放器");
     }
     const QStringList rendererKeys{"fontFamily", "fontSize", "strokeWidth", "speed", "fixedSeconds",
-                                   "maxActive", "maxTracks", "lineSpacing", "overlap", "opacity"};
+                                   "maxActive", "maxTracks", "lineSpacing", "overlap", "opacity",
+                                   "textureBudgetAuto", "textureBudgetMiB"};
     bool changed = appliedRendererSettings_.isEmpty();
     for (const auto& key : rendererKeys)
         if (appliedRendererSettings_.value(key) != s[key]) changed = true;
@@ -501,6 +502,9 @@ void AppController::updateMetrics() {
         metrics_["textFallbackNodes"] = renderer_->sceneEntries() - renderer_->imageNodeCount();
         metrics_["sceneEntries"] = renderer_->sceneEntries();
         metrics_["textureEstimatedBytes"] = renderer_->textureBytes();
+        metrics_["textureBudgetBytes"] = renderer_->textureBudgetBytes();
+        metrics_["textureDemandBytes"] = renderer_->textureDemandBytes();
+        metrics_["textureFallbackReasons"] = renderer_->textureFallbackReasons();
     }
     auto sorted = frameTimes_;
     std::sort(sorted.begin(), sorted.end());

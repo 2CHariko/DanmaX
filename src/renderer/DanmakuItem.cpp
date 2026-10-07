@@ -8,6 +8,7 @@
 #include <QVariantMap>
 #include <algorithm>
 #include <unordered_map>
+#include <QSet>
 
 struct DanmakuSceneState {
     QSGNode* root{};
@@ -19,17 +20,23 @@ struct Entry {
     std::shared_ptr<QTextLayout> layout;
     quint64 frame{};
     std::shared_ptr<TextTextureCache::Resource> texture;
+    TextTextureCache::Description description;
+    QRgb color{};
+    TextTextureCache::Reason reason{TextTextureCache::Reason::None};
 };
 class Root final : public QSGNode {
   public:
     explicit Root(QQuickWindow* window)
-        : state(std::make_shared<DanmakuSceneState>(DanmakuSceneState{this, window})) {}
+        : state(std::make_shared<DanmakuSceneState>(DanmakuSceneState{this, window})) { budgetTime.start(); }
     std::shared_ptr<DanmakuSceneState> state;
     quint64 generation{};
     qreal dpr{};
     quint64 frame{};
     std::unordered_map<quint64, Entry> entries;
     TextTextureCache textures;
+    TextureBudget budget;
+    QElapsedTimer budgetTime;
+    qint64 demand{};
     void clearContent() {
         while (firstChild()) {
             auto* child = firstChild();
@@ -38,9 +45,52 @@ class Root final : public QSGNode {
         }
         std::unordered_map<quint64, Entry>().swap(entries);
         textures = TextTextureCache{};
+        budget = TextureBudget{};
+        demand = 0;
+        budgetTime.restart();
     }
     ~Root() override { clearContent(); }
 };
+void removeChildren(QSGNode* group) {
+    while (auto* child = group->firstChild()) {
+        group->removeChildNode(child);
+        delete child;
+    }
+}
+void addImage(Entry& entry, std::shared_ptr<TextTextureCache::Resource> texture) {
+    removeChildren(entry.node);
+    auto* image = new QSGSimpleTextureNode;
+    image->setTexture(texture->texture.get());
+    image->setRect(QRectF(QPointF(), texture->size));
+    image->setFiltering(QSGTexture::Linear);
+    entry.node->appendChildNode(image);
+    entry.texture = std::move(texture);
+    entry.reason = TextTextureCache::Reason::None;
+}
+void addText(Entry& entry, QQuickWindow* window, int stroke) {
+    removeChildren(entry.node);
+    auto add = [&](QPointF offset, QColor color) {
+        auto* text = window->createTextNode();
+        text->setColor(color);
+        text->setRenderType(QSGTextNode::QtRendering);
+        text->addTextLayout(offset, entry.layout.get());
+        entry.node->appendChildNode(text);
+    };
+    if (stroke > 1) {
+        for (const auto& p : {QPointF(-stroke, 0), QPointF(stroke, 0), QPointF(0, -stroke), QPointF(0, stroke),
+                             QPointF(-stroke * .7, -stroke * .7), QPointF(stroke * .7, -stroke * .7),
+                             QPointF(-stroke * .7, stroke * .7), QPointF(stroke * .7, stroke * .7)})
+            add(p + QPointF(stroke, stroke), Qt::black);
+    }
+    if (stroke == 1) {
+        auto* text = window->createTextNode();
+        text->setColor(QColor::fromRgba(entry.color));
+        text->setTextStyle(QSGTextNode::Outline);
+        text->setStyleColor(Qt::black);
+        text->addTextLayout(QPointF(1, 1), entry.layout.get());
+        entry.node->appendChildNode(text);
+    } else add(QPointF(stroke, stroke), QColor::fromRgba(entry.color));
+}
 } // namespace
 DanmakuItem::DanmakuItem(QQuickItem* parent) : QQuickItem(parent) {
     setFlag(ItemHasContents, true);
@@ -58,12 +108,18 @@ DanmakuItem::DanmakuItem(QQuickItem* parent) : QQuickItem(parent) {
                 sceneEntries_.store(0);
                 imageNodes_.store(0);
                 textureBytes_.store(0);
+                textureBudgetBytes_.store(0);
+                textureDemandBytes_.store(0);
+                capacityFallbacks_ = preparationFallbacks_ = sizeFallbacks_ = allocationFallbacks_ = 0;
             }, Qt::DirectConnection);
             invalidationConnection_ = connect(window, &QQuickWindow::sceneGraphInvalidated, this, [this] {
                 // This signal runs on the render thread; do not touch GUI snapshots or caches.
                 sceneEntries_.store(0);
                 imageNodes_.store(0);
                 textureBytes_.store(0);
+                textureBudgetBytes_.store(0);
+                textureDemandBytes_.store(0);
+                capacityFallbacks_ = preparationFallbacks_ = sizeFallbacks_ = allocationFallbacks_ = 0;
                 renderScene_.reset();
             }, Qt::DirectConnection);
         }
@@ -94,9 +150,15 @@ bool DanmakuItem::configure(const QVariantMap& s) {
         ++generation_;
     }
     spacing_ = s["lineSpacing"].toDouble();
+    textureBudgetAuto_ = s.value("textureBudgetAuto", true).toBool();
+    textureBudgetLimitMiB_ = std::clamp(s.value("textureBudgetMiB", 512).toInt(), 32, 1024);
     setOpacity(s["opacity"].toDouble());
     update();
     return dimensionsChanged;
+}
+QVariantMap DanmakuItem::textureFallbackReasons() const {
+    return {{"capacity", capacityFallbacks_.load()}, {"preparation", preparationFallbacks_.load()},
+            {"size", sizeFallbacks_.load()}, {"allocation", allocationFallbacks_.load()}};
 }
 DanmakuItem::Layout* DanmakuItem::layout(const danmaku::Item& item) {
     QFont font = font_;
@@ -161,6 +223,9 @@ QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
         sceneEntries_.store(0);
         imageNodes_.store(0);
         textureBytes_.store(0);
+        textureBudgetBytes_.store(0);
+        textureDemandBytes_.store(0);
+        capacityFallbacks_ = preparationFallbacks_ = sizeFallbacks_ = allocationFallbacks_ = 0;
         return nullptr;
     }
     const auto dpr = window()->effectiveDevicePixelRatio();
@@ -175,8 +240,8 @@ QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
     }
     renderScene_ = root->state;
     ++root->frame;
-    // Retire expired references before preparing replacements so stale textures
-    // cannot occupy the budget needed by this frame's live comments.
+    // Update membership without rebuilding keys or estimating text on steady frames.
+    bool membershipChanged = false;
     for (const auto& visual : visuals_)
         if (auto it = root->entries.find(visual.id); it != root->entries.end())
             it->second.frame = root->frame;
@@ -185,81 +250,93 @@ QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
             root->removeChildNode(it->second.node);
             delete it->second.node;
             it = root->entries.erase(it);
+            membershipChanged = true;
         } else ++it;
     }
     root->textures.retireUnused();
-    root->textures.beginFrame();
     for (const auto& visual : visuals_) {
-        if (!visual.id)
-            continue;
-        auto it = root->entries.find(visual.id);
-        if (it == root->entries.end()) {
-            auto* group = new QSGTransformNode;
-            root->appendChildNode(group);
-            auto raster = imageBackend_ ? root->textures.acquire(window(), *visual.layout, visual.color, stroke_, dpr)
-                                        : std::shared_ptr<TextTextureCache::Resource>{};
-            if (raster) {
-                auto* imageNode = new QSGSimpleTextureNode;
-                imageNode->setTexture(raster->texture.get());
-                imageNode->setRect(QRectF(QPointF(), raster->size));
-                imageNode->setFiltering(QSGTexture::Linear);
-                group->appendChildNode(imageNode);
+        if (!visual.id || root->entries.contains(visual.id)) continue;
+        auto* group = new QSGTransformNode;
+        root->appendChildNode(group);
+        Entry entry;
+        entry.node = group;
+        entry.layout = visual.layout;
+        entry.color = visual.color;
+        if (imageBackend_)
+            entry.description = TextTextureCache::describe(*visual.layout, visual.color, stroke_, dpr);
+        root->entries.emplace(visual.id, std::move(entry));
+        membershipChanged = true;
+    }
+    if (membershipChanged && imageBackend_) {
+        root->demand = 0;
+        QSet<QString> unique;
+        for (const auto& [id, entry] : root->entries) {
+            Q_UNUSED(id);
+            if (entry.description.ineligible != TextTextureCache::Reason::None ||
+                unique.contains(entry.description.key)) continue;
+            unique.insert(entry.description.key);
+            root->demand += entry.description.bytes;
+        }
+    }
+    const qint64 budget = imageBackend_ ? root->budget.update(root->demand, textureBudgetAuto_,
+        textureBudgetLimitMiB_ * TextureBudget::MiB, root->budgetTime.elapsed()) : 0;
+    root->textures.setBudget(budget);
+    if (root->textures.bytes() > budget) {
+        // Preserve the earliest live textures. Destroy borrowing image nodes before
+        // dropping their shared resources; all changes stay on the render thread.
+        QSet<const TextTextureCache::Resource*> kept;
+        qint64 retained = 0;
+        for (const auto& visual : visuals_) {
+            auto& entry = root->entries.at(visual.id);
+            if (!entry.texture) continue;
+            if (kept.contains(entry.texture.get())) continue;
+            if (entry.texture->bytes <= budget - retained) {
+                retained += entry.texture->bytes;
+                kept.insert(entry.texture.get());
             } else {
-                auto add = [&](QPointF offset, QColor color) {
-                    auto* text = window()->createTextNode();
-                    text->setColor(color);
-                    text->setRenderType(QSGTextNode::QtRendering);
-                    text->addTextLayout(offset, visual.layout.get());
-                    group->appendChildNode(text);
-                };
-                // Public scene-graph nodes, cached for the comment lifetime. No per-frame glyph layout.
-                if (stroke_ > 1) {
-                    for (const auto& p :
-                         {QPointF(-stroke_, 0), QPointF(stroke_, 0), QPointF(0, -stroke_), QPointF(0, stroke_),
-                          QPointF(-stroke_ * 0.7, -stroke_ * 0.7), QPointF(stroke_ * 0.7, -stroke_ * 0.7),
-                          QPointF(-stroke_ * 0.7, stroke_ * 0.7), QPointF(stroke_ * 0.7, stroke_ * 0.7)})
-                        add(p + QPointF(stroke_, stroke_), Qt::black);
-                }
-                if (stroke_ == 1) {
-                    auto* text = window()->createTextNode();
-                    text->setColor(QColor::fromRgba(visual.color));
-                    text->setTextStyle(QSGTextNode::Outline);
-                    text->setStyleColor(Qt::black);
-                    text->addTextLayout(QPointF(1, 1), visual.layout.get());
-                    group->appendChildNode(text);
-                } else
-                    add(QPointF(stroke_, stroke_), QColor::fromRgba(visual.color));
-            }
-            it = root->entries.emplace(visual.id, Entry{group, visual.layout, 0, raster}).first;
-        }
-        if (imageBackend_ && !it->second.texture && it->second.frame != 0) {
-            // A cold burst can exceed the per-frame preparation/upload budgets.
-            // Upgrade a fallback on later frames without changing ID, order or position.
-            auto raster = root->textures.acquire(window(), *visual.layout, visual.color, stroke_, dpr);
-            if (raster) {
-                auto* group = it->second.node;
-                while (auto* child = group->firstChild()) {
-                    group->removeChildNode(child);
-                    delete child;
-                }
-                auto* imageNode = new QSGSimpleTextureNode;
-                imageNode->setTexture(raster->texture.get());
-                imageNode->setRect(QRectF(QPointF(), raster->size));
-                imageNode->setFiltering(QSGTexture::Linear);
-                group->appendChildNode(imageNode);
-                it->second.texture = std::move(raster);
+                addText(entry, window(), stroke_);
+                entry.texture.reset();
+                entry.reason = TextTextureCache::Reason::Capacity;
             }
         }
-        it->second.frame = root->frame;
+        root->textures.retireUnused();
+    }
+    root->textures.beginFrame();
+    int images = 0, capacity = 0, preparation = 0, size = 0, allocation = 0;
+    for (const auto& visual : visuals_) {
+        if (!visual.id) continue;
+        auto& entry = root->entries.at(visual.id);
+        if (imageBackend_ && !entry.texture) {
+            const auto result = root->textures.acquire(window(), *entry.layout, entry.description,
+                                                       entry.color, stroke_, dpr);
+            if (result.texture) addImage(entry, result.texture);
+            else entry.reason = result.reason;
+        }
+        if (!entry.node->firstChild()) addText(entry, window(), stroke_);
+        entry.frame = root->frame;
         QMatrix4x4 matrix;
         matrix.translate(static_cast<float>(visual.x), static_cast<float>(visual.y));
-        it->second.node->setMatrix(matrix);
+        entry.node->setMatrix(matrix);
+        if (entry.texture) ++images;
+        else if (imageBackend_) {
+            switch (entry.reason) {
+            case TextTextureCache::Reason::Capacity: ++capacity; break;
+            case TextTextureCache::Reason::Preparation: ++preparation; break;
+            case TextTextureCache::Reason::Dimensions:
+            case TextTextureCache::Reason::SingleUpload: ++size; break;
+            case TextTextureCache::Reason::Allocation: ++allocation; break;
+            default: break;
+            }
+        }
     }
-    root->textures.retireUnused();
-    int imageCount = 0;
-    for (const auto& entry : root->entries) if (entry.second.texture) ++imageCount;
-    imageNodes_.store(imageCount);
+    imageNodes_.store(images);
     sceneEntries_.store(static_cast<int>(root->entries.size()));
     textureBytes_.store(root->textures.bytes());
+    textureBudgetBytes_.store(budget);
+    textureDemandBytes_.store(root->demand);
+    capacityFallbacks_.store(capacity);
+    preparationFallbacks_.store(preparation);
+    sizeFallbacks_.store(size);
+    allocationFallbacks_.store(allocation);
     return root;
 }

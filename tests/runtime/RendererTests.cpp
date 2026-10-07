@@ -6,6 +6,28 @@
 class RendererTests : public QObject {
     Q_OBJECT
   private slots:
+    void budgetGrowthAndHysteresis() {
+        constexpr auto MiB = TextureBudget::MiB;
+        TextureBudget policy;
+        QCOMPARE(policy.update(10 * MiB, true, 512 * MiB, 0), 64 * MiB);
+        QCOMPARE(policy.update(65 * MiB, true, 512 * MiB, 1), 128 * MiB);
+        QCOMPARE(policy.update(147 * MiB, true, 512 * MiB, 2), 256 * MiB);
+        QCOMPARE(policy.update(260 * MiB, true, 512 * MiB, 3), 512 * MiB);
+        QCOMPARE(policy.update(10 * MiB, true, 512 * MiB, 100), 512 * MiB);
+        QCOMPARE(policy.update(10 * MiB, true, 512 * MiB, 10099), 512 * MiB);
+        QCOMPARE(policy.update(10 * MiB, true, 512 * MiB, 10100), 64 * MiB);
+        QCOMPARE(policy.update(1000 * MiB, true, 96 * MiB, 10101), 96 * MiB);
+        QCOMPARE(policy.update(0, false, 32 * MiB, 10102), 32 * MiB);
+        QCOMPARE(policy.update(0, false, 160 * MiB, 10103), 160 * MiB);
+        // A new burst cancels a pending automatic shrink, including timestamp zero.
+        TextureBudget burst;
+        QCOMPARE(burst.update(100 * MiB, true, 512 * MiB, 0), 128 * MiB);
+        QCOMPARE(burst.update(1 * MiB, true, 512 * MiB, 0), 128 * MiB);
+        QCOMPARE(burst.update(100 * MiB, true, 512 * MiB, 9999), 128 * MiB);
+        QCOMPARE(burst.update(1 * MiB, true, 512 * MiB, 10000), 128 * MiB);
+        QCOMPARE(burst.update(1 * MiB, true, 512 * MiB, 20000), 64 * MiB);
+    }
+
     void colorsOutlineAndTransparency_data() {
         QTest::addColumn<int>("stroke");
         QTest::newRow("no-outline") << 0;
@@ -65,7 +87,8 @@ class RendererTests : public QObject {
         DanmakuItem renderer(window.contentItem());
         renderer.setSize(QSizeF(window.size()));
         QVariantMap settings{{"fontFamily", "Microsoft YaHei"}, {"fontSize", 24},
-                             {"strokeWidth", 1}, {"lineSpacing", .2}, {"opacity", 1.0}};
+                             {"strokeWidth", 1}, {"lineSpacing", .2}, {"opacity", 1.0},
+                             {"textureBudgetAuto", false}, {"textureBudgetMiB", 64}};
         renderer.configure(settings);
         QVERIFY(renderer.imageBackend());
         danmaku::Options options;
@@ -103,7 +126,7 @@ class RendererTests : public QObject {
         QCOMPARE(renderer.firstSnapshotId(), id);
         QCOMPARE(renderer.firstSnapshotX(), x);
         QVERIFY(renderer.textureBytes() > TextTextureCache::maxUploadBytes);
-        QVERIFY(renderer.textureBytes() <= TextTextureCache::maxBytes);
+        QVERIFY(renderer.textureBytes() <= renderer.textureBudgetBytes());
 
         // New appearances replace the old resource budget rather than keeping stale textures.
         settings["strokeWidth"] = 3;
@@ -113,7 +136,7 @@ class RendererTests : public QObject {
                            [&](const auto& item) { return renderer.measure(item); });
         renderer.present(engine);
         QTest::qWait(100);
-        QVERIFY(renderer.textureBytes() <= TextTextureCache::maxBytes);
+        QVERIFY(renderer.textureBytes() <= renderer.textureBudgetBytes());
         QCOMPARE(renderer.firstSnapshotId(), id);
 
         // Saturate the real cache cap with unique live textures; excess entries stay as text.
@@ -131,19 +154,51 @@ class RendererTests : public QObject {
         QTRY_COMPARE(renderer.sceneEntries(), 400);
         warmup.restart();
         const auto initialBytes = renderer.textureBytes();
-        while (((native && renderer.textureBytes() < 60 * 1024 * 1024) || renderer.textureBytes() <= initialBytes ||
+        while (((native && (renderer.textureBytes() < 60 * 1024 * 1024 ||
+                            renderer.textureFallbackReasons()["capacity"].toInt() == 0)) ||
+                renderer.textureBytes() <= initialBytes ||
                 renderer.textureBytes() <= TextTextureCache::maxUploadBytes) && warmup.elapsed() < 10000) {
             renderer.present(engine);
             QTest::qWait(20);
         }
         QVERIFY(renderer.textureBytes() > initialBytes);
         if (native) QVERIFY(renderer.textureBytes() >= 60 * 1024 * 1024);
-        QVERIFY(renderer.textureBytes() <= TextTextureCache::maxBytes);
+        QVERIFY(renderer.textureBytes() <= renderer.textureBudgetBytes());
         QVERIFY(renderer.imageNodeCount() < renderer.snapshotCount());
+        if (native) QVERIFY(renderer.textureFallbackReasons()["capacity"].toInt() > 0);
+        const auto currentId = renderer.firstSnapshotId();
+        const auto currentX = renderer.firstSnapshotX();
+        const auto currentLayouts = renderer.cacheMisses();
+        settings["textureBudgetMiB"] = 32;
+        renderer.configure(settings);
+        renderer.present(engine);
+        QTRY_COMPARE(renderer.textureBudgetBytes(), qint64(32 * TextureBudget::MiB));
+        QVERIFY(renderer.textureBytes() <= renderer.textureBudgetBytes());
+        QCOMPARE(renderer.firstSnapshotId(), currentId);
+        QCOMPARE(renderer.firstSnapshotX(), currentX);
+        QCOMPARE(renderer.cacheMisses(), currentLayouts);
+        QCOMPARE(renderer.sceneEntries(), 400);
+        settings["textureBudgetAuto"] = true;
+        settings["textureBudgetMiB"] = 128;
+        renderer.configure(settings);
+        renderer.present(engine);
+        QTRY_COMPARE(renderer.textureBudgetBytes(), qint64(128 * TextureBudget::MiB));
+        const auto reducedBytes = renderer.textureBytes();
+        warmup.restart();
+        while (renderer.textureBytes() <= reducedBytes && warmup.elapsed() < 10000) {
+            renderer.present(engine);
+            QTest::qWait(20);
+        }
+        QVERIFY(renderer.textureBytes() > reducedBytes);
+        QVERIFY(renderer.textureBytes() <= renderer.textureBudgetBytes());
+        QCOMPARE(renderer.firstSnapshotId(), currentId);
+        QCOMPARE(renderer.firstSnapshotX(), currentX);
         engine.unload();
         renderer.clearContent();
         QTRY_COMPARE(renderer.sceneEntries(), 0);
         QCOMPARE(renderer.textureBytes(), qint64(0));
+        QCOMPARE(renderer.textureBudgetBytes(), qint64(0));
+        QCOMPARE(renderer.textureDemandBytes(), qint64(0));
     }
 
     void sharedTexturesAndOversizeFallback() {
@@ -172,6 +227,8 @@ class RendererTests : public QObject {
         QTRY_COMPARE(renderer.sceneEntries(), 3);
         QTRY_COMPARE(renderer.imageNodeCount(), 2);
         QCOMPARE(renderer.textureBytes(), bytes);
+        QCOMPARE(renderer.textureDemandBytes(), bytes);
+        QCOMPARE(renderer.textureFallbackReasons()["size"].toInt(), 1);
         const auto image = window.grabWindow();
         QVERIFY(!image.isNull());
         const auto artifacts = qEnvironmentVariable("DANMAKU_RENDERER_TEST_ARTIFACTS");

@@ -42,6 +42,10 @@ const QList<Setting>& schema() {
          "轨道额外行距比例，范围：0～2，默认：0.2（20%）。\n该值是比例，不是像素数；值越大，同样高度内的可用轨道越少。"},
         {"Danmaku", "overlap", false,
          "轨道已满时是否允许重叠：true=允许，false=禁止，默认：false。\n无论是否开启都优先使用安全轨道；禁止重叠且无可用位置时丢弃新弹幕。"},
+        {"Rendering", "textureBudgetAuto", true,
+         "文字图片预算模式：true=按当前活动弹幕需求自动调整，false=手动固定预算。默认：true。\n自动从最多 64 MiB 起步，预留 25% 余量并分档增长，持续低需求 10 秒后收缩；不查询系统可用显存。"},
+        {"Rendering", "textureBudgetMiB", 512,
+         "文字图片容量上限，单位：MiB；整数 32～1024，默认：512。\n自动模式为增长上限，手动模式为固定预算，不提前分配；仅估算图片内容，不含 Qt 图集和驱动开销。\n超出上限的弹幕回退文字绘制；调低时释放超额图片，停止时清空项目资源。每帧准备限制保持独立。"},
         {"Sync", "timeOffset", 0.0,
          "弹幕相对媒体的时间偏移，单位：秒；范围：-120～120，默认：0。\n正值提前显示，负值延后显示；支持小数，例如 0.5 表示提前半秒。"},
         {"Sync", "targetSession", "",
@@ -69,7 +73,7 @@ QVariant checked(const QString& key, const QVariant& value, const QVariant& fall
         {"fontSize", {10, 72}},   {"strokeWidth", {0, 6}},   {"opacity", {0.05, 1}},
         {"speed", {30, 1500}},    {"fixedSeconds", {1, 30}}, {"maxActive", {50, 5000}},
         {"maxTracks", {1, 60}},   {"lineSpacing", {0, 2}},   {"timeOffset", {-120, 120}},
-        {"screenIndex", {0, 32}}, {"onTop", {0, 3}}};
+        {"screenIndex", {0, 32}}, {"onTop", {0, 3}}, {"textureBudgetMiB", {32, 1024}}};
     if (ranges.contains(key)) {
         bool ok;
         const double n = value.toDouble(&ok);

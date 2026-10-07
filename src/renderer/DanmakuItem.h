@@ -23,6 +23,9 @@ class DanmakuItem : public QQuickItem {
     int imageNodeCount() const { return imageNodes_.load(); }
     qint64 textureBytes() const { return textureBytes_.load(); }
     int sceneEntries() const { return sceneEntries_.load(); }
+    qint64 textureBudgetBytes() const { return textureBudgetBytes_.load(); }
+    qint64 textureDemandBytes() const { return textureDemandBytes_.load(); }
+    QVariantMap textureFallbackReasons() const;
     int cacheEntries() const {
         return layouts_.size();
     }
@@ -49,12 +52,16 @@ class DanmakuItem : public QQuickItem {
     Layout* layout(const danmaku::Item& item);
     QFont font_;
     int stroke_{1};
+    bool textureBudgetAuto_{true};
+    int textureBudgetLimitMiB_{512};
     // Cached whole-comment textures avoid separate outline/fill glyph batches.
     // Keep the public Qt text path available for comparison and budget fallbacks.
     const bool imageBackend_{qEnvironmentVariable("DANMAKU_RENDER_BACKEND") != "text"};
     std::atomic<int> imageNodes_{};
     std::atomic<qint64> textureBytes_{};
     std::atomic<int> sceneEntries_{};
+    std::atomic<qint64> textureBudgetBytes_{}, textureDemandBytes_{};
+    std::atomic<int> capacityFallbacks_{}, preparationFallbacks_{}, sizeFallbacks_{}, allocationFallbacks_{};
     QMetaObject::Connection invalidationConnection_;
     QMetaObject::Connection stoppingConnection_;
     // Accessed only during render-thread signals/synchronization, never on the GUI thread.

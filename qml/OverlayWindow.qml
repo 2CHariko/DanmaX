@@ -21,6 +21,9 @@ Window {
                 +"\n呈现 "+Number(overlay.backend.metrics.presentedPerSecond||0).toFixed(1)+" Hz / 更新 "+Number(overlay.backend.metrics.updatesPerSecond||0).toFixed(1)+" Hz"
                 +"\n更新间隔 P95 "+Number(overlay.backend.metrics.p95Ms||0).toFixed(1)+" ms"
                 +"\n内存 "+Number(overlay.backend.metrics.memoryMiB||0).toFixed(1)+" MiB"
+                +"\n图片 "+Number((overlay.backend.metrics.textureEstimatedBytes||0)/1048576).toFixed(1)
+                +" / 预算 "+Number((overlay.backend.metrics.textureBudgetBytes||0)/1048576).toFixed(0)+" MiB"
+                +"\n回退 "+(overlay.backend.metrics.textFallbackNodes||0)+" / 容量 "+((overlay.backend.metrics.textureFallbackReasons||{}).capacity||0)
         }
     }
 }

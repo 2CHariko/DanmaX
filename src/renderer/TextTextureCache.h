@@ -8,6 +8,7 @@
 #include <QScopeGuard>
 #include <cmath>
 #include <memory>
+#include "renderer/TextureBudget.h"
 
 // Render-thread-only resources. Callers destroy borrowing scene nodes before this cache.
 class TextTextureCache {
@@ -17,32 +18,52 @@ class TextTextureCache {
         QSizeF size;
         qint64 bytes{};
     };
-    static constexpr qint64 maxBytes = 64 * 1024 * 1024;
     static constexpr qint64 maxUploadBytes = 4 * 1024 * 1024;
+    enum class Reason { None, Capacity, Preparation, Dimensions, SingleUpload, Allocation };
+    struct Description {
+        QString key;
+        QSize pixels;
+        qint64 bytes{};
+        Reason ineligible{Reason::None};
+    };
+    struct Result {
+        std::shared_ptr<Resource> texture;
+        Reason reason{Reason::None};
+    };
+    static Description describe(const QTextLayout& layout, QRgb color, int stroke, qreal dpr) {
+        Description result;
+        result.key = layout.font().toString() + QChar(0) + layout.text() + QChar(0) +
+                     QString::number(color) + QChar(0) + QString::number(stroke) + QChar(0) + QString::number(dpr);
+        const double width = layout.lineCount() ? layout.lineAt(0).naturalTextWidth() : 0;
+        result.pixels = QSize(static_cast<int>(std::ceil((width + stroke * 2 + 2) * dpr)),
+                             static_cast<int>(std::ceil((layout.boundingRect().height() + stroke * 2 + 2) * dpr)));
+        result.bytes = static_cast<qint64>(result.pixels.width()) * result.pixels.height() * 4;
+        if (result.pixels.width() <= 0 || result.pixels.height() <= 0 ||
+            result.pixels.width() > 8192 || result.pixels.height() > 8192)
+            result.ineligible = Reason::Dimensions;
+        else if (result.bytes > maxUploadBytes) result.ineligible = Reason::SingleUpload;
+        return result;
+    }
+    void setBudget(qint64 bytes) { budget_ = bytes; }
     void beginFrame() {
         uploaded_ = 0;
         preparationNs_ = 0;
     }
-    std::shared_ptr<Resource> acquire(QQuickWindow* window, const QTextLayout& layout,
-                                      QRgb color, int stroke, qreal dpr) {
-        const QString key = layout.font().toString() + QChar(0) + layout.text() + QChar(0) +
-                            QString::number(color) + QChar(0) + QString::number(stroke) + QChar(0) + QString::number(dpr);
-        if (auto found = entries_.value(key)) return found;
-        const double textWidth = layout.lineCount() ? layout.lineAt(0).naturalTextWidth() : 0;
-        const QSize pixels(static_cast<int>(std::ceil((textWidth + stroke * 2 + 2) * dpr)),
-                           static_cast<int>(std::ceil((layout.boundingRect().height() + stroke * 2 + 2) * dpr)));
-        const qint64 bytes = static_cast<qint64>(pixels.width()) * pixels.height() * 4;
-        // Fall back to Qt text for this comment if preparation exceeds either budget.
-        if (pixels.width() <= 0 || pixels.height() <= 0 || pixels.width() > 8192 || pixels.height() > 8192 ||
-            bytes > maxUploadBytes - uploaded_ || bytes > maxBytes - bytes_ ||
-            preparationNs_ >= 2 * 1000 * 1000) return {};
+    Result acquire(QQuickWindow* window, const QTextLayout& layout, const Description& description,
+                   QRgb color, int stroke, qreal dpr) {
+        if (auto found = entries_.value(description.key)) return {found};
+        if (description.ineligible != Reason::None) return {{}, description.ineligible};
+        const auto bytes = description.bytes;
+        if (bytes > budget_ - bytes_) return {{}, Reason::Capacity};
+        if (bytes > maxUploadBytes - uploaded_ || preparationNs_ >= 2 * 1000 * 1000)
+            return {{}, Reason::Preparation};
         // Charge only raster/texture preparation. Counting unrelated scene updates
         // here would starve later comments on slower renderers or Debug builds.
         QElapsedTimer preparation;
         preparation.start();
         const auto account = qScopeGuard([&] { preparationNs_ += preparation.nsecsElapsed(); });
-        QImage image(pixels, QImage::Format_ARGB32_Premultiplied);
-        if (image.isNull()) return {};
+        QImage image(description.pixels, QImage::Format_ARGB32_Premultiplied);
+        if (image.isNull()) return {{}, Reason::Allocation};
         image.setDevicePixelRatio(dpr);
         image.fill(Qt::transparent);
         QPainter painter(&image);
@@ -70,15 +91,15 @@ class TextTextureCache {
             composite.drawImage(QPointF(), foreground);
         }
         auto* texture = window->createTextureFromImage(image, QQuickWindow::TextureCanUseAtlas);
-        if (!texture) return {};
+        if (!texture) return {{}, Reason::Allocation};
         auto result = std::make_shared<Resource>();
         result->texture.reset(texture);
-        result->size = QSizeF(pixels) / dpr;
+        result->size = QSizeF(description.pixels) / dpr;
         result->bytes = bytes;
-        entries_.insert(key, result);
+        entries_.insert(description.key, result);
         bytes_ += bytes;
         uploaded_ += bytes;
-        return result;
+        return {result};
     }
     void retireUnused() {
         for (auto it = entries_.begin(); it != entries_.end();) {
@@ -92,5 +113,6 @@ class TextTextureCache {
   private:
     QHash<QString, std::shared_ptr<Resource>> entries_;
     qint64 bytes_{}, uploaded_{};
+    qint64 budget_{64 * TextureBudget::MiB};
     qint64 preparationNs_{};
 };

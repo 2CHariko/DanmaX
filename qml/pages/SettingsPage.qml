@@ -57,6 +57,19 @@ ScrollView {
             SettingsRow { title: "允许弹幕重叠"; description: "优先使用空闲轨道；轨道满时，开启则允许重叠，关闭则丢弃新弹幕。"; Switch { checked:page.values.overlap;Accessible.name:"允许弹幕重叠";onToggled:page.put("overlap",checked) } }
         }
         SettingsSection {
+            title: "文字缓存"; Layout.fillWidth: true
+            SettingsRow {
+                title: "预算模式"
+                description: "自动按当前弹幕需求增长，持续低负载后收缩；手动使用固定预算。"
+                ComboBox { model: ["自动", "手动"]; currentIndex: page.values.textureBudgetAuto ? 0 : 1; Accessible.name: "文字缓存预算模式"; onActivated: page.put("textureBudgetAuto", currentIndex === 0) }
+            }
+            SettingsRow {
+                title: page.values.textureBudgetAuto ? "容量上限（MiB）" : "固定预算（MiB）"
+                description: "只限制文字图片内容，不提前分配；超限弹幕仍以文字显示。"
+                SpinBox { from: 32; to: 1024; stepSize: 32; value: page.values.textureBudgetMiB; editable: true; Accessible.name: "文字缓存容量 MiB"; onValueModified: page.put("textureBudgetMiB", value) }
+            }
+        }
+        SettingsSection {
             title: "同步与窗口"; Layout.fillWidth: true
             SettingsRow { title: "时间偏移（0.1 秒）"; description:"正值提前显示弹幕。"; SpinBox { from:-1200;to:1200;value:Math.round(page.values.timeOffset*10);editable:true;Accessible.name:"时间偏移十分之一秒";onValueModified:page.put("timeOffset",value/10) } }
             SettingsRow { title: "显示器"; ComboBox { model:page.backend.screens;currentIndex:Math.min(page.values.screenIndex,count-1);implicitWidth:240;Accessible.name:"弹幕显示器";onActivated:page.put("screenIndex",currentIndex) } }

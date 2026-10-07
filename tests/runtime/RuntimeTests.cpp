@@ -1,6 +1,7 @@
 #include "application/AppController.h"
 #include "infrastructure/SettingsStore.h"
 #include "infrastructure/XmlLoader.h"
+#include "renderer/TextureBudget.h"
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
@@ -100,12 +101,23 @@ int main(int argc, char** argv) {
                   annotated.contains("[Meta]\r\n") && annotated.contains("formatVersion=1"),
               "First launch writes readable UTF-8 Chinese instructions");
         check(settings.setValue("speed", 300), "Save valid setting");
+        check(settings.values()["textureBudgetAuto"].toBool() &&
+                  settings.values()["textureBudgetMiB"].toInt() == 512,
+              "Existing INI gets safe defaults for missing texture budget settings");
+        check(settings.setValue("textureBudgetAuto", false) && settings.setValue("textureBudgetMiB", 96),
+              "Save manual texture budget");
+        check(!settings.setValue("textureBudgetMiB", 31) && !settings.setValue("textureBudgetMiB", 1025) &&
+                  !settings.setValue("textureBudgetMiB", 64.5) &&
+                  !settings.setValue("textureBudgetAuto", "auto") && settings.values()["textureBudgetMiB"] == 96,
+              "Reject invalid texture budget fields without mutation");
         check(!settings.setValue("speed", 0) && settings.values()["speed"].toInt() == 300,
               "Reject invalid setting without mutation");
         check(settings.retrySave(), "Flush numeric edits");
         SettingsStore restored(dir.path());
         check(restored.error().isEmpty() && restored.values()["speed"].toInt() == 300,
               "Restore persisted INI settings");
+        check(!restored.values()["textureBudgetAuto"].toBool() && restored.values()["textureBudgetMiB"] == 96,
+              "Restore persisted manual budget settings");
     }
     {
         const auto originalLocale = QLocale();
@@ -357,6 +369,17 @@ int main(int argc, char** argv) {
         const auto pausedX = renderer.firstSnapshotX();
         const auto misses = renderer.cacheMisses();
         check(pausedId != 0, "Paused settings fixture has a live comment");
+        liveSettings->setValue("textureBudgetAuto", false);
+        liveSettings->setValue("textureBudgetMiB", 32);
+        wait(50);
+        check(renderer.firstSnapshotId() == pausedId && renderer.firstSnapshotX() == pausedX &&
+                  controller.position() == paused && renderer.cacheMisses() == misses && !controller.playing(),
+              "Paused budget edit preserves IDs, motion, layouts and clock through controller settings");
+        if (renderer.imageBackend())
+            check(renderer.textureBudgetBytes() == 32 * TextureBudget::MiB,
+                  "Controller applies manual texture limit to paused visible scene");
+        liveSettings->setValue("textureBudgetAuto", true);
+        wait(50);
         liveSettings->setValue("speed", 400);
         liveSettings->setValue("fontSize", 28);
         liveSettings->setValue("fontSize", 30);
