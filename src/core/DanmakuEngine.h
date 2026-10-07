@@ -65,6 +65,8 @@ class Engine {
     }
 
   private:
+    int fittingLanes(Mode mode, double height) const;
+    double laneY(Mode mode, int lane, double height) const;
     bool spawn(std::size_t index, Extent extent);
     void rebuildOccupancy();
     void indexSlot(std::size_t slot);

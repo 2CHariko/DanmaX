@@ -184,8 +184,12 @@ int main() {
         check(live.size() == engine.activeCount() && live.size() <= static_cast<std::size_t>(o.maxActive) &&
                   static_cast<std::size_t>(alive) == live.size(), "Stress preserves capacity and slot/index invariants");
         for (const auto& a : live) {
-            check(a.y >= 0 && a.y + a.height <= 300 + step % 2 * 100 + 1e-8 && a.remaining > 0,
-                  "Stress keeps live rectangles inside the viewport");
+            const double screenHeight = 300 + step % 2 * 100;
+            const double allowedBottom = a.mode == Mode::Scroll ?
+                std::min(o.maxTracks * o.trackHeight, std::ceil(screenHeight / o.trackHeight) * o.trackHeight)
+                : screenHeight;
+            check(a.y >= 0 && a.y < screenHeight && a.y + a.height <= allowedBottom + 1e-8 && a.remaining > 0,
+                  "Stress permits only the partial final scroll lane outside the viewport");
             check(seen[a.item] == 0 || seen[a.item] == a.id, "Stress never replays an already presented source record");
             seen[a.item] = a.id;
         }

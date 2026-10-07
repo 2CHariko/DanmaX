@@ -1,6 +1,7 @@
 #pragma once
 #include "core/DanmakuEngine.h"
 #include "core/MediaClock.h"
+#include "application/DanmakuLibrary.h"
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
 #include "platform/windows/MediaMonitor.h"
@@ -17,8 +18,11 @@ class AppController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QObject* settings READ settings CONSTANT)
     Q_PROPERTY(QObject* logs READ logs CONSTANT)
+    Q_PROPERTY(QObject* library READ library CONSTANT)
+    Q_PROPERTY(QString sourceTitle READ sourceTitle NOTIFY stateChanged)
     Q_PROPERTY(QVariantList sessions READ sessions NOTIFY sessionsChanged)
     Q_PROPERTY(QStringList screens READ screens NOTIFY screensChanged)
+    Q_PROPERTY(QStringList fontFamilies READ fontFamilies NOTIFY fontFamiliesChanged)
     Q_PROPERTY(QString status READ status NOTIFY stateChanged)
     Q_PROPERTY(QString error READ error NOTIFY stateChanged)
     Q_PROPERTY(QString filePath READ filePath NOTIFY stateChanged)
@@ -37,7 +41,7 @@ class AppController final : public QObject {
   public:
     using ForegroundQuery = std::function<bool(const QString&)>;
     explicit AppController(QString dataDirectory, QObject* parent = nullptr,
-                           ForegroundQuery foregroundQuery = {});
+                           ForegroundQuery foregroundQuery = {}, QString cacheDirectory = {});
     ~AppController() override;
     QObject* settings() {
         return &settings_;
@@ -45,10 +49,13 @@ class AppController final : public QObject {
     QObject* logs() {
         return &logs_;
     }
+    QObject* library() { return &library_; }
+    QString sourceTitle() const { return sourceTitle_; }
     QVariantList sessions() const {
         return sessions_;
     }
     QStringList screens() const;
+    QStringList fontFamilies();
     QString status() const {
         return status_;
     }
@@ -109,6 +116,7 @@ class AppController final : public QObject {
     void metricsChanged();
     void sessionsChanged();
     void screensChanged();
+    void fontFamiliesChanged();
     void loadCompleted(bool success);
 
   private slots:
@@ -119,13 +127,17 @@ class AppController final : public QObject {
     void configure();
     void applyRendererSettings();
     void discardLoad();
+    void resetPlayback();
+    void commitItems(std::vector<danmaku::Item> items, const QString& title);
 
     void fail(const QString& message);
     void updateWindow();
     void updateMetrics();
+    void refreshFontFamilies(bool notify = true);
     static QString localPath(const QString& path);
     SettingsStore settings_;
     LogModel logs_;
+    DanmakuLibrary library_;
     MediaMonitor monitor_;
     ForegroundQuery foregroundQuery_;
     danmaku::Engine engine_;
@@ -138,7 +150,11 @@ class AppController final : public QObject {
     std::jthread loader_;
     std::shared_ptr<XmlResult> pendingLoad_;
     quint64 loadGeneration_{};
+    quint64 onlineLoadGeneration_{};
+    QString sourceTitle_;
     QVariantList sessions_;
+    QStringList fontFamilies_;
+    bool fontsLoaded_{};
     QVariantMap metrics_, lastSettings_, appliedRendererSettings_;
     bool rendererSettingsPending_{};
     QString status_{QStringLiteral("请选择弹幕文件")}, error_, file_, mediaTitle_, mediaIdentity_;

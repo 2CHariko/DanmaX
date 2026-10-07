@@ -22,7 +22,8 @@ ScrollView {
             }
             SettingsRow {
                 title: "弹幕字体"
-                TextField { text: page.values.fontFamily; implicitWidth: 220; Accessible.name: "弹幕字体"; onEditingFinished: page.put("fontFamily", text) }
+                description: "选择系统字体，或输入名称定位并确认；缺失的字符由 Qt 回退。"
+                FontSelector { families: page.backend.fontFamilies; family: page.values.fontFamily; onFamilySelected: function(name) { page.put("fontFamily", name) } }
             }
             SettingsRow {
                 title: "字号"
@@ -31,11 +32,11 @@ ScrollView {
             }
             SettingsRow {
                 title: "描边宽度"
-                SpinBox { from: 0; to: 6; value: page.values.strokeWidth; Accessible.name: "描边宽度"; onValueModified: page.put("strokeWidth", value) }
+                SpinBox { from: 0; to: 6; value: page.values.strokeWidth; editable: true; Accessible.name: "描边宽度"; onValueModified: page.put("strokeWidth", value) }
             }
             SettingsRow {
                 title: "不透明度"
-                SpinBox { from: 5; to: 100; value: Math.round(page.values.opacity*100); Accessible.name: "弹幕不透明度百分比"; onValueModified: page.put("opacity", value/100) }
+                SpinBox { from: 5; to: 100; value: Math.round(page.values.opacity*100); editable: true; Accessible.name: "弹幕不透明度百分比"; onValueModified: page.put("opacity", value/100) }
                 Label { text: "%" }
             }
         }
@@ -52,8 +53,8 @@ ScrollView {
                     SpinBox { from: modelData.min; to: modelData.max; value: page.values[modelData.key]; editable: true; Accessible.name: modelData.title; onValueModified: page.put(modelData.key,value) }
                 }
             }
-            SettingsRow { title: "固定弹幕时长（秒）"; SpinBox { from:1;to:30;value:page.values.fixedSeconds;Accessible.name:"固定弹幕时长";onValueModified:page.put("fixedSeconds",value) } }
-            SettingsRow { title: "轨道额外行距（%）"; SpinBox { from:0;to:200;value:Math.round(page.values.lineSpacing*100);Accessible.name:"轨道额外行距";onValueModified:page.put("lineSpacing",value/100) } }
+            SettingsRow { title: "固定弹幕时长（秒）"; SpinBox { from:1;to:30;value:page.values.fixedSeconds;editable:true;Accessible.name:"固定弹幕时长";onValueModified:page.put("fixedSeconds",value) } }
+            SettingsRow { title: "轨道额外行距（%）"; SpinBox { from:0;to:200;value:Math.round(page.values.lineSpacing*100);editable:true;Accessible.name:"轨道额外行距";onValueModified:page.put("lineSpacing",value/100) } }
             SettingsRow { title: "允许弹幕重叠"; description: "优先使用空闲轨道；轨道满时，开启则允许重叠，关闭则丢弃新弹幕。"; Switch { checked:page.values.overlap;Accessible.name:"允许弹幕重叠";onToggled:page.put("overlap",checked) } }
         }
         SettingsSection {
@@ -75,6 +76,26 @@ ScrollView {
             SettingsRow { title: "显示器"; ComboBox { model:page.backend.screens;currentIndex:Math.min(page.values.screenIndex,count-1);implicitWidth:240;Accessible.name:"弹幕显示器";onActivated:page.put("screenIndex",currentIndex) } }
             SettingsRow { title: "置顶策略"; ComboBox { model:["不置顶","置顶","周期保持置顶","兼容保持置顶"];currentIndex:page.values.onTop;Accessible.name:"置顶策略";onActivated:page.put("onTop",currentIndex) } }
             SettingsRow { title: "仅播放器在前台时显示"; description:"无法关联媒体应用与前台进程时请关闭此项。"; Switch { checked:page.values.foregroundOnly;Accessible.name:"仅播放器在前台显示";onToggled:page.put("foregroundOnly",checked) } }
+        }
+        SettingsSection {
+            title: "在线弹幕"; Layout.fillWidth: true
+            SettingsRow {
+                title: "兼容服务地址"
+                description: "填写允许匿名访问的弹弹play兼容服务基础地址，支持 HTTP/HTTPS 和路径前缀。"
+                TextField {
+                    objectName: "danmakuServerInput"
+                    Layout.fillWidth: true
+                    implicitWidth: 280
+                    text: page.values.danmakuServer
+                    placeholderText: "https://服务器/路径前缀"
+                    Accessible.name: "在线弹幕兼容服务地址"
+                    onEditingFinished: {
+                        page.backend.settings.setValue("danmakuServer", text)
+                        text = Qt.binding(() => page.values.danmakuServer)
+                    }
+                }
+            }
+            Label { text: "缓存长期保留，可在播放页离线选择、重新下载或删除；本版本不提供在线账号登录。"; Layout.fillWidth: true; wrapMode: Text.WordWrap }
         }
         SettingsSection {
             title: "诊断"; Layout.fillWidth: true

@@ -1,4 +1,5 @@
 #include "infrastructure/SettingsStore.h"
+#include "infrastructure/OnlineDanmakuData.h"
 #include <QAccessibilityHints>
 #include <QDateTime>
 #include <QDir>
@@ -20,6 +21,8 @@ struct Setting {
 };
 const QList<Setting>& schema() {
     static const QList<Setting> fields{
+        {"Online", "danmakuServer", "",
+         "弹弹play兼容服务的基础地址，默认：空（未配置）。支持 http/https 和路径前缀。\n不包含 /api/v2、查询参数或账号密码；完成编辑后保存。仅接入允许匿名访问的兼容服务。"},
         {"Appearance", "theme", "system",
          "应用主题：system=跟随系统，light=浅色，dark=深色。默认：system。\nWindows 高对比度启用时优先跟随系统，不强制浅色或深色。"},
         {"Appearance", "fontFamily", "Microsoft YaHei",
@@ -89,6 +92,11 @@ QVariant checked(const QString& key, const QVariant& value, const QVariant& fall
     if (value.metaType().id() != QMetaType::QString)
         return {};
     const auto text = value.toString();
+    if (key == "danmakuServer") {
+        if (text.trimmed().isEmpty()) return QString();
+        const auto server = normalizeDanmakuServer(text);
+        return server.isEmpty() || text.size() > 4096 ? QVariant{} : QVariant(server);
+    }
     if (key == "theme" && text != "system" && text != "light" && text != "dark")
         return {};
     if (key == "debugPosition" &&

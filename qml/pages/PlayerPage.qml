@@ -1,19 +1,34 @@
 import QtQuick
 import "../theme"
+import "../components"
 import QtQuick.Controls.FluentWinUI3
 import QtQuick.Layouts
 import QtQuick.Dialogs
 ScrollView {
     id: page
     required property QtObject backend
+    property int sourceTab: 0
+    signal openSettings()
     contentWidth: availableWidth
     ColumnLayout {
         width: page.availableWidth
         spacing: 16
         Label { text: "播放"; font.pixelSize: Ui.titleSize; font.weight: Font.DemiBold }
         Label { text: page.backend.status; wrapMode: Text.WordWrap; Layout.fillWidth: true; Accessible.name: "播放状态：" + text }
-        Label { text: "弹幕文件"; font.weight: Font.DemiBold }
-        RowLayout {
+        TabBar {
+            id: sourceTabs
+            objectName: "danmakuSourceTabs"
+            currentIndex: page.sourceTab
+            Layout.fillWidth: true
+            Accessible.name: "弹幕来源"
+            TabButton { text: "本地 XML"; icon.color: palette.buttonText }
+            TabButton { text: "在线搜索"; icon.color: palette.buttonText }
+            TabButton { text: "已缓存"; icon.color: palette.buttonText; onClicked: page.backend.library.refreshCache() }
+        }
+        ColumnLayout {
+            visible: sourceTabs.currentIndex === 0
+            Layout.fillWidth: true
+            RowLayout {
             Layout.fillWidth: true
             TextField {
                 id: pathInput
@@ -25,8 +40,12 @@ ScrollView {
             }
             Button { text: "浏览"; onClicked: filePicker.open() }
             Button { text: page.backend.loading ? "取消" : "加载"; onClicked: page.backend.loading ? page.backend.cancelLoad() : page.backend.loadFile(pathInput.text) }
+            }
+            ProgressBar { visible: page.backend.loading; Layout.fillWidth: true; indeterminate: page.backend.loadProgress < 0; from: 0; to: 100; value: Math.max(0,page.backend.loadProgress) }
         }
-        ProgressBar { visible: page.backend.loading; Layout.fillWidth: true; indeterminate: page.backend.loadProgress < 0; from: 0; to: 100; value: Math.max(0,page.backend.loadProgress) }
+        OnlineDanmakuPane { visible: sourceTabs.currentIndex === 1; Layout.fillWidth: true; library: page.backend.library; onOpenSettings: page.openSettings() }
+        CachedDanmakuPane { visible: sourceTabs.currentIndex === 2; Layout.fillWidth: true; library: page.backend.library }
+        Label { text: page.backend.sourceTitle; visible: text.length > 0; Layout.fillWidth: true; wrapMode: Text.WordWrap; Accessible.name: "当前弹幕：" + text }
         Label { text: "已载入 " + page.backend.total + " 条弹幕" }
         Label { text: "播放器"; font.weight: Font.DemiBold; Layout.topMargin: 8 }
         ComboBox {
@@ -57,7 +76,7 @@ ScrollView {
             Button { text: "同步播放"; enabled: !page.backend.loading && page.backend.total > 0 && page.backend.settings.values.targetSession.length > 0; onClicked: page.backend.start(false) }
             Button { text: "独立播放"; enabled: !page.backend.loading && page.backend.total > 0; onClicked: page.backend.start(true) }
             Button { text: page.backend.playing ? "暂停" : "继续"; enabled: page.backend.running && page.backend.manualMode; onClicked: page.backend.togglePause() }
-            Button { text: "停止"; enabled: page.backend.running || page.backend.total > 0; Accessible.description: "停止播放并卸载弹幕，再次播放需要重新加载"; onClicked: page.backend.stop() }
+            Button { text: "停止"; enabled: page.backend.running || page.backend.total > 0 || page.backend.loading || page.backend.library.busy; Accessible.description: "停止播放并卸载弹幕，再次播放需要重新加载"; onClicked: page.backend.stop() }
         }
         Label { text: page.backend.mediaTitle; visible: text.length > 0; wrapMode: Text.WordWrap; Layout.fillWidth: true }
         Label { text: page.backend.position.toFixed(1) + " / " + page.backend.duration.toFixed(1) + (page.backend.manualMode ? " 秒（预计，播放至弹幕退场）" : " 秒") }

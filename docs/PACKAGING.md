@@ -53,7 +53,7 @@ cache/                 QML、图形管线等运行缓存
 
 Qt 与主程序使用 MSVC `/MT`；Qt 平台插件、实际 QML 模块、FluentWinUI3 和官方 Fusion/Basic 回退静态链接。QML 目标在 `qml/` 下创建，让 Qt 的导入扫描只遍历应用界面，避免收集 `.cache/` 中 Qt 自身的示例或测试依赖。其他 Controls 风格在 Qt 源码配置阶段关闭，保留标准文件对话框依赖。
 
-Qt 默认 C++17 的 Windows 适配文件通过项目 CMake 钩子使用 MSVC `/await:strict`，与应用 C++20 的 C++/WinRT 标准协程 ABI 对齐；相关文件跳过不兼容的 C++17 预编译头。Qt 官方源码不打补丁，不压制 ABI 检查。依据为 [MSVC 协程支持](https://learn.microsoft.com/en-us/cpp/build/reference/await-enable-coroutine-support?view=msvc-170)。应用静态插件导入排除未使用的 generic、networkinformation 和 TLS，与动态部署的精简范围一致。
+Qt 默认 C++17 的 Windows 适配文件通过项目 CMake 钩子使用 MSVC `/await:strict`，与应用 C++20 的 C++/WinRT 标准协程 ABI 对齐；相关文件跳过不兼容的 C++17 预编译头。Qt 官方源码不打补丁，不压制 ABI 检查。依据为 [MSVC 协程支持](https://learn.microsoft.com/en-us/cpp/build/reference/await-enable-coroutine-support?view=msvc-170)。应用静态插件导入排除未使用的 generic、networkinformation，在线弹幕功能显式保留 Qt Schannel TLS 后端，使用 Windows 系统证书和密码能力，不引入 OpenSSL。
 
 关闭 OpenGL、Vulkan、ICU、OpenSSL、DBus、Widgets、SQL 和 PrintSupport，使用 Qt 公开 D3D11 渲染后端。Qt 6.11 在 Windows 的 Gui 库仍编译 D3D12 相关代码，本项目选择 D3D11，不声称 D3D12 源码已移除。Qt D3D11 使用 Windows 系统的 D3DCompiler，静态包不携带 DXC/DXIL、Qt DLL 或 VC++ DLL。
 
@@ -71,7 +71,9 @@ pwsh -NoProfile -File scripts/package.ps1 -Format single-exe
 
 `directory` 使用锁定动态 Qt 的 `windeployqt`，输出 `out/stage/LocalDanmaku-<时间戳>/`，适合调试或替换 Qt DLL。`single-exe` 是保留的旧 CAB 自解压格式：启动器静态链接自己的 CRT，动态 Qt 主程序解压至同级 `data/runtime/<包摘要前24位>/`；配置、日志和缓存在 `data/`。它逐文件校验并复用/修复运行库，损坏目录保留为 `.invalid-*`，不删除用户配置。开发阶段两种动态格式仍需要官方 VC++ x64 运行库，脚本不自动安装。
 
-动态部署移除未使用的 Controls 风格、QML 调试、TUIO、网络信息及 TLS 插件，保留 Fluent/Fusion/Basic、Windows/offscreen 和必要图像、图形依赖。自解压使用明确定位的 Windows makecab/Cabinet/BCrypt，不引入第三方压缩库。`validate-portable.ps1` 用于旧自解压格式，不能替代静态包验收。
+动态部署移除未使用的 Controls 风格、QML 调试、TUIO、网络信息插件，保留 Fluent/Fusion/Basic、Windows/offscreen、Qt Network、TLS 后端和必要图像、图形依赖。HTTPS 使用 Schannel，证书校验不跳过。自解压使用明确定位的 Windows makecab/Cabinet/BCrypt，不引入第三方压缩库。`validate-portable.ps1` 用于旧自解压格式，不能替代静态包验收。
+
+在线弹幕缓存随应用缓存根定位，默认 `cache/danmaku/`；移植已下载内容时应携带该目录。发布验证需额外检查在线/缓存页和 TLS，已有旧包的验收成绩不能直接套用新产物。测试证书只用于回环模拟服务，不修改 Windows 证书存储，不随应用部署。
 
 ## 验证与分发边界
 

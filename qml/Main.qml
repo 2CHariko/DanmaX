@@ -8,6 +8,7 @@ ApplicationWindow {
     id: root
     required property QtObject backend
     property int selectedPage: 0
+    property int sourceTab: 0
     property bool navigationOpen: false
     readonly property bool minimal: width <= Ui.minimalNavigationWidth
     readonly property bool compact: width < Ui.expandedNavigationWidth
@@ -42,7 +43,7 @@ ApplicationWindow {
                 id:pages
                 Layout.fillWidth:true;Layout.fillHeight:true
                 currentIndex:root.selectedPage
-                PlayerPage { backend:root.backend }
+                PlayerPage { backend:root.backend; sourceTab: root.sourceTab; onOpenSettings: root.navigate(2) }
                 LogsPage { backend:root.backend }
                 SettingsPage { backend:root.backend }
             }

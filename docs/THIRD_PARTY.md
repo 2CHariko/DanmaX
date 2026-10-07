@@ -4,6 +4,7 @@
 
 - Qt 6.11.0：常规 Debug/Release 使用官方动态 SDK；用户授权的单 EXE 构建使用官方 qtbase、qtshadertools、qtdeclarative 源码，自行编译静态 Qt。按实际模块和第三方代码适用许可证核对，不能仅凭“Qt 开源”认定所有文件的许可相同。源码的 `LICENSES`、REUSE 元数据和各子目录 `qt_attribution.json` 为核对依据。
 - Qt Shader Tools：构建 QML/Quick 所需；qsb 等工具不随应用分发。应用中实际链接的相关库/第三方代码仍纳入组件审查。
+- 在线弹幕使用现有锁定 Qt 的 Network、JSON 和 Schannel TLS 后端；无新增下载依赖或 OpenSSL。静态源码和动态 SDK 清单已包含对应 qtbase。部署需保留 TLS 后端；回环测试证书由本项目生成，仅测试使用。
 - CMake 3.31.6：BSD-3-Clause，仅构建使用。
 - Ninja 1.12.1：Apache-2.0，仅构建使用。
 - Microsoft MSVC / Windows SDK：明确声明的系统开发工具。静态应用使用 `/MT`；Windows 系统库和驱动不随包复制。动态包仍需官方 VC++ x64 运行库分发方案。

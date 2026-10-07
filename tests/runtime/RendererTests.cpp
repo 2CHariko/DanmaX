@@ -28,6 +28,48 @@ class RendererTests : public QObject {
         QCOMPARE(burst.update(1 * MiB, true, 512 * MiB, 20000), 64 * MiB);
     }
 
+    void partialScrollLaneIsClipped() {
+        QQuickWindow window;
+        window.setColor(Qt::transparent);
+        window.resize(400, 180);
+        DanmakuItem renderer(window.contentItem());
+        renderer.configure({{"fontFamily", "Microsoft YaHei"}, {"fontSize", 28},
+                            {"strokeWidth", 1}, {"lineSpacing", .2}, {"opacity", 1.0}});
+        const double step = renderer.trackHeight();
+        const int viewportHeight = static_cast<int>(std::ceil(step * 2 + step * .6));
+        renderer.setSize(QSizeF(400, viewportHeight));
+        QVERIFY(renderer.clip());
+        danmaku::Options options;
+        options.trackHeight = step; options.maxTracks = 60; options.speed = 100;
+        danmaku::Engine engine;
+        engine.configure(options, 100, viewportHeight);
+        engine.load({{0, danmaku::Mode::Scroll, "ABC"}, {0, danmaku::Mode::Scroll, "ABC"},
+                     {0, danmaku::Mode::Scroll, "ABC"}});
+        engine.tick(0, 0, true, [&](const auto& item) { return renderer.measure(item); });
+        QCOMPARE(engine.activeCount(), std::size_t(3));
+        const auto& last = engine.activeSlots()[engine.activeIndices().back()];
+        QVERIFY(last.y < viewportHeight && last.y + last.height > viewportHeight);
+        engine.tick(1, 1, true, [&](const auto& item) { return renderer.measure(item); });
+        renderer.present(engine);
+        window.show();
+        QTRY_COMPARE(renderer.sceneEntries(), 3);
+        QTRY_COMPARE(renderer.imageNodeCount(), 3);
+        const auto image = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
+        QVERIFY(!image.isNull());
+        const double dpr = window.effectiveDevicePixelRatio();
+        int visible = 0, outside = 0;
+        for (int y = static_cast<int>(std::ceil(last.y * dpr)); y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x) {
+                if (!qAlpha(image.pixel(x, y))) continue;
+                if (y < static_cast<int>(std::ceil(viewportHeight * dpr))) ++visible;
+                else ++outside;
+            }
+        QVERIFY(visible > 0);
+        QCOMPARE(outside, 0);
+        const auto artifacts = qEnvironmentVariable("DANMAKU_RENDERER_TEST_ARTIFACTS");
+        if (!artifacts.isEmpty()) QVERIFY(image.save(artifacts + "-partial-scroll.png"));
+    }
+
     void colorsOutlineAndTransparency_data() {
         QTest::addColumn<int>("stroke");
         QTest::newRow("no-outline") << 0;

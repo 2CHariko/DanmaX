@@ -49,7 +49,7 @@ if(DANMAKU_BUILD_APP)
     else()
         set(danmaku_qt_directory "${CMAKE_SOURCE_DIR}/.tools/qt/6.11.0/msvc2022_64")
     endif()
-    find_package(Qt6 6.11.0 EXACT REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2
+    find_package(Qt6 6.11.0 EXACT REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network
         PATHS "${danmaku_qt_directory}/lib/cmake/Qt6" NO_DEFAULT_PATH)
     get_target_property(danmaku_qt_core_type Qt6::Core TYPE)
     if(DANMAKU_STATIC_QT AND NOT danmaku_qt_core_type STREQUAL "STATIC_LIBRARY")
@@ -57,6 +57,8 @@ if(DANMAKU_BUILD_APP)
     endif()
     qt_standard_project_setup(REQUIRES 6.11)
     add_library(danmaku_runtime STATIC
+        src/application/DanmakuLibrary.cpp src/application/DanmakuLibrary.h
+        src/infrastructure/OnlineDanmakuData.cpp src/infrastructure/OnlineDanmakuData.h
         src/application/AppController.cpp src/application/AppController.h
         src/infrastructure/AppPaths.cpp src/infrastructure/AppPaths.h
         src/platform/windows/MediaMonitor.cpp src/platform/windows/MediaMonitor.h
@@ -64,7 +66,7 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/XmlLoader.cpp src/infrastructure/XmlLoader.h
         src/infrastructure/SettingsStore.cpp src/infrastructure/SettingsStore.h
         src/infrastructure/LogModel.cpp src/infrastructure/LogModel.h)
-    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick windowsapp psapi shell32 ole32)
+    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32)
     danmaku_compile_options(danmaku_runtime)
     if(DANMAKU_STATIC_QT)
         target_compile_definitions(danmaku_runtime PRIVATE DANMAKU_STATIC_PORTABLE)
@@ -75,6 +77,14 @@ if(DANMAKU_BUILD_APP)
     if(BUILD_TESTING)
         find_package(Qt6 6.11.0 EXACT REQUIRED COMPONENTS Test
             PATHS "${danmaku_qt_directory}/lib/cmake/Qt6" NO_DEFAULT_PATH)
+        add_executable(online_danmaku_tests tests/runtime/OnlineDanmakuTests.cpp)
+        target_link_libraries(online_danmaku_tests PRIVATE danmaku_runtime Qt6::Test)
+        if(DANMAKU_STATIC_QT)
+            qt_import_plugins(online_danmaku_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin Qt6::QSchannelBackendPlugin)
+        endif()
+        danmaku_compile_options(online_danmaku_tests)
+        add_test(NAME online_danmaku COMMAND online_danmaku_tests -o "${CMAKE_BINARY_DIR}/online-danmaku-tests.txt,txt")
+        set_tests_properties(online_danmaku PROPERTIES TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
         add_executable(xml_loader_tests tests/runtime/XmlLoaderTests.cpp
             src/infrastructure/XmlLoader.cpp)
         target_include_directories(xml_loader_tests PRIVATE src)

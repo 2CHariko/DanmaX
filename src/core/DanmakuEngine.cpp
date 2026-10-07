@@ -3,6 +3,28 @@
 #include <cmath>
 
 namespace danmaku {
+namespace {
+// Font metrics produce fractional lane heights. Snap numerical noise at integer
+// boundaries before floor/ceil so admission and overlap use identical lanes.
+double snapLaneRatio(double ratio) {
+    const double integer = std::round(ratio);
+    return std::abs(ratio - integer) < 1e-9 ? integer : ratio;
+}
+}
+int Engine::fittingLanes(Mode mode, double height) const {
+    const double ratio = snapLaneRatio(height_ / options_.trackHeight);
+    // Scrolling comments may use the partial final lane; the renderer clips it.
+    // Fixed comments retain their full-rectangle, screen-edge anchoring rules.
+    const int tracks = std::min(options_.maxTracks, static_cast<int>(
+        mode == Mode::Scroll ? std::ceil(ratio) : std::floor(ratio)));
+    const double remaining = snapLaneRatio(tracks - height / options_.trackHeight);
+    if (remaining < 0) return 0;
+    return static_cast<int>(std::floor(remaining)) + 1;
+}
+double Engine::laneY(Mode mode, int lane, double height) const {
+    return mode == Mode::Bottom ? std::max(0.0, height_ - lane * options_.trackHeight - height)
+                                : lane * options_.trackHeight;
+}
 void Engine::load(std::vector<Item> items) {
     items.erase(std::remove_if(items.begin(), items.end(),
                                [](const Item& item) {
@@ -55,8 +77,6 @@ void Engine::reconfigure(Options options, double width, double height, const Mea
     active_.reserve(slots_.size());
     occupancy_.resize(static_cast<std::size_t>(std::ceil(height_ / options_.trackHeight)) + 1);
     for (auto& bucket : occupancy_) bucket.clear();
-    const int tracks = std::min(options_.maxTracks, static_cast<int>(height_ / options_.trackHeight));
-    const double region = tracks * options_.trackHeight;
     std::size_t retained = 0;
     for (auto slot : active_) {
         auto& a = slots_[slot];
@@ -74,25 +94,19 @@ void Engine::reconfigure(Options options, double width, double height, const Mea
         }
         if (keep && reflow) {
             const double edge = a.mode == Mode::Bottom ? oldHeight - a.y - a.height : a.y;
-            const auto lane = std::max(0.0, std::round(edge / oldOptions.trackHeight));
+            const int lane = std::max(0, static_cast<int>(std::round(edge / oldOptions.trackHeight)));
             a.height = std::max(options_.trackHeight, measuredHeight);
             if (a.mode != Mode::Scroll) a.x = (width_ - a.width) / 2;
-            const double preferred = a.mode == Mode::Bottom ? height_ - lane * options_.trackHeight - a.height
-                                                            : lane * options_.trackHeight;
-            const auto place = [&](double y) {
-                a.y = y;
-                return a.height <= region && y >= 0 && y + a.height <= height_ &&
-                       (a.mode == Mode::Bottom ? y >= height_ - region : y + a.height <= region) && fits(a);
+            const int fitting = fittingLanes(a.mode, a.height);
+            const auto place = [&](int candidateLane) {
+                if (candidateLane < 0 || candidateLane >= fitting) return false;
+                a.y = laneY(a.mode, candidateLane, a.height);
+                return fits(a);
             };
-            keep = place(preferred);
-            for (int attempt = 0; !keep && attempt < tracks; ++attempt) {
-                const double y = a.mode == Mode::Bottom ? height_ - attempt * options_.trackHeight - a.height
-                                                        : attempt * options_.trackHeight;
-                keep = place(y);
-            }
-            if (!keep && options_.overlap && a.height <= region) {
-                a.y = a.mode == Mode::Bottom ? std::clamp(preferred, height_ - region, height_ - a.height)
-                                             : std::clamp(preferred, 0.0, region - a.height);
+            keep = place(lane);
+            for (int attempt = 0; !keep && attempt < fitting; ++attempt) keep = place(attempt);
+            if (!keep && options_.overlap && fitting > 0) {
+                a.y = laneY(a.mode, std::clamp(lane, 0, fitting - 1), a.height);
                 keep = true;
             }
         }
@@ -204,7 +218,9 @@ bool Engine::fits(const Active& candidate) const {
     for (auto bucket = first; bucket < last && bucket < occupancy_.size(); ++bucket) {
         for (auto slot : occupancy_[bucket]) {
             const auto& other = slots_[slot];
-            if (other.y + other.height <= candidate.y || candidate.y + candidate.height <= other.y) continue;
+            // Adjacent fractional lanes can overlap by floating-point noise only.
+            if (other.y + other.height <= candidate.y + 1e-7 ||
+                candidate.y + candidate.height <= other.y + 1e-7) continue;
             if (candidate.mode != Mode::Scroll || other.mode != Mode::Scroll ||
                 !(candidate.x + candidate.width + 16 <= other.x || other.x + other.width + 16 <= candidate.x))
                 return false;
@@ -218,16 +234,11 @@ bool Engine::spawn(std::size_t index, Extent extent) {
         return false;
     const double height = std::max(options_.trackHeight, extent.height);
     const auto mode = items_[index].mode;
-    const int tracks = std::min(options_.maxTracks, static_cast<int>(height_ / options_.trackHeight));
-    if (height > tracks * options_.trackHeight)
-        return false;
+    const int fitting = fittingLanes(mode, height);
     int selected = -1;
-    for (int attempt = 0; attempt < tracks; ++attempt) {
+    for (int attempt = 0; attempt < fitting; ++attempt) {
         const int lane = attempt;
-        const double y =
-            mode == Mode::Bottom ? height_ - lane * options_.trackHeight - height : lane * options_.trackHeight;
-        if (lane * options_.trackHeight + height > tracks * options_.trackHeight)
-            break;
+        const double y = laneY(mode, lane, height);
         Active candidate{};
         candidate.mode = mode;
         candidate.x = mode == Mode::Scroll ? width_ : (width_ - width) / 2;
@@ -241,13 +252,10 @@ bool Engine::spawn(std::size_t index, Extent extent) {
     }
     // Overlap is a fallback after checking safe lanes. Cycling every arrival
     // through the screen produces diagonal staircases even at low density.
-    const int fitting = static_cast<int>(std::floor((tracks * options_.trackHeight - height) /
-                                                  options_.trackHeight)) + 1;
     if (selected < 0 && options_.overlap && fitting > 0)
         selected = static_cast<int>(overlapTrack_++ % static_cast<std::size_t>(fitting));
     if (selected >= 0) {
-        const double y = mode == Mode::Bottom ? height_ - selected * options_.trackHeight - height
-                                             : selected * options_.trackHeight;
+        const double y = laneY(mode, selected, height);
         const auto slot = free_.back();
         auto& active = slots_[slot];
         free_.pop_back();

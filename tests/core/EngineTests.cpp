@@ -1,6 +1,7 @@
 #include "core/DanmakuEngine.h"
 #include <iostream>
 #include <limits>
+#include <cmath>
 using namespace danmaku;
 int main() {
     int failures = 0;
@@ -176,5 +177,56 @@ int main() {
     check(engine.activeCount() == 1 && engine.activeSlots()[engine.activeIndices().front()].id > oldId &&
               engine.dropped() == 0,
           "Reload recreates pool and occupancy with the retained options");
+    for (const double laneHeight : {39.4, 45.2, 40.0}) for (const bool overlap : {false, true}) {
+        o = {}; o.trackHeight = laneHeight; o.maxTracks = 60; o.maxActive = 600; o.overlap = overlap;
+        engine.configure(o, 2560, 1440);
+        std::vector<Item> dense(600);
+        for (auto& item : dense) item.text = "scroll";
+        engine.load(std::move(dense));
+        engine.tick(0, 0, true, [&](const Item&) { return Engine::Extent(100, laneHeight); });
+        const int lanes = static_cast<int>(std::ceil(1440 / laneHeight));
+        int last = 0;
+        for (auto slot : engine.activeIndices()) {
+            const auto& a = engine.activeSlots()[slot];
+            check(a.y < 1440 && a.y + a.height <= lanes * laneHeight + 1e-8,
+                  "Partial scroll lane starts on screen and exceeds only the rounded track region");
+            if (std::abs(a.y - (lanes - 1) * laneHeight) < 1e-8) ++last;
+        }
+        check(last > 0, "Fractional and exact lane heights include the final scrolling lane");
+        check(engine.activeCount() == (overlap ? 600 : static_cast<std::size_t>(lanes)),
+              "Overlap and safe admission agree on the number of scrolling lanes");
+    }
+    o = {}; o.trackHeight = 40; o.maxTracks = 60;
+    engine.configure(o, 800, 30);
+    engine.load({{0, Mode::Scroll, "partial"}});
+    engine.tick(0, 0, true, width);
+    check(engine.activeCount() == 1 && engine.activeSlots()[engine.activeIndices()[0]].y == 0,
+          "A short viewport permits a partially visible scrolling lane");
+    engine.configure(o, 800, 85);
+    engine.load({{0, Mode::Scroll, "a"}, {0, Mode::Scroll, "b"}, {0, Mode::Scroll, "partial"},
+                 {0, Mode::Bottom, "blocked"}});
+    engine.tick(0, 0, true, width);
+    check(engine.activeCount() == 3 && engine.dropped() == 1,
+          "The visible portion of the partial scroll lane blocks bottom fixed comments");
+    const auto partialId = engine.activeSlots()[engine.activeIndices().back()].id;
+    engine.reconfigure(o, 800, 81);
+    check(engine.activeCount() == 3 && engine.activeSlots()[engine.activeIndices().back()].id == partialId &&
+              engine.activeSlots()[engine.activeIndices().back()].y == 80,
+          "Reflow preserves the ID and position of a still partially visible scroll lane");
+    engine.tick(0, 10, false, width);
+    check(engine.activeCount() == 3, "Pause preserves partial lane occupancy");
+    engine.reconfigure(o, 800, 80);
+    check(engine.activeCount() == 2 && engine.retiredBySettings() == 1,
+          "Reflow retires a final lane when it becomes entirely outside the viewport");
+    o.maxTracks = 2;
+    engine.configure(o, 800, 85);
+    engine.load({{0, Mode::Scroll, "a"}, {0, Mode::Scroll, "b"}, {0, Mode::Scroll, "limited"}});
+    engine.tick(0, 0, true, width);
+    check(engine.activeCount() == 2, "Partial screen admission still respects the user's track cap");
+    engine.configure(o, 800, 85);
+    engine.load({{0, Mode::Scroll, "oversized"}});
+    engine.tick(0, 0, true, [](const Item&) { return Engine::Extent(100, 1e100); });
+    check(engine.activeCount() == 0 && engine.dropped() == 1,
+          "Extremely large finite text heights are rejected before converting lane counts");
     return failures ? 1 : 0;
 }

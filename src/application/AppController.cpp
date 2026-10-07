@@ -11,13 +11,14 @@
 #include <QUrl>
 #include <algorithm>
 #include <cmath>
-AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQuery foregroundQuery)
+AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQuery foregroundQuery, QString cacheDirectory)
     : QObject(parent), settings_(dataDirectory),
 #ifdef DANMAKU_STATIC_PORTABLE
       logs_(dataDirectory),
 #else
       logs_(QDir(dataDirectory).filePath("logs")),
 #endif
+      library_(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       monitor_(this),
       foregroundQuery_(foregroundQuery ? std::move(foregroundQuery) : ForegroundQuery(MediaMonitor::targetForeground)) {
     connect(&logs_, &LogModel::writeFailed, this, [this](const QString& message) {
@@ -26,6 +27,20 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     });
     LogModel::install(&logs_);
     file_ = settings_.values()["lastFile"].toString();
+    library_.setServer(settings_.values()["danmakuServer"].toString());
+    connect(&library_, &DanmakuLibrary::sourceLoadStarted, this, [this] {
+        discardLoad();
+        onlineLoadGeneration_ = loadGeneration_;
+        emit stateChanged();
+    });
+    connect(&library_, &DanmakuLibrary::sourceReady, this, [this] {
+        auto result = library_.takeReadyResult();
+        if (!result || onlineLoadGeneration_ != loadGeneration_) return;
+        const auto title = result->metadata.value("animeTitle").toString() + QStringLiteral(" · ") +
+                           result->metadata.value("episodeTitle").toString();
+        commitItems(std::move(result->items), title);
+        emit loadCompleted(true);
+    });
     connect(&settings_, &SettingsStore::changed, this, &AppController::configure);
     connect(&settings_, &SettingsStore::errorChanged, this, [this] {
         if (!settings_.error().isEmpty())
@@ -45,6 +60,9 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     connect(qGuiApp, &QGuiApplication::screenRemoved, this, [this] {
         emit screensChanged();
         updateWindow();
+    });
+    connect(qGuiApp, &QGuiApplication::fontDatabaseChanged, this, [this] {
+        if (fontsLoaded_) refreshFontFamilies();
     });
     timer_.setTimerType(Qt::PreciseTimer);
     monotonicTime_.start();
@@ -72,6 +90,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
 AppController::~AppController() {
     settings_.flushPending();
     discardLoad();
+    library_.cancel();
     LogModel::uninstall();
 }
 QString AppController::localPath(const QString& path) {
@@ -89,6 +108,20 @@ QStringList AppController::screens() const {
 }
 bool AppController::hasFluentIcons() const {
     return QFontDatabase::families().contains("Segoe Fluent Icons");
+}
+QStringList AppController::fontFamilies() {
+    // Do not emit a change signal while QML is evaluating the initial binding.
+    if (!fontsLoaded_) refreshFontFamilies(false);
+    return fontFamilies_;
+}
+void AppController::refreshFontFamilies(bool notify) {
+    auto families = QFontDatabase::families();
+    families.removeIf([](const QString& family) { return QFontDatabase::isPrivateFamily(family); });
+    families.sort(Qt::CaseInsensitive);
+    fontsLoaded_ = true;
+    if (fontFamilies_ == families) return;
+    fontFamilies_ = std::move(families);
+    if (notify) emit fontFamiliesChanged();
 }
 void AppController::attach(QObject* renderer, QObject* overlay) {
     renderer_ = qobject_cast<DanmakuItem*>(renderer);
@@ -136,6 +169,7 @@ void AppController::clearError() {
 }
 void AppController::configure() {
     const auto s = settings_.values();
+    library_.setServer(s["danmakuServer"].toString());
     logs_.configure(s["logToFile"].toBool(), s["logLevel"].toString());
     monitor_.select(s["targetSession"].toString());
     if (lastSettings_.value("targetSession") != s["targetSession"]) {
@@ -256,11 +290,8 @@ void AppController::loadFile(const QString& input) {
                     emit loadCompleted(false);
                     return;
                 }
-                engine_.load(std::move(result.items));
+                commitItems(std::move(result.items), path);
                 file_ = path;
-                position_ = 0;
-                duration_ = engine_.items().back().time + 15;
-                demo_ = false;
                 settings_.setValue("lastFile", path);
                 status_ = QStringLiteral("已加载 %1 条，过滤 %2 条").arg(total()).arg(result.skipped);
                 if (result.skipped > 0)
@@ -279,6 +310,7 @@ void AppController::loadFile(const QString& input) {
 }
 void AppController::cancelLoad() {
     discardLoad();
+    library_.cancel();
     status_ = QStringLiteral("已取消加载");
     emit stateChanged();
 }
@@ -320,11 +352,26 @@ void AppController::start(bool manual) {
     emit stateChanged();
 }
 void AppController::stop() {
+    library_.cancel();
+    discardLoad();
+    resetPlayback();
+}
+void AppController::commitItems(std::vector<danmaku::Item> items, const QString& title) {
+    resetPlayback();
+    engine_.load(std::move(items));
+    sourceTitle_ = title;
+    duration_ = engine_.items().back().time + 15;
+    status_ = QStringLiteral("已加载 %1 条，请选择同步播放或独立播放").arg(total());
+    error_.clear();
+    logs_.append("INFO", status_);
+    emit stateChanged();
+}
+void AppController::resetPlayback() {
     timer_.stop();
     running_ = playing_ = visible_ = manual_ = demo_ = false;
     snapshotDirty_ = true;
-    discardLoad();
     engine_.unload();
+    sourceTitle_.clear();
     if (renderer_) renderer_->clearContent();
     if (auto* quick = qobject_cast<QQuickWindow*>(overlay_.data())) {
         // Hiding alone retains Qt's scene graph. Release it on its own render thread,

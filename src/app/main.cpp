@@ -89,7 +89,7 @@ int main(int argc, char* argv[]) {
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addOption({"data-dir", "Writable application data directory", "path"});
-    parser.addOption({"cache-dir", "Writable QML cache directory", "path"});
+    parser.addOption({"cache-dir", "Writable application cache directory", "path"});
     parser.addOption({"smoke-test", "Load both windows and exit automatically"});
     parser.addOption({"capture", "Save the control window during smoke testing", "path"});
     parser.addOption({"capture-overlay", "Save the overlay during validation", "path"});
@@ -99,6 +99,7 @@ int main(int argc, char* argv[]) {
     parser.addOption({"media-session", "Select a real SMTC session (read only)", "id"});
     parser.addOption({"file", "Load an XML file on startup", "path"});
     parser.addOption({"page", "Initial page: player, logs, settings", "page", "player"});
+    parser.addOption({"source-tab", "Initial source tab: xml, online, cache (UI validation)", "tab", "xml"});
     parser.addOption({"theme", "Theme for isolated UI validation", "theme"});
     parser.addOption({"window-width", "Width for layout validation", "pixels"});
     parser.process(app);
@@ -109,7 +110,7 @@ int main(int argc, char* argv[]) {
         qputenv("QML_DISK_CACHE_PATH", paths.cache.toUtf8());
 #endif
         qmlRegisterType<DanmakuItem>("LocalDanmaku.Native", 1, 0, "DanmakuCanvas");
-        AppController controller(paths.data);
+        AppController controller(paths.data, nullptr, {}, paths.cache);
         if (parser.isSet("theme"))
             qobject_cast<SettingsStore*>(controller.settings())->setValue("theme", parser.value("theme"));
         if (parser.isSet("media-session"))
@@ -130,6 +131,7 @@ int main(int argc, char* argv[]) {
             app.exit(1);
         });
         engine.setInitialProperties({{"backend", QVariant::fromValue(&controller)},
+                                     {"sourceTab", parser.value("source-tab") == "online" ? 1 : parser.value("source-tab") == "cache" ? 2 : 0},
                                      {"selectedPage", parser.value("page") == "settings" ? 2
                                                       : parser.value("page") == "logs"   ? 1
                                                                                          : 0}});
@@ -168,7 +170,8 @@ int main(int argc, char* argv[]) {
             if (!parser.isSet("file"))
                 controller.beginDemo(count);
             const int duration =
-                parser.isSet("benchmark") ? std::clamp(parser.value("seconds").toInt(), 1, 300) * 1000 : 1500;
+                parser.isSet("benchmark") ? std::clamp(parser.value("seconds").toInt(), 1, 300) * 1000
+                    : parser.isSet("seconds") ? std::clamp(parser.value("seconds").toInt(), 1, 30) * 1000 : 1500;
             QTimer::singleShot(duration, &app, [&] {
                 bool passed = controller.position() > 0 && !qmlWarning && app.allWindows().size() >= 2;
                 if (parser.isSet("smoke-test") && !parser.isSet("file") &&

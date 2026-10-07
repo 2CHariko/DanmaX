@@ -95,9 +95,18 @@ in static-exe. These materials are not a completed component-by-component licens
     New-Item -ItemType Directory -Force $stage | Out-Null
     Copy-Item -LiteralPath $exe -Destination $stage
     Invoke-Checked (Join-Path $tools.Qt 'bin/windeployqt.exe') @('--release','--no-compiler-runtime','--verbose','0',
-        '--skip-plugin-types','qmltooling,generic,networkinformation,tls',
-        '--exclude-plugins','qdirect2d,qminimal', '--include-plugins','qoffscreen',
+        '--skip-plugin-types','qmltooling,generic,networkinformation',
+        '--exclude-plugins','qdirect2d,qminimal,qopensslbackend', '--include-plugins','qoffscreen,qschannelbackend',
         '--qmldir',(Get-ProjectPath 'qml'),(Join-Path $stage 'danmaku_app.exe'))
+    # Qt's deployment tool may still copy optional TLS backends. Use Windows
+    # Schannel only; never distribute a nonfunctional OpenSSL backend/runtime.
+    $unusedTlsBackend = Join-Path $stage 'tls/qopensslbackend.dll'
+    if (Test-Path -LiteralPath $unusedTlsBackend) {
+        if (-not ([IO.Path]::GetFullPath($unusedTlsBackend)).StartsWith($stage + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'TLS deployment cleanup escaped its new stage directory.'
+        }
+        Remove-Item -LiteralPath $unusedTlsBackend
+    }
     # Optional Controls imports make windeployqt copy every style. Keep Fluent,
     # its official Fusion -> Basic fallback, and the standard dialogs' dependencies.
     foreach ($style in @('Imagine','Material','Universal','Windows')) {

@@ -6,6 +6,7 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QGuiApplication>
+#include <QFontDatabase>
 #include <windows.h>
 #include <shobjidl.h>
 #include <shellapi.h>
@@ -247,6 +248,15 @@ int main(int argc, char** argv) {
     }
     {
         AppController controller(dir.path());
+        const auto families = controller.fontFamilies();
+        if (QGuiApplication::platformName() == "windows")
+            check(!families.isEmpty(), "Enumerate installed Windows font families");
+        auto sorted = families;
+        sorted.sort(Qt::CaseInsensitive);
+        check(families == sorted && controller.fontFamilies() == families,
+              "Font choices are sorted and stable on repeated reads");
+        for (const auto& family : families)
+            check(!QFontDatabase::isPrivateFamily(family), "Exclude internal font families from the selector");
         QEventLoop loop;
         bool success = false;
         QObject::connect(&controller, &AppController::loadCompleted, &loop, [&](bool ok) {
