@@ -1,0 +1,38 @@
+{
+  "purpose": "Isolated UI evaluation only; not a production dependency",
+  "libraries": [
+    {
+      "commit": "7e33a2f672d18239ef49ab960075b1137a1d18e7",
+      "license": "MIT at repository root; bundled QCustomPlot GPL-3.0-or-later requires separate review",
+      "archive": "fluent.zip",
+      "sha256": "CEDC4184A9922A0FB8B7BBB3D298EABF63ACD501B9817C2E3BA0126EE217B3D5",
+      "repository": "https://github.com/zhuzichu520/FluentUI",
+      "name": "FluentUI"
+    },
+    {
+      "commit": "36ad74c888a39c86568b1b8b566103f216c3aff5",
+      "license": "MIT",
+      "archive": "rin.zip",
+      "sha256": "328E8004C7B11DF5B32357B6BDD03CCBF6159C2252A04774848A886B9F78853A",
+      "repository": "https://github.com/RinLit-233-shiroko/Rin-UI",
+      "name": "RinUI"
+    }
+  ],
+  "qtVersion": "6.11.0",
+  "qtExtras": [
+    {
+      "name": "qt5compat",
+      "license": "Qt component LGPL/GPL/commercial as applicable",
+      "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6110/qt6_6110_msvc2022_64/qt.qt6.6110.addons.qt5compat.win64_msvc2022_64/6.11.0-0-202603180535qt5compat-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+      "sha256": "771813B769CE31C47BD2F9E9407BE94C17840F6CDE7A52E67BA8F94B5D7BB00B",
+      "upstreamSha1": "c75ac1d1e6dcad6d986de5f5eb95ead831d1ebe2"
+    },
+    {
+      "name": "qtshadertools",
+      "license": "Qt component LGPL/GPL/commercial as applicable",
+      "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6110/qt6_6110_msvc2022_64/qt.qt6.6110.addons.qtshadertools.win64_msvc2022_64/6.11.0-0-202603180535qtshadertools-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z",
+      "sha256": "C9063590AF08DF3FD0E8E8FD10F76B0705C4F2CB98BCEF95EB60949B45F096D3",
+      "upstreamSha1": "e443b5dfa8361acfc3a7e3aa4a345ee773d3b4cb"
+    }
+  ]
+}

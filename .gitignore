@@ -1,0 +1,20 @@
+# Project-local tools, caches, user data and generated output
+/.tools/
+/.deps/
+/.cache/
+/.local/
+/out/
+/CMakeUserPresets.json
+/.vs/
+/.idea/
+/.pi/
+
+# Historical Python runtime and generated files
+**/__pycache__/
+**/.venv/
+**/.uv-cache/
+**/logs/
+*.py[cod]
+*.user
+*.swp
+*~

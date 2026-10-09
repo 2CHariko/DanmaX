@@ -1,0 +1,10 @@
+{
+  "purpose": "Native Windows 11 frameless window, title bar customization, and Snap Layouts integration",
+  "name": "QWindowKit",
+  "version": "1.5.0",
+  "commit": "267a0028e51ab13deba9bfc850c4a340a14ff2d7",
+  "repository": "https://github.com/stdware/qwindowkit",
+  "license": "Apache-2.0",
+  "archive": "qwindowkit-1.5.0.zip",
+  "sha256": "6E3F663154E3FE252D687663FE786F063187997E4A26BA01F8613AC03658EBC7"
+}

@@ -1,0 +1,166 @@
+{
+  "commit": "cd332ec1f90cda2fad16f86754f8da52f1e9ab30",
+  "license": "MIT",
+  "repository": "https://github.com/microsoft/fluentui-system-icons",
+  "assets": [
+    {
+      "sha256": "0666c1378f63d4d5c32f91b4107086bc14799dff306027976be591da8843ae45",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Play/SVG/ic_fluent_play_20_regular.svg",
+      "file": "play.svg"
+    },
+    {
+      "sha256": "4b57105ae98074d41fea28c7cee11670c78d2c739c97e31c344c89deaddc5304",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Text%20Bullet%20List/SVG/ic_fluent_text_bullet_list_20_regular.svg",
+      "file": "logs.svg"
+    },
+    {
+      "sha256": "ac5bdb808bed91dc8c0b6f346e7a0a1ee1901fc4b50f5641987498a65e200685",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Settings/SVG/ic_fluent_settings_20_regular.svg",
+      "file": "settings.svg"
+    },
+    {
+      "sha256": "56cb3f544124a67c79a5fa021ee35bb5488403a840bac1ae3291c5f6d71abccd",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Chevron%20Down/SVG/ic_fluent_chevron_down_20_regular.svg",
+      "file": "chevron-down.svg"
+    },
+    {
+      "sha256": "5d2c30dd49be34bcba7daaf1a46ff9c18db1c301d4433a0ec85e9255c50dec60",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Chevron%20Up/SVG/ic_fluent_chevron_up_20_regular.svg",
+      "file": "chevron-up.svg"
+    },
+    {
+      "file": "appearance.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Paint%20Brush/SVG/ic_fluent_paint_brush_20_regular.svg",
+      "sha256": "eabda6155fed08da0b6d9e726d116e77bf2fd7d5809893508b71849bcee12bf4"
+    },
+    {
+      "file": "font.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Text%20Font/SVG/ic_fluent_text_font_20_regular.svg",
+      "sha256": "d0385262659f28012cc9c447add969876a64a41900ad8fabdc7dce326cc9df40"
+    },
+    {
+      "file": "window.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Window/SVG/ic_fluent_window_20_regular.svg",
+      "sha256": "98b90c9451284d6037e27f1c4c6f97589eb29a6521856dfd03d225f0b399b4f5"
+    },
+    {
+      "file": "cloud.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Cloud/SVG/ic_fluent_cloud_20_regular.svg",
+      "sha256": "dcf611a7cbd5202d761523b90b17366ff6f9a3b5119a5e63228a594dc01c8b0c"
+    },
+    {
+      "file": "info.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Info/SVG/ic_fluent_info_20_regular.svg",
+      "sha256": "498bc2a24fb99480e7565b502467a4cc8e967b41b0c374c1283a68fc0da73b7a"
+    },
+    {
+      "file": "timer.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Timer/SVG/ic_fluent_timer_20_regular.svg",
+      "sha256": "b58aa4351921540299bfa9626bd64af21495f5d00e97f1c14396b597c40699ac"
+    },
+    {
+      "file": "desktop.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Desktop/SVG/ic_fluent_desktop_20_regular.svg",
+      "sha256": "07c553f0bc7c79deec787f4c8eda5276873f80241a7970e38cba88620ba9f046"
+    }
+  ],
+  "derivedAssets": [
+    {
+      "sha256": "7cf5e97f511f46384c963cf9d3f91f9253374f131ca54b3db17ecb61879dcada",
+      "file": "appearance-dark.png"
+    },
+    {
+      "sha256": "9d3c8ee5920d9df850b4656da2a2135e98d003da1917d6dc3f6687649e00be2b",
+      "file": "appearance.png"
+    },
+    {
+      "sha256": "b0cc23322a66bcf89c1fcfdd46219866a541930b0a3dfdd4b9c3ea5f51345e41",
+      "file": "chevron-down-dark.png"
+    },
+    {
+      "sha256": "620855e0f7ea588a2092e063be4f1b5a925f1abdeb0ede9d10dbb6a5c1bc6c1e",
+      "file": "chevron-down.png"
+    },
+    {
+      "sha256": "5bcecdceec098bdb91604a200daf2b69c67b94dd3de14914ef8f46d1cbf583af",
+      "file": "chevron-up-dark.png"
+    },
+    {
+      "sha256": "b6b59d19fd070f23244253839e766354b10381f6fad74146a01b7354e8df65b4",
+      "file": "chevron-up.png"
+    },
+    {
+      "sha256": "ba1c7504b74dc7f2e0fdfcb0f91b0348209ca5eb938058fe9c3b99c17cc0ad30",
+      "file": "cloud-dark.png"
+    },
+    {
+      "sha256": "94c5a57c10e58791d44a9354b6b79c714b2e780ad5449d43e9d7c137fc33856a",
+      "file": "cloud.png"
+    },
+    {
+      "sha256": "c79421a63093760e8f6e3f1fe38c29b3fb6e70d4f027024d6a87f5a94cb6e5aa",
+      "file": "desktop-dark.png"
+    },
+    {
+      "sha256": "aff204814e343628a49ce9b533c56c04c5c36d6fb5f97c287766973891f4f696",
+      "file": "desktop.png"
+    },
+    {
+      "sha256": "cec98a40553cc0319af81b741f1c341474482241d67624efa031f58261e07741",
+      "file": "font-dark.png"
+    },
+    {
+      "sha256": "c327f07044a6f3e23a0da06386062ecf24510990398d3447eeb1979c5a503a44",
+      "file": "font.png"
+    },
+    {
+      "sha256": "8a3e1a7e3f3b6bdcf15cafc94f5f1ef2eff1e11b67d7d96f063e37c6694302c2",
+      "file": "info-dark.png"
+    },
+    {
+      "sha256": "1d1a0d52ee9ce80734f8b4bbddfc74eaa068144b0689da01dcb9accfb76c9189",
+      "file": "info.png"
+    },
+    {
+      "sha256": "e6a8598400799bc1955650b10e017270447a341aa03b6e08d59c1fd0c9942ee8",
+      "file": "logs-dark.png"
+    },
+    {
+      "sha256": "dc5bb3dc317634f85fe85c173af0c0e5990c43cced96634bf6ef97814fa59983",
+      "file": "logs.png"
+    },
+    {
+      "sha256": "a1af78f920c7ac42c577f9f47f0e3b103d570decef5d4b9f52251c8db4153231",
+      "file": "play-dark.png"
+    },
+    {
+      "sha256": "b31fe4530a024d2f3e7cd51b9764674cb230add0e99c577b84c4ea7c7e9d98ff",
+      "file": "play.png"
+    },
+    {
+      "sha256": "57e1384243b1e521733d94d2f4419a3ae84c9102c24911a385db9f2f2486cc72",
+      "file": "settings-dark.png"
+    },
+    {
+      "sha256": "153cde039cb28493176675d426174bbeed65d01dd61033a7f2883634fa45915b",
+      "file": "settings.png"
+    },
+    {
+      "sha256": "f525a6b9b4fdbf4495991a83d72d53ea011ecb815cac2069f622d7f8ff5185f1",
+      "file": "timer-dark.png"
+    },
+    {
+      "sha256": "29be36ebd4596a568d46eddb3133345cc77e2446f4e7713d89f26f7eb7027310",
+      "file": "timer.png"
+    },
+    {
+      "sha256": "67c580dad58d9a5a1d45b189d0a92d28d436603cff7e03dde9fceb408d8f3841",
+      "file": "window-dark.png"
+    },
+    {
+      "sha256": "ac3ea4fd59ea8e0050504b29f854a35144f52b05e834cfcd9ff3d95de4c63bf9",
+      "file": "window.png"
+    }
+  ],
+  "rendering": "sharp 0.35.5; 60x60 PNG; dark=negate RGB preserving alpha"
+}
