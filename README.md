@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/2CHariko/DanmaX/releases"><img src="https://img.shields.io/badge/Release-v0.2.3-blue.svg?style=flat-square" alt="Release: v0.2.3" /></a>
   <img src="https://img.shields.io/badge/Language-C%2B%2B20-blue.svg?style=flat-square" alt="C++20" />
   <img src="https://img.shields.io/badge/GUI-Qt%206.11%20Quick-41CD52.svg?style=flat-square" alt="Qt 6.11" />
   <img src="https://img.shields.io/badge/Platform-Windows%20x64-0078D6.svg?style=flat-square" alt="Windows x64" />
@@ -78,8 +79,8 @@ DanmaX 遵循高内聚、低耦合的分层架构设计：
 
 ### 最终用户 (End Users)
 1. 从 [Releases 页面](https://github.com/2CHariko/DanmaX/releases) 下载最新版本的发布文件：
-   - **`DanmaX-v0.2.2-windows-x64.zip`**：带外壳文件夹的免安装静态单文件便携压缩包，解压后直接运行 `DanmaX.exe`。
-   - **`DanmaX-v0.2.2-windows-x64-portable.exe`**：无需安装、无需解压、纯静态单 EXE 便携版，直接双击运行。
+   - **`DanmaX-v0.2.3-windows-x64.zip`**：带外壳文件夹的免安装静态单文件便携压缩包，解压后直接运行 `DanmaX.exe`。
+   - **`DanmaX-v0.2.3-windows-x64-portable.exe`**：无需安装、无需解压、纯静态单 EXE 便携版，直接双击运行。
 2. 运行后，程序将在同级目录生成全中文注释的 `settings.ini` 配置文件与日志。
 3. **加载弹幕**：
    - *本地文件*：在“播放”页切换到“本地 XML”，点击“浏览文件...”选择弹幕后点击“加载弹幕”。

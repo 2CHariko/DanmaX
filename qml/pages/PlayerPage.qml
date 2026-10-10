@@ -292,42 +292,29 @@ PageFrame {
                     }
                 }
 
-                // 底行：性能指标监控胶囊与折叠
+                // 底行：性能指标监控胶囊
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 12
 
-                    Flow {
-                        Layout.fillWidth: true
-                        spacing: 8
+                    Rectangle {
+                        radius: 11
+                        implicitHeight: 22
+                        implicitWidth: metricActiveLabel.implicitWidth + 16
+                        color: Ui.dark ? Qt.rgba(1, 1, 1, 0.06) : Qt.rgba(0, 0, 0, 0.05)
+                        border.width: 1
+                        border.color: Ui.cardBorder
 
-                        Rectangle {
-                            radius: 11
-                            implicitHeight: 22
-                            implicitWidth: metricActiveLabel.implicitWidth + 16
-                            color: Ui.dark ? Qt.rgba(1, 1, 1, 0.06) : Qt.rgba(0, 0, 0, 0.05)
-                            border.width: 1
-                            border.color: Ui.cardBorder
-
-                            Label {
-                                id: metricActiveLabel
-                                anchors.centerIn: parent
-                                text: I18n.format(I18n.player.runtimeDetailsFormat, page.backend.metrics.active || 0, page.backend.metrics.dropped || 0, Number(page.backend.metrics.memoryMiB || 0).toFixed(1))
-                                font.pixelSize: Ui.captionSize
-                                color: Ui.secondaryText
-                            }
-                        }
-                    }
-
-                    Disclosure {
-                        title: I18n.player.runtimeDetailsTitle
                         Label {
-                            Layout.fillWidth: true
-                            wrapMode: Text.WordWrap
+                            id: metricActiveLabel
+                            anchors.centerIn: parent
                             text: I18n.format(I18n.player.runtimeDetailsFormat, page.backend.metrics.active || 0, page.backend.metrics.dropped || 0, Number(page.backend.metrics.memoryMiB || 0).toFixed(1))
+                            font.pixelSize: Ui.captionSize
                             color: Ui.secondaryText
                         }
                     }
+
+                    Item { Layout.fillWidth: true }
                 }
             }
         }
@@ -357,14 +344,15 @@ PageFrame {
             Layout.fillWidth: true
             spacing: 10
 
-            // 已载入弹幕信息微型卡片
+            // 状态 A：已载入弹幕时，展示精致的媒体就绪卡片（完全收起输入框）
             Control {
+                id: loadedDanmakuCard
                 visible: page.backend.sourceTitle.length > 0 || page.backend.total > 0
                 Layout.fillWidth: true
                 leftPadding: Ui.cardPaddingX
                 rightPadding: Ui.cardPaddingX
-                topPadding: 12
-                bottomPadding: 12
+                topPadding: 14
+                bottomPadding: 14
 
                 background: Rectangle {
                     radius: Ui.cardRadius
@@ -374,74 +362,121 @@ PageFrame {
                 }
 
                 contentItem: RowLayout {
-                    spacing: 12
+                    spacing: 14
 
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 2
+                        spacing: 4
+
                         Label {
                             visible: text.length > 0
                             text: page.backend.sourceTitle
                             font.weight: Font.DemiBold
                             font.pixelSize: Ui.bodySize
+                            color: Ui.textColor
                             Layout.fillWidth: true
                             wrapMode: Text.WrapAnywhere
                             Accessible.name: I18n.player.currentDanmakuPrefix + text
                         }
-                        Label {
-                            text: I18n.format(I18n.player.loadedCountFormat, page.backend.total)
-                            font.pixelSize: Ui.captionSize
-                            color: Ui.secondaryText
+
+                        RowLayout {
+                            spacing: 8
+
+                            Rectangle {
+                                radius: 9
+                                implicitHeight: 18
+                                implicitWidth: loadedCountBadge.implicitWidth + 12
+                                color: Ui.dark ? Qt.rgba(0.42, 0.80, 0.37, 0.15) : Qt.rgba(0.06, 0.49, 0.06, 0.10)
+                                border.width: 1
+                                border.color: Ui.dark ? "#6CCB5F" : "#107C10"
+
+                                Label {
+                                    id: loadedCountBadge
+                                    anchors.centerIn: parent
+                                    text: I18n.format(I18n.player.loadedCountFormat, page.backend.total)
+                                    font.pixelSize: Ui.captionSize - 1
+                                    color: Ui.dark ? "#6CCB5F" : "#107C10"
+                                }
+                            }
+
+                            Label {
+                                text: page.backend.filePath.length > 0 ? page.backend.filePath : I18n.player.localSectionTitle
+                                font.pixelSize: Ui.captionSize
+                                color: Ui.secondaryText
+                                elide: Text.ElideMiddle
+                                Layout.fillWidth: true
+                            }
                         }
                     }
 
-                    Button {
-                        text: I18n.player.changeDanmakuBtn
-                        onClicked: filePicker.open()
+                    RowLayout {
+                        spacing: 8
+
+                        Button {
+                            text: I18n.player.changeDanmakuBtn
+                            onClicked: filePicker.open()
+                        }
+
+                        Button {
+                            text: I18n.player.clearDanmakuBtn
+                            onClicked: {
+                                page.backend.stop()
+                                if (pathInput) pathInput.text = ""
+                            }
+                        }
                     }
                 }
             }
 
-            // 文件路径选择输入行
-            GridLayout {
+            // 状态 B：未载入弹幕时，展示文件路径选择与载入操作
+            ColumnLayout {
+                visible: !(page.backend.sourceTitle.length > 0 || page.backend.total > 0)
                 Layout.fillWidth: true
-                columns: width >= 600 ? 2 : 1
-                columnSpacing: 8
-                rowSpacing: 8
+                spacing: 8
 
-                TextField {
-                    id: pathInput
-                    objectName: "danmakuPath"
+                GridLayout {
                     Layout.fillWidth: true
-                    text: page.backend.filePath
-                    placeholderText: I18n.player.pathPlaceholder
-                    Accessible.name: I18n.player.pathAccessible
-                    onAccepted: if (!page.backend.loading) page.backend.loadFile(text)
+                    columns: width >= 600 ? 2 : 1
+                    columnSpacing: 8
+                    rowSpacing: 8
+
+                    TextField {
+                        id: pathInput
+                        objectName: "danmakuPath"
+                        Layout.fillWidth: true
+                        text: page.backend.filePath
+                        placeholderText: I18n.player.pathPlaceholder
+                        Accessible.name: I18n.player.pathAccessible
+                        onAccepted: if (!page.backend.loading) page.backend.loadFile(text)
+                    }
+
+                    Flow {
+                        Layout.preferredWidth: 216
+                        Layout.fillWidth: parent.columns === 1
+                        spacing: 8
+
+                        Button {
+                            text: I18n.player.browseFile
+                            onClicked: filePicker.open()
+                        }
+
+                        Button {
+                            text: page.backend.loading ? I18n.player.cancelLoad : I18n.player.loadDanmaku
+                            highlighted: pathInput.text.trim().length > 0
+                            enabled: page.backend.loading || pathInput.text.trim().length > 0
+                            onClicked: page.backend.loading ? page.backend.cancelLoad() : page.backend.loadFile(pathInput.text)
+                        }
+                    }
                 }
 
-                Flow {
-                    Layout.preferredWidth: 216
-                    Layout.fillWidth: parent.columns === 1
-                    spacing: 8
-                    Button {
-                        text: I18n.player.browseFile
-                        onClicked: filePicker.open()
-                    }
-                    Button {
-                        text: page.backend.loading ? I18n.player.cancelLoad : I18n.player.loadDanmaku
-                        enabled: page.backend.loading || pathInput.text.trim().length > 0
-                        onClicked: page.backend.loading ? page.backend.cancelLoad() : page.backend.loadFile(pathInput.text)
-                    }
+                ProgressBar {
+                    visible: page.backend.loading
+                    Layout.fillWidth: true
+                    indeterminate: page.backend.loadProgress < 0
+                    from: 0
+                    to: 100
+                    value: Math.max(0, page.backend.loadProgress)
                 }
-            }
-
-            ProgressBar {
-                visible: page.backend.loading
-                Layout.fillWidth: true
-                indeterminate: page.backend.loadProgress < 0
-                from: 0
-                to: 100
-                value: Math.max(0, page.backend.loadProgress)
             }
         }
 
