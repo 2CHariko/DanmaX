@@ -33,6 +33,9 @@ QtObject {
     readonly property int captionSize: Math.round(12 * textScale)
     readonly property int cardGap: 4
     readonly property int cardRadius: 6
+    readonly property int cardMinHeight: Math.round(70 * textScale)
+    readonly property int cardPaddingX: 16
+    readonly property int cardPaddingY: 16
     readonly property int pageMarginWide: 32
     readonly property int pageMarginNarrow: 16
 }

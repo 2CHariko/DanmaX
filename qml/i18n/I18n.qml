@@ -272,9 +272,12 @@ QtObject {
         logToFileDesc: "单文件 2 MiB，保留一份轮转备份。",
         logToFileAccessible: "写入日志文件",
 
-        // 配置与关于
-        aboutSection: "配置与关于",
+        // 重置与管理
+        resetSection: "重置",
+        resetBtn: "恢复默认",
         resetDefaultsBtn: "恢复默认设置",
+        resetDefaultsDesc: "将所有选项还原为初始预设值，原弹幕文件不会删除。",
+        aboutSection: "配置与关于",
         iniHint: "配置使用带中文说明的 settings.ini。手动编辑前请退出程序；旧配置不导入。",
         aboutDescFormat: "DanmaX %1 · C++20 / Qt 6.11\n便携版的配置和日志保存在程序旁；开发运行使用指定数据目录。",
         resetDialogTitle: "恢复默认设置？",

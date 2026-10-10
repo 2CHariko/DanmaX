@@ -8,7 +8,7 @@ ScrollView {
     id: page
     property string title
     property string description
-    default property alias entries: body.data
+    default property alias entries: contentArea.data
     readonly property alias verticalBar: verticalBar
     readonly property alias bodyItem: body
     clip: true
@@ -33,12 +33,21 @@ ScrollView {
     ColumnLayout {
         id: body
         width: page.availableWidth
-        spacing: Ui.sectionGap
+        spacing: 0
         ColumnLayout {
+            id: contentArea
             Layout.fillWidth: true
-            spacing: 8
-            Label { id: heading; text: page.title; font.pixelSize: Ui.titleSize; font.weight: Font.DemiBold; color: Ui.textColor; Accessible.role: Accessible.Heading }
-            Label { visible: text.length > 0; text: page.description; color: Ui.secondaryText; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            spacing: Ui.sectionGap
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Label { id: heading; text: page.title; font.pixelSize: Ui.titleSize; font.weight: Font.DemiBold; color: Ui.textColor; Accessible.role: Accessible.Heading }
+                Label { visible: text.length > 0; text: page.description; color: Ui.secondaryText; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            }
+        }
+        Item {
+            Layout.fillWidth: true
+            Layout.preferredHeight: page.width < Ui.expandedNavigationWidth ? Ui.pageMarginNarrow : Ui.pagePadding
         }
     }
 }

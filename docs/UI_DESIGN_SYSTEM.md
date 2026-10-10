@@ -8,9 +8,9 @@
 - 按钮、开关、输入框、下拉主体、标准选项、滑块、标签页、对话框、滚动条保持官方默认背景、内容实现、字体、圆角和交互状态。不访问 Qt 私有样式 API。
 - Qt 6.11 的纯文字 TabButton 通过 icon.color 取得标签颜色，而默认值透明；允许将公开 icon.color 绑定 palette.buttonText，保留默认内容与背景。
 - 导航侧边栏采用标准 ItemDelegate 并在所有窗口宽度下常驻显示（窄屏收缩为纯图标模式），通过 1 像素垂直分隔线与主内容区清晰隔离；选中的导航项呈现醒目的左侧主题色胶囊指示条（Pill Indicator）。
-- 内容分组与设置面板统一以关于页面为基准采用卡片体系：SettingsSection 采用外置独立分组标题 + 半透明微细描边圆角卡片（Control + Rectangle 背景），四周统一 16px 栅格内衬，废除原生 GroupBox 的厚重死黑底块。SettingsRow 仅组合 Label、编辑控件和响应式布局，不提供额外背景与边框。
+- 内容分组与设置面板统一以 WinUI 3 原生卡片体系为基准：SettingsRow 升级为独立设置条目卡片（SettingsCard），ActionCard、SettingsRow 统一对接 Ui.cardMinHeight（70px）与 Ui.cardPaddingX/Y（16px 内衬），拥有独立的圆角、半透明背景与微细描边，卡片间以 4px 微间距（Ui.cardGap）垂直排列；SettingsSection 作为轻量分组容器，提供外置分组标题与说明（card 为 false 时无外层大底板，仅在复合控制面板上显式设为 true 提供整体卡片底板）。
 - 文字缓存、诊断和关于默认展示；仅手动应用 ID、运行详情等可选内容使用标准 checkable Button 控制显隐。Disclosure 不模拟 Expander 外观，收起内部焦点返回按钮，隐藏内容不接受操作。
-- SettingsSection 为全站统一的卡片容器组件（外置标题 + 半透明卡片主体）；ActionCard 提供规范的 Fluent 交互操作卡片；PageFrame 负责页面标题、自适应可用宽度与统一滚动机制。保留公共布局组件避免页面重复代码，不以文件数量衡量自定义程度。
+- SettingsRow/ActionCard 共同构成全站规范的 Fluent 卡片项；SettingsSection 统一负责分组标题、说明与卡片流编排；PageFrame 负责页面标题、自适应可用宽度与统一滚动机制。保留公共布局组件避免页面重复代码，不以文件数量衡量自定义程度。
 
 ## 主题、材质和布局
 

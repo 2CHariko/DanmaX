@@ -12,11 +12,11 @@ ItemDelegate {
     signal actionTriggered()
 
     Layout.fillWidth: true
-    leftPadding: 16
-    rightPadding: 16
-    topPadding: 10
-    bottomPadding: 10
-    implicitHeight: Math.max(52, contentLayout.implicitHeight + topPadding + bottomPadding)
+    leftPadding: Ui.cardPaddingX
+    rightPadding: Ui.cardPaddingX
+    topPadding: Ui.cardPaddingY
+    bottomPadding: Ui.cardPaddingY
+    implicitHeight: Math.max(Ui.cardMinHeight, contentLayout.implicitHeight + topPadding + bottomPadding)
 
     Accessible.role: Accessible.Button
     Accessible.name: title + (description.length > 0 ? " " + description : "")

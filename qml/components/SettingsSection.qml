@@ -6,30 +6,49 @@ import "../theme"
 ColumnLayout {
     id: section
     property string title: ""
+    property string description: ""
+    property bool card: false
     default property alias entries: contentArea.data
     Layout.fillWidth: true
     spacing: 8
 
-    // 1. 外置独立分组小标题（与关于页面“反馈”小标题完全统一）
-    Label {
-        text: section.title
-        visible: section.title.length > 0
-        font.pixelSize: Ui.sectionHeaderSize
-        font.weight: Font.DemiBold
-        color: Ui.textColor
+    // 1. 外置独立分组小标题与说明
+    ColumnLayout {
         Layout.fillWidth: true
+        spacing: 4
+        visible: section.title.length > 0 || section.description.length > 0
+
+        Label {
+            text: section.title
+            visible: section.title.length > 0
+            font.pixelSize: Ui.sectionHeaderSize
+            font.weight: Font.DemiBold
+            color: Ui.textColor
+            Layout.fillWidth: true
+        }
+
+        Label {
+            text: section.description
+            visible: section.description.length > 0
+            font.pixelSize: Ui.captionSize
+            color: Ui.secondaryText
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+        }
     }
 
-    // 2. 与关于页完全一致的 Fluent 卡片容器（半透明底色 + 1px 细微边框 + 6px 圆角）
+    // 2. 内容区域容器（根据 card 属性决定是轻量垂直流还是大卡片底板）
     Control {
         id: cardContainer
         Layout.fillWidth: true
-        leftPadding: 16
-        rightPadding: 16
-        topPadding: 16
-        bottomPadding: 16
+        leftPadding: section.card ? Ui.cardPaddingX : 0
+        rightPadding: section.card ? Ui.cardPaddingX : 0
+        topPadding: section.card ? Ui.cardPaddingY : 0
+        bottomPadding: section.card ? Ui.cardPaddingY : 0
 
         background: Rectangle {
+            visible: section.card
+            opacity: section.card ? 1 : 0
             radius: Ui.cardRadius
             color: Ui.cardBackground
             border.width: 1
@@ -39,7 +58,7 @@ ColumnLayout {
         contentItem: ColumnLayout {
             id: contentArea
             width: parent.width
-            spacing: 16
+            spacing: section.card ? 16 : Ui.cardGap
         }
     }
 }

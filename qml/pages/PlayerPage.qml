@@ -22,6 +22,7 @@ PageFrame {
         return (seconds >= 3600 ? Math.floor(minutes / 60) + ":" + String(minutes % 60).padStart(2, "0") : String(minutes).padStart(2, "0")) + ":" + String(seconds % 60).padStart(2, "0")
     }
     SettingsSection {
+        card: true
         title: I18n.player.sourceTabsAccessible
         TabBar {
             id: sourceTabs
@@ -76,6 +77,7 @@ PageFrame {
         }
     }
     SettingsSection {
+        card: true
         title: I18n.player.modeSectionTitle
         Flow {
             Layout.fillWidth: true
@@ -119,6 +121,7 @@ PageFrame {
         Label { visible: page.effectiveManual; text: I18n.player.manualHint; color: Ui.secondaryText; wrapMode: Text.WordWrap; Layout.fillWidth: true }
     }
     SettingsSection {
+        card: true
         title: I18n.player.controlSectionTitle
         Label { text: page.backend.status; wrapMode: Text.WordWrap; Layout.fillWidth: true; Accessible.name: I18n.player.statusAccessiblePrefix + text }
         Label { visible: !page.backend.running && text.length > 0; text: page.blockedReason; color: Ui.secondaryText; wrapMode: Text.WordWrap; Layout.fillWidth: true }

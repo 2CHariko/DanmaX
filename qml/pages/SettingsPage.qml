@@ -79,11 +79,9 @@ PageFrame {
     }
 
     SettingsSection {
-        title: I18n.settings.onlineSection; Layout.fillWidth: true
-        Label {
-            text: I18n.settings.onlineDesc
-            Layout.fillWidth: true; wrapMode: Text.WordWrap
-        }
+        title: I18n.settings.onlineSection
+        description: I18n.settings.onlineDesc
+        Layout.fillWidth: true
         ListModel { id: serverModel }
         QtObject {
             id: serverEditor
@@ -148,6 +146,7 @@ PageFrame {
             model: serverModel
             SettingsSection {
                 id: serverRow
+                card: true
                 required property int index
                 required property string address
                 required property string issue
@@ -223,13 +222,17 @@ PageFrame {
     }
 
     SettingsSection {
-        title: I18n.settings.aboutSection; Layout.fillWidth: true
-        Flow { Layout.fillWidth: true; spacing: 8
-            Button { text: I18n.settings.resetDefaultsBtn; onClicked: resetDialog.open() }
+        title: I18n.settings.resetSection
+        Layout.fillWidth: true
+        SettingsRow {
+            title: I18n.settings.resetDefaultsBtn
+            description: I18n.settings.resetDefaultsDesc
+            Button {
+                text: I18n.settings.resetBtn
+                Accessible.name: I18n.settings.resetDefaultsBtn
+                onClicked: resetDialog.open()
+            }
         }
-        Label { text: "DanmaX " + Qt.application.version; font.bold: true }
-        Label { text: I18n.settings.iniHint; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-        Label { text: I18n.format(I18n.settings.aboutDescFormat, Qt.application.version); wrapMode: Text.WordWrap; Layout.fillWidth: true }
     }
 
     Dialog {
