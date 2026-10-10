@@ -356,10 +356,11 @@ ApplicationWindow {
         editServer("danmakuServerInput1", defaults.first());
         QCOMPARE(settings->values()["danmakuServers"].toStringList(), defaults);
         editServer("danmakuServerInput1", "https://backup.test");
+        activate(find("saveServersBtn"));
         QCOMPARE(settings->values()["danmakuServers"].toStringList().size(), 2);
-        auto* onlineFrame = find("danmakuServerInput")->parentItem();
-        while (onlineFrame && !onlineFrame->property("bodyItem").isValid()) onlineFrame = onlineFrame->parentItem();
+        auto* onlineFrame = find("settingsPage");
         QVERIFY(onlineFrame);
+        QVERIFY(QMetaObject::invokeMethod(onlineFrame, "focusOnlineSettings"));
         for (const auto& theme : {QString("light"), QString("dark")}) {
             settings->setValue("theme", theme);
             window->resize(520, 640);
@@ -368,18 +369,23 @@ ApplicationWindow {
             QVERIFY(window->grabWindow().save(output + "/online-servers-" + theme + ".png"));
         }
         activate(find("serverUp1"));
+        activate(find("saveServersBtn"));
         QCOMPARE(settings->values()["danmakuServers"].toStringList().first(), QString("https://backup.test"));
+        QVERIFY(QMetaObject::invokeMethod(onlineFrame, "focusOnlineSettings"));
         activate(find("serverDown0"));
+        activate(find("saveServersBtn"));
         QCOMPARE(settings->values()["danmakuServers"].toStringList().first(), defaults.first());
+        QVERIFY(QMetaObject::invokeMethod(onlineFrame, "focusOnlineSettings"));
         activate(find("serverRemove1"));
-        QCOMPARE(settings->values()["danmakuServers"].toStringList(), defaults);
         activate(find("serverRemove0"));
+        activate(find("saveServersBtn"));
         QVERIFY(settings->values()["danmakuServers"].toStringList().isEmpty());
-        QVERIFY(find("addDanmakuServer")->hasActiveFocus());
         QVERIFY(QMetaObject::invokeMethod(onlineFrame, "focusOnlineSettings"));
         QVERIFY(find("addDanmakuServer")->hasActiveFocus());
         QVERIFY(settings->setDanmakuServers(defaults));
+        QVERIFY(QMetaObject::invokeMethod(onlineFrame, "focusOnlineSettings"));
         QTRY_VERIFY(find("danmakuServerInput"));
+        activate(find("cancelServersBtn"));
         window->setProperty("selectedPage", 1);
         logs->clear();
         QTRY_COMPARE(find("logEmptyState")->property("text").toString(), QString::fromUtf8("暂无日志"));
@@ -499,3 +505,4 @@ int main(int argc, char** argv) {
     return QTest::qExec(&tests, argc, argv);
 }
 #include "UiWorkflowTests.moc"
+

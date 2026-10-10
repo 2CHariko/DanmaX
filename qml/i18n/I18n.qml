@@ -233,6 +233,11 @@ QtObject {
 
         // 在线弹幕
         onlineSection: "在线弹幕",
+        onlineServersTitle: "在线弹幕服务器",
+        onlineServersDescFormat: "已配置 %1 个服务地址（首选：%2）",
+        onlineServersEmptyDesc: "未配置在线弹幕服务地址",
+        manageServersBtn: "管理服务...",
+        serverDialogTitle: "管理在线弹幕服务器",
         onlineDesc: "按列表顺序尝试；失败或无结果时回退。各服务须共享弹弹play动画和剧集 ID。",
         serverPlaceholder: "https://服务器/路径前缀",
         serverAccessibleFormat: "在线弹幕服务地址 %1",
@@ -243,9 +248,16 @@ QtObject {
         removeBtn: "删除",
         removeAccessibleFormat: "删除服务 %1",
         serverEmptyIssue: "地址不能为空；不需要此项时请删除。",
-        serverSaveIssue: "地址无效、重复或保存失败，请检查地址及配置错误提示。",
+        serverInvalidProtocolIssue: "协议无效，必须以 http:// 或 https:// 开头。",
+        serverInvalidHostIssue: "地址格式无效，不能包含查询参数 (?)、锚点 (#) 或特殊字符。",
+        serverDuplicateIssue: "该服务地址与列表中其他项重复。",
+        serverSaveIssue: "地址保存失败，请检查配置错误提示。",
         addServerBtn: "添加服务地址",
+        saveBtn: "保存",
+        cancelBtn: "取消",
         onlineBottomHint: "缓存长期保留，可在播放页离线选择、重新下载或删除；本版本不提供在线账号登录。",
+        serverEmptyPlaceholderTitle: "未配置任何在线弹幕服务器",
+        serverEmptyPlaceholderDesc: "点击下方按钮添加第三方服务地址",
 
         // 文字缓存
         cacheSection: "文字缓存",

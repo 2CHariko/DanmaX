@@ -12,7 +12,15 @@ PageFrame {
     readonly property var values: backend.settings.values
     title: I18n.settings.title
     description: I18n.settings.description
-    function focusOnlineSettings() { reveal(serverRows.count ? serverRows.itemAt(0).input : addServerButton) }
+    function focusOnlineSettings() {
+        serverEditor.reload()
+        serverDialog.open()
+        if (serverRows.count > 0 && serverRows.itemAt(0)) {
+            serverRows.itemAt(0).input.forceActiveFocus()
+        } else if (addServerButton) {
+            addServerButton.forceActiveFocus()
+        }
+    }
     function put(key, value) { backend.settings.setValue(key, value) }
 
     SettingsSection {
@@ -78,123 +86,419 @@ PageFrame {
         SettingsRow { title: I18n.settings.foregroundOnlyTitle; description: I18n.settings.foregroundOnlyDesc; Switch { checked: page.values.foregroundOnly; Accessible.name: I18n.settings.foregroundOnlyAccessible; onToggled: page.put("foregroundOnly", checked) } }
     }
 
-    SettingsSection {
-        title: I18n.settings.onlineSection
-        description: I18n.settings.onlineDesc
-        Layout.fillWidth: true
-        ListModel { id: serverModel }
-        QtObject {
-            id: serverEditor
-            property bool committing: false
-            property string snapshot: ""
-            function reload() {
-                const encoded = JSON.stringify(page.values.danmakuServers)
-                if (committing || encoded === snapshot) return
-                snapshot = encoded
-                serverModel.clear()
-                for (const address of page.values.danmakuServers)
-                    serverModel.append({address: address, saved: address, issue: ""})
+    ListModel { id: serverModel }
+    QtObject {
+        id: serverEditor
+        property bool committing: false
+        property string initialSnapshot: ""
+        property int revision: 0
+
+        function currentEncoded() {
+            const list = []
+            for (let i = 0; i < serverModel.count; ++i)
+                list.push(serverModel.get(i).address.trim())
+            return JSON.stringify(list)
+        }
+
+        readonly property bool isDirty: {
+            revision
+            return currentEncoded() !== initialSnapshot
+        }
+
+        function reload() {
+            initialSnapshot = JSON.stringify(page.values.danmakuServers)
+            serverModel.clear()
+            for (const address of page.values.danmakuServers)
+                serverModel.append({address: address, saved: address, issue: ""})
+            revision++
+        }
+
+        function syncLiveInputs() {
+            for (let i = 0; i < serverRows.count; ++i) {
+                const row = serverRows.itemAt(i)
+                if (row && row.input && i < serverModel.count) {
+                    const text = row.input.text
+                    if (serverModel.get(i).address !== text)
+                        serverModel.setProperty(i, "address", text)
+                }
             }
-            function save() {
-                const addresses = []
+        }
+        function canonicalAddress(raw) {
+            let s = raw.trim().toLowerCase()
+            while (s.endsWith("/")) s = s.slice(0, -1)
+            return s
+        }
+
+        function validateAddress(raw) {
+            const trimmed = raw.trim()
+            if (!trimmed.length)
+                return I18n.settings.serverEmptyIssue
+            if (trimmed.length > 4096)
+                return I18n.settings.serverSaveIssue
+            const lower = trimmed.toLowerCase()
+            if (!lower.startsWith("http://") && !lower.startsWith("https://"))
+                return I18n.settings.serverInvalidProtocolIssue
+            if (trimmed.includes("?") || trimmed.includes("#") || trimmed.includes(" ") || trimmed.includes("@"))
+                return I18n.settings.serverInvalidHostIssue
+            const afterScheme = trimmed.substring(trimmed.indexOf("://") + 3)
+            const slashPos = afterScheme.indexOf("/")
+            const hostPort = (slashPos >= 0 ? afterScheme.substring(0, slashPos) : afterScheme).trim()
+            if (!hostPort.length)
+                return I18n.settings.serverInvalidHostIssue
+            return ""
+        }
+
+        function save() {
+            syncLiveInputs()
+            const seen = []
+            let firstFailedIndex = -1
+
+            for (let i = 0; i < serverModel.count; ++i) {
+                const text = serverModel.get(i).address.trim()
+                const err = validateAddress(text)
+                if (err.length > 0) {
+                    serverModel.setProperty(i, "issue", err)
+                    if (firstFailedIndex < 0) firstFailedIndex = i
+                    continue
+                }
+                const canon = canonicalAddress(text)
+                if (seen.indexOf(canon) >= 0) {
+                    serverModel.setProperty(i, "issue", I18n.settings.serverDuplicateIssue)
+                    if (firstFailedIndex < 0) firstFailedIndex = i
+                    continue
+                }
+                seen.push(canon)
+                serverModel.setProperty(i, "issue", "")
+            }
+
+            if (firstFailedIndex >= 0) {
+                if (serverRows.itemAt(firstFailedIndex))
+                    serverRows.itemAt(firstFailedIndex).input.forceActiveFocus()
+                return false
+            }
+
+            const addresses = []
+            for (let i = 0; i < serverModel.count; ++i) {
+                const addr = serverModel.get(i).address.trim()
+                if (addr.length) addresses.push(addr)
+            }
+            committing = true
+            const ok = page.backend.settings.setDanmakuServers(addresses)
+            committing = false
+            if (!ok) {
                 for (let i = 0; i < serverModel.count; ++i)
-                    if (serverModel.get(i).saved.length) addresses.push(serverModel.get(i).saved)
-                const previous = JSON.stringify(page.values.danmakuServers)
-                committing = true
-                const ok = page.backend.settings.setDanmakuServers(addresses)
-                snapshot = JSON.stringify(page.values.danmakuServers)
-                committing = false
-                return ok || previous !== snapshot
+                    serverModel.setProperty(i, "issue", I18n.settings.serverSaveIssue)
+                return false
             }
-            function edit(index, text) {
-                const previous = serverModel.get(index).saved
-                serverModel.setProperty(index, "address", text)
-                if (!text.trim().length) {
-                    serverModel.setProperty(index, "issue", I18n.settings.serverEmptyIssue)
-                    return
-                }
-                serverModel.setProperty(index, "saved", text)
-                if (!save()) {
-                    serverModel.setProperty(index, "saved", previous)
-                    serverModel.setProperty(index, "issue", I18n.settings.serverSaveIssue)
-                    return
-                }
-                let savedIndex = -1
-                for (let i = 0; i <= index; ++i)
-                    if (serverModel.get(i).saved.length) ++savedIndex
-                const normalized = page.values.danmakuServers[savedIndex]
-                serverModel.setProperty(index, "saved", normalized)
-                serverModel.setProperty(index, "address", normalized)
+            initialSnapshot = JSON.stringify(page.values.danmakuServers)
+            reload()
+            return true
+        }
+        function edit(index, text) {
+            if (index < 0 || index >= serverModel.count) return
+            serverModel.setProperty(index, "address", text)
+            if (!text.trim().length) {
+                serverModel.setProperty(index, "issue", I18n.settings.serverEmptyIssue)
+            } else {
                 serverModel.setProperty(index, "issue", "")
             }
-            function move(index, destination) {
-                serverModel.move(index, destination, 1)
-                save()
-            }
-            function remove(index) {
-                const next = Math.min(index, serverModel.count - 2)
-                serverModel.remove(index)
-                save()
-                if (next >= 0) serverRows.itemAt(next).input.forceActiveFocus()
-                else addServerButton.forceActiveFocus()
+            revision++
+        }
+
+        function move(index, destination) {
+            syncLiveInputs()
+            serverModel.move(index, destination, 1)
+            revision++
+        }
+
+        function remove(index) {
+            if (index < 0 || index >= serverModel.count) return
+            syncLiveInputs()
+            const next = Math.min(index, serverModel.count - 2)
+            serverModel.remove(index)
+            revision++
+            if (next >= 0 && serverRows.itemAt(next)) serverRows.itemAt(next).input.forceActiveFocus()
+            else addServerButton.forceActiveFocus()
+        }
+
+        function add() {
+            syncLiveInputs()
+            serverModel.append({address: "", saved: "", issue: ""})
+            revision++
+            Qt.callLater(() => {
+                if (serverRows.count > 0 && serverRows.itemAt(serverModel.count - 1)) {
+                    serverRows.itemAt(serverModel.count - 1).input.forceActiveFocus()
+                }
+            })
+        }
+    }
+    Component.onCompleted: serverEditor.reload()
+    Connections { target: page.backend.settings; function onChanged() { serverEditor.reload() } }
+    Connections {
+        target: page
+        function onVisibleChanged() {
+            if (!page.visible && serverDialog.visible)
+                serverDialog.close()
+        }
+    }
+
+    SettingsSection {
+        title: I18n.settings.onlineSection
+        Layout.fillWidth: true
+
+        SettingsRow {
+            title: I18n.settings.onlineServersTitle
+            description: page.values.danmakuServers && page.values.danmakuServers.length > 0
+                         ? I18n.format(I18n.settings.onlineServersDescFormat, page.values.danmakuServers.length, page.values.danmakuServers[0])
+                         : I18n.settings.onlineServersEmptyDesc
+
+            Button {
+                id: manageServersBtn
+                objectName: "manageDanmakuServers"
+                text: I18n.settings.manageServersBtn
+                Accessible.name: I18n.settings.manageServersBtn
+                onClicked: page.focusOnlineSettings()
             }
         }
-        Component.onCompleted: serverEditor.reload()
-        Connections { target: page.backend.settings; function onChanged() { serverEditor.reload() } }
-        Repeater {
-            id: serverRows
-            model: serverModel
-            SettingsSection {
-                id: serverRow
-                card: true
-                required property int index
-                required property string address
-                required property string issue
-                property alias input: serverInput
+    }
+
+    Dialog {
+        id: serverDialog
+        objectName: "danmakuServerDialog"
+        parent: page
+        anchors.centerIn: parent
+        modal: true
+        width: Math.min(page.width - 32, 540)
+        title: I18n.settings.serverDialogTitle
+        closePolicy: Popup.CloseOnEscape
+        standardButtons: Dialog.NoButton
+        onRejected: serverEditor.reload()
+        onClosed: if (!serverDialog.visible) serverEditor.reload()
+
+        footer: DialogButtonBox {
+            alignment: Qt.AlignRight
+            Button {
+                id: saveServerBtn
+                objectName: "saveServersBtn"
+                text: I18n.settings.saveBtn
+                enabled: serverEditor.isDirty
+                highlighted: serverEditor.isDirty
+                onClicked: {
+                    if (serverEditor.save()) {
+                        serverDialog.close()
+                    }
+                }
+            }
+            Button {
+                id: cancelServerBtn
+                objectName: "cancelServersBtn"
+                text: I18n.settings.cancelBtn
+                onClicked: {
+                    serverEditor.reload()
+                    serverDialog.close()
+                }
+            }
+        }
+        contentItem: ColumnLayout {
+            width: serverDialog.availableWidth
+            implicitWidth: Math.max(380, Math.min(page.width - 64, 508))
+            spacing: 12
+
+            Label {
+                text: I18n.settings.onlineDesc
+                color: Ui.secondaryText
+                font.pixelSize: Ui.captionSize
+                wrapMode: Text.WordWrap
                 Layout.fillWidth: true
-                TextField {
-                    id: serverInput
-                    objectName: serverRow.index === 0 ? "danmakuServerInput" : "danmakuServerInput" + serverRow.index
-                    Layout.fillWidth: true
-                    text: serverRow.address
-                    maximumLength: 4096
-                    placeholderText: I18n.settings.serverPlaceholder
-                    Accessible.name: I18n.format(I18n.settings.serverAccessibleFormat, serverRow.index + 1)
-                    onEditingFinished: serverEditor.edit(serverRow.index, text)
+            }
+
+            ScrollView {
+                id: serverScroll
+                Layout.fillWidth: true
+                Layout.maximumHeight: 280
+                contentWidth: availableWidth
+                clip: true
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+                ColumnLayout {
+                    width: serverScroll.availableWidth
+                    spacing: 8
+
+                    Control {
+                        visible: serverModel.count === 0
+                        Layout.fillWidth: true
+                        width: parent.width
+                        leftPadding: 16
+                        rightPadding: 16
+                        topPadding: 16
+                        bottomPadding: 16
+
+                        background: Rectangle {
+                            radius: Ui.cardRadius
+                            color: Ui.dark ? Qt.rgba(1, 1, 1, 0.03) : Qt.rgba(0, 0, 0, 0.02)
+                            border.width: 1
+                            border.color: Ui.cardBorder
+                        }
+
+                        contentItem: ColumnLayout {
+                            spacing: 4
+                            Label {
+                                text: I18n.settings.serverEmptyPlaceholderTitle
+                                color: Ui.textColor
+                                font.weight: Font.DemiBold
+                                horizontalAlignment: Text.AlignHCenter
+                                Layout.fillWidth: true
+                            }
+                            Label {
+                                text: I18n.settings.serverEmptyPlaceholderDesc
+                                color: Ui.secondaryText
+                                font.pixelSize: Ui.captionSize
+                                horizontalAlignment: Text.AlignHCenter
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+
+                    Repeater {
+                        id: serverRows
+                        model: serverModel
+                        delegate: Control {
+                            id: serverRow
+                            required property int index
+                            required property string address
+                            required property string issue
+                            property alias input: serverInput
+
+                            Layout.fillWidth: true
+                            width: parent.width
+                            leftPadding: 12
+                            rightPadding: 12
+                            topPadding: 10
+                            bottomPadding: 10
+
+                            background: Rectangle {
+                                radius: Ui.cardRadius
+                                color: Ui.dark ? Qt.rgba(1, 1, 1, 0.04) : Qt.rgba(0, 0, 0, 0.02)
+                                border.width: 1
+                                border.color: serverRow.issue.length > 0 ? (Ui.dark ? "#FF99A4" : "#C42B1C") : Ui.cardBorder
+                            }
+
+                            contentItem: ColumnLayout {
+                                spacing: 6
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    width: parent.width
+                                    spacing: 8
+
+                                    TextField {
+                                        id: serverInput
+                                        objectName: serverRow.index === 0 ? "danmakuServerInput" : "danmakuServerInput" + serverRow.index
+                                        Layout.fillWidth: true
+                                        text: serverRow.address
+                                        maximumLength: 4096
+                                        placeholderText: I18n.settings.serverPlaceholder
+                                        Accessible.name: I18n.format(I18n.settings.serverAccessibleFormat, serverRow.index + 1)
+                                        onTextEdited: serverEditor.edit(serverRow.index, text)
+                                        onEditingFinished: serverEditor.edit(serverRow.index, text)
+                                    }
+
+                                    RowLayout {
+                                        spacing: 4
+
+                                        Button {
+                                            id: upBtn
+                                            objectName: "serverUp" + serverRow.index
+                                            enabled: serverRow.index > 0
+                                            icon.source: Ui.icon("chevron-up")
+                                            icon.width: 22
+                                            icon.height: 22
+                                            leftPadding: 4
+                                            rightPadding: 4
+                                            topPadding: 4
+                                            bottomPadding: 4
+                                            Layout.preferredWidth: 32
+                                            Layout.preferredHeight: 32
+                                            display: AbstractButton.IconOnly
+                                            ToolTip.visible: hovered
+                                            ToolTip.text: I18n.format(I18n.settings.moveUpAccessibleFormat, serverRow.index + 1)
+                                            Accessible.name: I18n.format(I18n.settings.moveUpAccessibleFormat, serverRow.index + 1)
+                                            onClicked: serverEditor.move(serverRow.index, serverRow.index - 1)
+                                        }
+
+                                        Button {
+                                            id: downBtn
+                                            objectName: "serverDown" + serverRow.index
+                                            enabled: serverRow.index < serverModel.count - 1
+                                            icon.source: Ui.icon("chevron-down")
+                                            icon.width: 22
+                                            icon.height: 22
+                                            leftPadding: 4
+                                            rightPadding: 4
+                                            topPadding: 4
+                                            bottomPadding: 4
+                                            Layout.preferredWidth: 32
+                                            Layout.preferredHeight: 32
+                                            display: AbstractButton.IconOnly
+                                            ToolTip.visible: hovered
+                                            ToolTip.text: I18n.format(I18n.settings.moveDownAccessibleFormat, serverRow.index + 1)
+                                            Accessible.name: I18n.format(I18n.settings.moveDownAccessibleFormat, serverRow.index + 1)
+                                            onClicked: serverEditor.move(serverRow.index, serverRow.index + 1)
+                                        }
+
+                                        Button {
+                                            id: removeBtn
+                                            objectName: "serverRemove" + serverRow.index
+                                            icon.source: Ui.icon("delete")
+                                            icon.width: 20
+                                            icon.height: 20
+                                            leftPadding: 4
+                                            rightPadding: 4
+                                            topPadding: 4
+                                            bottomPadding: 4
+                                            Layout.preferredWidth: 32
+                                            Layout.preferredHeight: 32
+                                            display: AbstractButton.IconOnly
+                                            ToolTip.visible: hovered
+                                            ToolTip.text: I18n.format(I18n.settings.removeAccessibleFormat, serverRow.index + 1)
+                                            Accessible.name: I18n.format(I18n.settings.removeAccessibleFormat, serverRow.index + 1)
+                                            onClicked: serverEditor.remove(serverRow.index)
+                                        }
+                                    }
+                                }
+
+                                Label {
+                                    visible: text.length > 0
+                                    text: serverRow.issue
+                                    color: Ui.dark ? "#FF99A4" : "#C42B1C"
+                                    font.pixelSize: Ui.captionSize
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+                        }
+                    }
+
                 }
-                Flow {
-                    Layout.fillWidth: true; spacing: 8
-                    Button {
-                        text: I18n.settings.moveUpBtn; objectName: "serverUp" + serverRow.index
-                        enabled: serverRow.index > 0
-                        Accessible.name: I18n.format(I18n.settings.moveUpAccessibleFormat, serverRow.index + 1)
-                        onClicked: serverEditor.move(serverRow.index, serverRow.index - 1)
-                    }
-                    Button {
-                        text: I18n.settings.moveDownBtn; objectName: "serverDown" + serverRow.index
-                        enabled: serverRow.index < serverModel.count - 1
-                        Accessible.name: I18n.format(I18n.settings.moveDownAccessibleFormat, serverRow.index + 1)
-                        onClicked: serverEditor.move(serverRow.index, serverRow.index + 1)
-                    }
-                    Button {
-                        text: I18n.settings.removeBtn; objectName: "serverRemove" + serverRow.index
-                        Accessible.name: I18n.format(I18n.settings.removeAccessibleFormat, serverRow.index + 1)
-                        onClicked: serverEditor.remove(serverRow.index)
-                    }
-                }
-                Label { visible: text.length > 0; text: serverRow.issue; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+            }
+
+            Button {
+                id: addServerButton
+                objectName: "addDanmakuServer"
+                text: I18n.settings.addServerBtn
+                Layout.topMargin: 2
+                Layout.leftMargin: 2
+                onClicked: serverEditor.add()
+            }
+
+            Label {
+                text: I18n.settings.onlineBottomHint
+                color: Ui.secondaryText
+                font.pixelSize: Ui.captionSize
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
             }
         }
-        Button {
-            id: addServerButton
-            objectName: "addDanmakuServer"
-            text: I18n.settings.addServerBtn
-            onClicked: {
-                serverModel.append({address: "", saved: "", issue: ""})
-                page.reveal(serverRows.itemAt(serverModel.count - 1).input)
-            }
-        }
-        Label { text: I18n.settings.onlineBottomHint; Layout.fillWidth: true; wrapMode: Text.WordWrap }
     }
 
     SettingsSection {

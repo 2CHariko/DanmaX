@@ -62,6 +62,11 @@
       "file": "desktop.svg",
       "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Desktop/SVG/ic_fluent_desktop_20_regular.svg",
       "sha256": "07c553f0bc7c79deec787f4c8eda5276873f80241a7970e38cba88620ba9f046"
+    },
+    {
+      "file": "delete.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Delete/SVG/ic_fluent_delete_20_regular.svg",
+      "sha256": "8362246dfd6d32ac30d4362470d059f56b65eb5a355ddda58e77cdd25221dc4f"
     }
   ],
   "derivedAssets": [
@@ -160,6 +165,14 @@
     {
       "sha256": "ac3ea4fd59ea8e0050504b29f854a35144f52b05e834cfcd9ff3d95de4c63bf9",
       "file": "window.png"
+    },
+    {
+      "file": "delete.png",
+      "sha256": "5e18373e9b33984ea6e25c57e76070f3bae351b273c0959d61aa8f44bc275f2f"
+    },
+    {
+      "file": "delete-dark.png",
+      "sha256": "8c6ce34e7a56276d7f252aec88ae4057f257be9c6399fce3575462f59aa75ffa"
     }
   ],
   "rendering": "sharp 0.35.5; 60x60 PNG; dark=negate RGB preserving alpha"
