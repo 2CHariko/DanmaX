@@ -100,7 +100,20 @@ QtObject {
         manualSeekAccessible: "独立播放进度",
         playerProgressAccessible: "播放器进度",
         runtimeDetailsTitle: "运行详情",
-        runtimeDetailsFormat: "在屏 %1 · 丢弃 %2 · 内存 %3 MiB"
+        runtimeDetailsFormat: "在屏 %1 · 丢弃 %2 · 内存 %3 MiB",
+        heroStatusReady: "就绪，随时可播放",
+        heroStatusWaiting: "等待配置",
+        heroStatusRunning: "弹幕正在播放",
+        danmakuBadgeNotLoaded: "未载入弹幕",
+        danmakuBadgeReady: "%1 条弹幕",
+        playerBadgeConnected: "已连接：%1",
+        playerBadgeWaiting: "等待播放器中",
+        playerBadgeManual: "独立播放模式",
+        danmakuBadgeAccessible: "弹幕载入状态",
+        playerBadgeAccessible: "播放器连接状态",
+        loadedDanmakuCardTitle: "已就绪弹幕",
+        clearDanmakuBtn: "清除",
+        changeDanmakuBtn: "更换文件"
     })
 
     // 在线弹幕子面板

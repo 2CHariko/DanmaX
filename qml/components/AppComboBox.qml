@@ -139,6 +139,15 @@ ComboBox {
         }
     }
     Component.onCompleted: {
+        if (contentItem) {
+            contentItem.Keys.onPressed.connect(function(event) {
+                if (event.key === Qt.Key_F4 || (event.key === Qt.Key_Down && (event.modifiers & Qt.AltModifier))) {
+                    if (popup.visible) popup.close()
+                    else popup.open()
+                    event.accepted = true
+                }
+            })
+        }
         listScrollBar = scrollComponent.createObject(popupList)
         popupList.ScrollBar.vertical = listScrollBar
     }
