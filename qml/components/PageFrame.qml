@@ -25,6 +25,26 @@ ScrollView {
         Accessible.name: I18n.common.pageScrollBarAccessible
     }
     function focusHeading() { contentItem.contentY = 0; heading.forceActiveFocus() }
+    WheelHandler {
+        id: wheelHandler
+        target: null
+        acceptedDevices: PointerDevice.Mouse
+        orientation: Qt.Vertical
+        blocking: true
+        onWheel: (event) => {
+            if (event.pixelDelta.y === 0 && event.angleDelta.y !== 0) {
+                const flick = page.contentItem
+                if (flick && flick.contentHeight > page.availableHeight) {
+                    const step = (event.angleDelta.y / 120.0) * Math.round(108 * Ui.textScale)
+                    const maxContentY = flick.contentHeight - page.availableHeight
+                    flick.contentY = Math.max(0, Math.min(maxContentY, flick.contentY - step))
+                }
+                event.accepted = true
+            } else {
+                event.accepted = false
+            }
+        }
+    }
     function reveal(item) {
         const point = item.mapToItem(body, 0, 0)
         contentItem.contentY = Math.max(0, Math.min(point.y, contentItem.contentHeight - availableHeight))

@@ -30,6 +30,8 @@ ColumnLayout {
     AppComboBox {
         id: fontBox
         objectName: "fontFamilyCombo"
+        renderFontFamily: true
+        font.family: selector.family
         Layout.preferredWidth: 240
         model: selector.families
         editable: true
@@ -42,16 +44,6 @@ ColumnLayout {
     Connections {
         target: fontBox.contentItem
         function onEditingFinished() { selector.commit() }
-    }
-    Label {
-        Layout.preferredWidth: 240
-        Layout.maximumWidth: 240
-        wrapMode: Text.WrapAnywhere
-        text: I18n.fontSelector.previewText
-        font.family: selector.family
-        font.weight: Font.DemiBold
-        font.pixelSize: Ui.subtitleSize
-        Accessible.name: I18n.fontSelector.previewAccessible
     }
     Label {
         Layout.preferredWidth: 240

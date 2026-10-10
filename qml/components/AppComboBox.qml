@@ -7,8 +7,9 @@ import "../i18n"
 // The official popup has no ScrollBar; retain only public geometry/scroll adaptations.
 ComboBox {
     id: control
+    property bool renderFontFamily: false
     property real popupLimit: Ui.comboPopupHeight
-    readonly property real desiredPopupWidth: Math.max(control.width, 160)
+    readonly property real desiredPopupWidth: Math.max(control.width, renderFontFamily ? 280 : 160)
     readonly property var popupList: popup.contentItem
     property var listScrollBar: null
     property real popupRoom: 0
@@ -114,9 +115,11 @@ ComboBox {
             }
 
             Label {
+                id: itemLabel
                 text: control.textAt(itemDelegate.index) || (itemDelegate.model && control.textRole ? itemDelegate.model[control.textRole] : (typeof itemDelegate.modelData === "string" ? itemDelegate.modelData : ""))
                 color: Ui.textColor
                 font.pixelSize: Ui.bodySize
+                font.family: control.renderFontFamily ? itemLabel.text : ""
                 elide: Text.ElideRight
                 Layout.fillWidth: true
                 verticalAlignment: Text.AlignVCenter
