@@ -588,8 +588,12 @@ void AppController::updateMetrics() {
         metrics_["height"] = overlay_->height();
         metrics_["dpr"] = overlay_->devicePixelRatio();
     }
-    if (visible_ && overlay_)
-        MediaMonitor::maintainTopmost(overlay_->winId(), settings_.values()["onTop"].toInt());
+    if (visible_ && overlay_) {
+        const int strategy = settings_.values()["onTop"].toInt();
+        MediaMonitor::maintainTopmost(overlay_->winId(), strategy);
+        if (toolbarWindow_ && toolbarWindow_->isVisible())
+            MediaMonitor::maintainTopmost(toolbarWindow_->winId(), strategy);
+    }
     emit metricsChanged();
 }
 void AppController::beginDemo(int count) {

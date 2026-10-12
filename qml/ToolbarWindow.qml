@@ -6,6 +6,7 @@ Window {
     id: toolbarWin
     required property QtObject backend
     property Window overlayWindow: null
+    transientParent: overlayWindow
 
     color: "transparent"
     flags: Qt.FramelessWindowHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus
@@ -15,6 +16,7 @@ Window {
     y: overlayWindow ? overlayWindow.y : 0
     screen: overlayWindow ? overlayWindow.screen : null
     visible: overlayWindow ? overlayWindow.visible : false
+    onVisibleChanged: if (visible) toolbarWin.raise()
 
     // 窗口物理尺寸：展开时扩大为工具栏尺寸，收起时平滑收缩为 80x10 微型把手
     property bool windowExpanded: toolbar.expanded
@@ -22,6 +24,7 @@ Window {
         if (toolbar.expanded) {
             shrinkTimer.stop()
             windowExpanded = true
+            toolbarWin.raise()
         } else {
             shrinkTimer.restart()
         }
