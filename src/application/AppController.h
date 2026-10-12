@@ -5,7 +5,8 @@
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
 #include "platform/windows/MediaMonitor.h"
-#include "renderer/DanmakuItem.h"
+ #include "renderer/DanmakuItem.h"
+ #include "platform/windows/OverlayInputFilter.h"
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QTimer>
@@ -33,7 +34,9 @@ class AppController final : public QObject {
     Q_PROPERTY(bool playing READ playing NOTIFY stateChanged)
     Q_PROPERTY(bool manualMode READ manualMode NOTIFY stateChanged)
     Q_PROPERTY(bool overlayVisible READ overlayVisible NOTIFY stateChanged)
-    Q_PROPERTY(int total READ total NOTIFY stateChanged)
+    Q_PROPERTY(bool overlayHovered READ overlayHovered NOTIFY overlayHoveredChanged)
+    Q_PROPERTY(bool danmakuVisible READ danmakuVisible WRITE setDanmakuVisible NOTIFY danmakuVisibleChanged)
+     Q_PROPERTY(int total READ total NOTIFY stateChanged)
     Q_PROPERTY(double position READ position NOTIFY metricsChanged)
     Q_PROPERTY(double duration READ duration NOTIFY stateChanged)
     Q_PROPERTY(QVariantMap metrics READ metrics NOTIFY metricsChanged)
@@ -86,7 +89,17 @@ class AppController final : public QObject {
     bool overlayVisible() const {
         return visible_;
     }
-    int total() const {
+    bool overlayHovered() const {
+        return overlayInputFilter_.isHovering();
+    }
+    bool danmakuVisible() const {
+        return danmakuVisible_;
+    }
+     void setDanmakuVisible(bool visible);
+     OverlayInputFilter* overlayInputFilter() {
+         return &overlayInputFilter_;
+     }
+     int total() const {
         return static_cast<int>(engine_.items().size());
     }
     double position() const {
@@ -108,7 +121,12 @@ class AppController final : public QObject {
     Q_INVOKABLE void seek(double position);
     Q_INVOKABLE void selectSession(const QString& id);
     Q_INVOKABLE void exportLogs(const QString& path);
-    Q_INVOKABLE void clearError();
+     Q_INVOKABLE void clearError();
+     Q_INVOKABLE void clearActiveDanmaku();
+     Q_INVOKABLE void stepTimeOffset(double delta);
+     Q_INVOKABLE void stepFontSize(int delta);
+     Q_INVOKABLE void setOverlayInteractiveRects(const QVariantList& rects);
+     Q_INVOKABLE void showMainWindow();
     void beginDemo(int activeCount = 40);
     void writeReport(const QString& path);
   signals:
@@ -117,7 +135,10 @@ class AppController final : public QObject {
     void sessionsChanged();
     void screensChanged();
     void fontFamiliesChanged();
-    void loadCompleted(bool success);
+    void overlayHoveredChanged();
+    void danmakuVisibleChanged();
+     void loadCompleted(bool success);
+     void requestShowMainWindow();
 
   private slots:
     void onSample(const MediaSample& sample);
@@ -145,6 +166,7 @@ class AppController final : public QObject {
     QElapsedTimer monotonicTime_;
     QPointer<DanmakuItem> renderer_;
     QPointer<QWindow> overlay_;
+    OverlayInputFilter overlayInputFilter_;
     QTimer timer_, metricsTimer_;
     QElapsedTimer frameTime_, sampleTime_, foregroundTime_, metricsTime_;
     std::jthread loader_;
@@ -160,7 +182,7 @@ class AppController final : public QObject {
     QString status_{QStringLiteral("请选择弹幕文件")}, error_, file_, mediaTitle_, mediaIdentity_;
     bool foreground_{true};
     bool awaitingInitialExposure_{};
-    bool loading_{}, running_{}, playing_{}, manual_{}, visible_{}, snapshotDirty_{true}, demo_{};
+    bool loading_{}, running_{}, playing_{}, manual_{}, visible_{}, snapshotDirty_{true}, demo_{}, danmakuVisible_{true};
     int progress_{}, frames_{};
     double position_{}, duration_{}, rate_{1}, samplePosition_{};
     std::vector<double> frameTimes_;

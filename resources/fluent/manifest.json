@@ -67,6 +67,36 @@
       "file": "delete.svg",
       "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Delete/SVG/ic_fluent_delete_20_regular.svg",
       "sha256": "8362246dfd6d32ac30d4362470d059f56b65eb5a355ddda58e77cdd25221dc4f"
+    },
+    {
+      "file": "eye.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Eye/SVG/ic_fluent_eye_20_regular.svg",
+      "sha256": "3fedb211bdbd5d47c9d1e2a820fe73ffd0067ebf555ed8fe435033a09d0d2d1d"
+    },
+    {
+      "file": "eye-off.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Eye%20Off/SVG/ic_fluent_eye_off_20_regular.svg",
+      "sha256": "819b18033ecedc1f9dec830ba811925ce5276938c7d754a4989cdd631f06d87d"
+    },
+    {
+      "file": "pin.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Pin/SVG/ic_fluent_pin_20_regular.svg",
+      "sha256": "5d394e4adf3454f007dd928eaa91ebcb5fd9c5487736b700654e037310ddfba4"
+    },
+    {
+      "file": "pin-off.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Pin%20Off/SVG/ic_fluent_pin_off_20_regular.svg",
+      "sha256": "419f73c588b6e49e78225a9503c7cbd26073495f3b205fb76602dda003f373b1"
+    },
+    {
+      "file": "chevron-left.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Chevron%20Left/SVG/ic_fluent_chevron_left_20_regular.svg",
+      "sha256": "23926710858e2fcaf18178b613f28f35bce3ab8b9238836f7aace406a597d14a"
+    },
+    {
+      "file": "chevron-right.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Chevron%20Right/SVG/ic_fluent_chevron_right_20_regular.svg",
+      "sha256": "212c611689abb60d2cd56d868e070e44a4c4fbe1d4392622040d1d10a46463e2"
     }
   ],
   "derivedAssets": [
@@ -173,6 +203,54 @@
     {
       "file": "delete-dark.png",
       "sha256": "8c6ce34e7a56276d7f252aec88ae4057f257be9c6399fce3575462f59aa75ffa"
+    },
+    {
+      "file": "eye.png",
+      "sha256": "cdb704695f0f33a2ef1986ea79f5c76668eb371f584f7ddeefb5313192f930e5"
+    },
+    {
+      "file": "eye-dark.png",
+      "sha256": "84338d31f7594049e308c188346ffb9ef8fe5116505e750842c355174f1d6b6c"
+    },
+    {
+      "file": "eye-off.png",
+      "sha256": "dfed511a8aba293df535c3b99da208e666da8a1bd5646703f21fcbb12e4be7b9"
+    },
+    {
+      "file": "eye-off-dark.png",
+      "sha256": "0adebbb2fff9c8e7ee6ff73f0d317ab57adc23babca0c82a20fcc728d9e667c1"
+    },
+    {
+      "file": "pin.png",
+      "sha256": "1e38ec3c418e5283fe61828677555d5f622179a176da97347be00709aa5c3fc3"
+    },
+    {
+      "file": "pin-dark.png",
+      "sha256": "958804e36f283de0c83260bd4c60201642cf0c6db786bf7cd731cdf788544c35"
+    },
+    {
+      "file": "pin-off.png",
+      "sha256": "36a33ed57fda14eed7502a5b9542feeb954eafe1200d529cce278d26ec2352d9"
+    },
+    {
+      "file": "pin-off-dark.png",
+      "sha256": "60d6b041d1cf656238ec6186293239be60a80b25071830ce3f82fe1ca5bef861"
+    },
+    {
+      "file": "chevron-left.png",
+      "sha256": "160d64c32db7d075db2beac545c09ca206a52f2067480843841140019364f272"
+    },
+    {
+      "file": "chevron-left-dark.png",
+      "sha256": "eccc18b0922ad7aec2cd3e0c51693efbb56d492368737aae8847ae12cc6741a9"
+    },
+    {
+      "file": "chevron-right.png",
+      "sha256": "9f403a1309550ed0574bc831f1c6b970a6e23eab24f421e7436b3b4000ec3747"
+    },
+    {
+      "file": "chevron-right-dark.png",
+      "sha256": "7b2048ebeab2192804cb8f5cb890192fc18e66a485347e4a799379b7efe3413b"
     }
   ],
   "rendering": "sharp 0.35.5; 60x60 PNG; dark=negate RGB preserving alpha"

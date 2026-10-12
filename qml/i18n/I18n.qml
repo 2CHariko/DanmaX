@@ -319,6 +319,30 @@ QtObject {
         fallbackFormat: "回退 %1 / 容量 %2"
     })
 
+    // 顶部快捷工具栏
+    readonly property var toolbar: ({
+        title: "弹幕快捷工具栏",
+        handleTooltip: "悬停展开快捷工具栏",
+        toggleDanmaku: "切换弹幕显示",
+        danmakuShown: "弹幕已开启",
+        danmakuHidden: "弹幕已隐藏",
+        offsetDec: "提前 0.5 秒 (-0.5s)",
+        offsetInc: "延后 0.5 秒 (+0.5s)",
+        offsetFormat: "偏移 %1s",
+        offsetReset: "重置偏移",
+        opacityTitle: "弹幕不透明度",
+        opacityFormat: "透明度 %1%",
+        fontSizeTitle: "字号调节",
+        fontSizeFormat: "字号 %1px",
+        fontSizeDec: "减小字号",
+        fontSizeInc: "增大字号",
+        clearActive: "一键清屏（排空当前在屏弹幕）",
+        toggleDebug: "切换调试性能指标",
+        openMainWindow: "打开控制面板",
+        pinToolbar: "固定工具栏常驻",
+        unpinToolbar: "取消固定（自动隐藏）"
+    })
+
     // 关于页
     readonly property var about: ({
         title: "关于",

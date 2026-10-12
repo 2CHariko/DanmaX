@@ -14,7 +14,7 @@ qt_add_qml_module(danmaku_app URI DanmaX VERSION 1.0
     components/PageFrame.qml components/Disclosure.qml
     components/AppComboBox.qml
     components/SettingsSection.qml components/SettingsRow.qml components/NavigationPane.qml components/FontSelector.qml
-    components/ActionCard.qml components/WindowCaptionButtons.qml
+    components/ActionCard.qml components/WindowCaptionButtons.qml components/DanmakuToolbar.qml
     components/OnlineDanmakuPane.qml components/CachedDanmakuPane.qml
     pages/PlayerPage.qml pages/LogsPage.qml pages/SettingsPage.qml pages/AboutPage.qml)
 target_link_libraries(danmaku_app PRIVATE danmaku_runtime Qt6::Quick Qt6::QuickControls2 QWindowKit::Quick)

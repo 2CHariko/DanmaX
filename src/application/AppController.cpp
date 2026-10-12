@@ -46,6 +46,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
         if (!settings_.error().isEmpty())
             logs_.append("ERROR", settings_.error());
     });
+    connect(&overlayInputFilter_, &OverlayInputFilter::hoverChanged, this, &AppController::overlayHoveredChanged);
     connect(&monitor_, &MediaMonitor::sessionsChanged, this, [this](QVariantList list) {
         sessions_ = std::move(list);
         emit sessionsChanged();
@@ -130,6 +131,7 @@ void AppController::attach(QObject* renderer, QObject* overlay) {
         fail(QStringLiteral("弹幕窗口初始化失败"));
         return;
     }
+    overlayInputFilter_.attach(overlay_);
     connect(overlay_, &QWindow::widthChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::heightChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::visibleChanged, this, [this](bool shown) {
@@ -508,7 +510,11 @@ void AppController::tick() {
     engineMs_ += stage.nsecsElapsed() * 1e-6;
     stage.restart();
     if (renderable && (playing_ || visibilityChanged || snapshotDirty_)) {
-        renderer_->present(engine_);
+        if (danmakuVisible_) {
+            renderer_->present(engine_);
+        } else {
+            renderer_->clearContent();
+        }
         snapshotDirty_ = false;
     } else if (!renderable) snapshotDirty_ = true;
     snapshotMs_ += stage.nsecsElapsed() * 1e-6;
@@ -578,6 +584,8 @@ void AppController::updateMetrics() {
     emit metricsChanged();
 }
 void AppController::beginDemo(int count) {
+    if (!renderer_ || !overlay_)
+        return;
     if (rendererSettingsPending_) applyRendererSettings();
     const auto s = settings_.values();
     engine_.configure({s["speed"].toDouble(), s["fixedSeconds"].toDouble(), renderer_->trackHeight(),
@@ -618,4 +626,59 @@ void AppController::writeReport(const QString& path) {
         file.write(QJsonDocument(QJsonObject::fromVariantMap(metrics_)).toJson());
         file.commit();
     }
+}
+void AppController::setDanmakuVisible(bool visible) {
+    if (danmakuVisible_ == visible)
+        return;
+    danmakuVisible_ = visible;
+    snapshotDirty_ = true;
+    if (!danmakuVisible_ && renderer_) {
+        renderer_->clearContent();
+    } else if (danmakuVisible_ && renderer_) {
+        renderer_->present(engine_);
+    }
+    if (overlay_) {
+        if (auto* quick = qobject_cast<QQuickWindow*>(overlay_))
+            quick->update();
+    }
+    emit danmakuVisibleChanged();
+}
+void AppController::clearActiveDanmaku() {
+    engine_.clear();
+    if (renderer_) {
+        renderer_->clearContent();
+    }
+    metrics_["active"] = 0;
+    emit metricsChanged();
+    snapshotDirty_ = true;
+    if (overlay_) {
+        if (auto* quick = qobject_cast<QQuickWindow*>(overlay_))
+            quick->update();
+    }
+}
+void AppController::stepTimeOffset(double delta) {
+    const double cur = settings_.values().value(QStringLiteral("timeOffset")).toDouble();
+    const double next = std::clamp(std::round((cur + delta) * 10.0) / 10.0, -120.0, 120.0);
+    settings_.setValue(QStringLiteral("timeOffset"), next);
+}
+void AppController::stepFontSize(int delta) {
+    const int cur = settings_.values().value(QStringLiteral("fontSize")).toInt();
+    const int next = std::clamp(cur + delta, 10, 72);
+    settings_.setValue(QStringLiteral("fontSize"), next);
+}
+void AppController::setOverlayInteractiveRects(const QVariantList& rects) {
+    QList<QRect> qrects;
+    for (const auto& item : rects) {
+        if (item.canConvert<QRect>()) {
+            qrects.append(item.toRect());
+        } else if (item.metaType().id() == QMetaType::QVariantMap) {
+            const auto map = item.toMap();
+            qrects.append(QRect(map.value("x").toInt(), map.value("y").toInt(),
+                                map.value("width").toInt(), map.value("height").toInt()));
+        }
+    }
+    overlayInputFilter_.setInteractiveRects(qrects);
+}
+void AppController::showMainWindow() {
+    emit requestShowMainWindow();
 }

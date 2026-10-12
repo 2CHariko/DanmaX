@@ -111,6 +111,7 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/AppPaths.cpp src/infrastructure/AppPaths.h
         src/platform/windows/MediaMonitor.cpp src/platform/windows/MediaMonitor.h
         src/platform/windows/WindowBackdropController.cpp src/platform/windows/WindowBackdropController.h
+        src/platform/windows/OverlayInputFilter.cpp src/platform/windows/OverlayInputFilter.h
         src/renderer/DanmakuItem.cpp src/renderer/DanmakuItem.h
         src/infrastructure/XmlLoader.cpp src/infrastructure/XmlLoader.h
         src/infrastructure/SettingsStore.cpp src/infrastructure/SettingsStore.h
@@ -191,6 +192,15 @@ if(DANMAKU_BUILD_APP)
         danmaku_compile_options(renderer_tests)
         add_test(NAME renderer_cache COMMAND renderer_tests)
         set_tests_properties(renderer_cache PROPERTIES TIMEOUT 60
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
+        add_executable(overlay_toolbar_tests tests/runtime/OverlayToolbarTests.cpp)
+        target_link_libraries(overlay_toolbar_tests PRIVATE danmaku_runtime Qt6::Test)
+        if(DANMAKU_STATIC_QT)
+            qt_import_plugins(overlay_toolbar_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin)
+        endif()
+        danmaku_compile_options(overlay_toolbar_tests)
+        add_test(NAME overlay_toolbar COMMAND overlay_toolbar_tests)
+        set_tests_properties(overlay_toolbar PROPERTIES TIMEOUT 60
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
         add_test(NAME application_smoke COMMAND danmaku_app --smoke-test
             --data-dir "${CMAKE_BINARY_DIR}/test-data" --cache-dir "${CMAKE_BINARY_DIR}/test-cache")

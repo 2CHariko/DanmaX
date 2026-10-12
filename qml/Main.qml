@@ -29,6 +29,15 @@ ApplicationWindow {
         function onDarkChanged() { root.syncTheme() }
         function onMicaActiveChanged() { root.syncTheme() }
     }
+    Connections {
+        target: root.backend
+        function onRequestShowMainWindow() {
+            root.visible = true
+            if (root.visibility === Window.Minimized) root.showNormal()
+            root.raise()
+            root.requestActivate()
+        }
+    }
     // Keep the swapchain alpha-capable across live material preference changes.
     color: "transparent"
     background: Rectangle {
