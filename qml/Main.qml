@@ -174,6 +174,7 @@ ApplicationWindow {
     }
 
     OverlayWindow { id: overlay; backend: root.backend; visible: root.backend.overlayVisible }
+    ToolbarWindow { id: toolbarWindow; backend: root.backend; overlayWindow: overlay }
     Component.onCompleted: {
         windowAgent.setup(root)
         windowAgent.setTitleBar(titleBar)
@@ -182,7 +183,7 @@ ApplicationWindow {
         windowAgent.setSystemButton(WindowAgent.Close, captionButtons.closeBtn)
         windowAgent.setHitTestVisible(navPane, true)
         root.syncTheme()
-        root.backend.attach(overlay.renderer, overlay)
+        root.backend.attach(overlay.renderer, overlay, toolbarWindow)
     }
     onClosing: root.backend.stop()
 }

@@ -46,7 +46,6 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
         if (!settings_.error().isEmpty())
             logs_.append("ERROR", settings_.error());
     });
-    connect(&overlayInputFilter_, &OverlayInputFilter::hoverChanged, this, &AppController::overlayHoveredChanged);
     connect(&monitor_, &MediaMonitor::sessionsChanged, this, [this](QVariantList list) {
         sessions_ = std::move(list);
         emit sessionsChanged();
@@ -124,14 +123,17 @@ void AppController::refreshFontFamilies(bool notify) {
     fontFamilies_ = std::move(families);
     if (notify) emit fontFamiliesChanged();
 }
-void AppController::attach(QObject* renderer, QObject* overlay) {
+void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar) {
     renderer_ = qobject_cast<DanmakuItem*>(renderer);
     overlay_ = qobject_cast<QWindow*>(overlay);
+    toolbarWindow_ = qobject_cast<QWindow*>(toolbar);
     if (!renderer_ || !overlay_) {
         fail(QStringLiteral("弹幕窗口初始化失败"));
         return;
     }
-    overlayInputFilter_.attach(overlay_);
+    if (toolbarWindow_) {
+        toolbarInputFilter_.attach(toolbarWindow_);
+    }
     connect(overlay_, &QWindow::widthChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::heightChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::visibleChanged, this, [this](bool shown) {
@@ -244,7 +246,14 @@ void AppController::updateWindow() {
         overlay_->setGeometry(screen->geometry());
     const bool top = s["onTop"].toInt() > 0;
     if (overlay_->flags().testFlag(Qt::WindowStaysOnTopHint) != top)
+    if (overlay_->flags().testFlag(Qt::WindowStaysOnTopHint) != top)
         overlay_->setFlag(Qt::WindowStaysOnTopHint, top);
+    if (toolbarWindow_) {
+        if (toolbarWindow_->screen() != screen)
+            toolbarWindow_->setScreen(screen);
+        if (toolbarWindow_->flags().testFlag(Qt::WindowStaysOnTopHint) != top)
+            toolbarWindow_->setFlag(Qt::WindowStaysOnTopHint, top);
+    }
 }
 void AppController::loadFile(const QString& input) {
     const auto path = localPath(input);
@@ -665,19 +674,6 @@ void AppController::stepFontSize(int delta) {
     const int cur = settings_.values().value(QStringLiteral("fontSize")).toInt();
     const int next = std::clamp(cur + delta, 10, 72);
     settings_.setValue(QStringLiteral("fontSize"), next);
-}
-void AppController::setOverlayInteractiveRects(const QVariantList& rects) {
-    QList<QRect> qrects;
-    for (const auto& item : rects) {
-        if (item.canConvert<QRect>()) {
-            qrects.append(item.toRect());
-        } else if (item.metaType().id() == QMetaType::QVariantMap) {
-            const auto map = item.toMap();
-            qrects.append(QRect(map.value("x").toInt(), map.value("y").toInt(),
-                                map.value("width").toInt(), map.value("height").toInt()));
-        }
-    }
-    overlayInputFilter_.setInteractiveRects(qrects);
 }
 void AppController::showMainWindow() {
     emit requestShowMainWindow();

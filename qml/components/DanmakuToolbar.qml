@@ -10,14 +10,14 @@ Item {
     property bool pinned: false
     property bool autoExpanded: false
     readonly property bool popoverOpen: opacityPopup.visible
-    readonly property bool isHovered: (backend && backend.overlayHovered) || handleArea.containsMouse || barArea.containsMouse
+    readonly property bool isHovered: handleArea.containsMouse || barArea.containsMouse
     readonly property bool expanded: pinned || autoExpanded || isHovered || popoverOpen
 
-    // 居中放置在屏幕顶部
-    width: expanded ? barCard.width : handleContainer.width
-    height: expanded ? (barCard.y + barCard.height + (popoverOpen ? opacityPopup.height + 8 : 0)) : 8
-    x: Math.round((parent.width - width) / 2)
-    y: 0
+    // 暴露所需的实际内容尺寸给宿主微型窗口
+    readonly property int targetWidth: expanded ? (barCard.width + 12) : 80
+    readonly property int targetHeight: expanded ? (barCard.y + barCard.height + (popoverOpen ? opacityPopup.height + 8 : 4)) : 10
+
+    anchors.fill: parent
 
     // 监听悬停状态变化，驱动自动展开与延迟收起
     onIsHoveredChanged: {
@@ -42,51 +42,13 @@ Item {
         }
     }
 
-    // 同步给 C++ 命中测试层
-    function updateHitRects() {
-        if (!backend) return
-        var rects = []
-        if (!expanded) {
-            rects.push({
-                x: root.x,
-                y: 0,
-                width: root.width,
-                height: 8
-            })
-        } else {
-            // 工具栏卡片区域（WinUI 3 自然微圆角矩形）
-            rects.push({
-                x: root.x + barCard.x,
-                y: root.y + barCard.y,
-                width: barCard.width,
-                height: barCard.height
-            })
-            // Popover 浮层区域
-            if (opacityPopup.visible) {
-                rects.push({
-                    x: root.x + opacityPopup.x,
-                    y: root.y + opacityPopup.y,
-                    width: opacityPopup.width,
-                    height: opacityPopup.height
-                })
-            }
-        }
-        backend.setOverlayInteractiveRects(rects)
-    }
-
-    onExpandedChanged: Qt.callLater(updateHitRects)
-    onXChanged: Qt.callLater(updateHitRects)
-    onWidthChanged: Qt.callLater(updateHitRects)
-    onHeightChanged: Qt.callLater(updateHitRects)
-    Component.onCompleted: Qt.callLater(updateHitRects)
-
     // 顶部收起时的微型把手（感应区）
     Item {
         id: handleContainer
         anchors.top: parent.top
         anchors.horizontalCenter: parent.horizontalCenter
         width: 80
-        height: 8
+        height: 10
         visible: !root.expanded
 
         Rectangle {
@@ -114,7 +76,7 @@ Item {
     Rectangle {
         id: barCard
         anchors.top: parent.top
-        anchors.topMargin: root.expanded ? 6 : -56
+        anchors.topMargin: root.expanded ? 4 : -56
         anchors.horizontalCenter: parent.horizontalCenter
         width: contentLayout.implicitWidth + 20
         height: 42
@@ -249,10 +211,7 @@ Item {
                 ToolTip.visible: hovered && !opacityPopup.visible
                 ToolTip.text: I18n.toolbar.opacityTitle
                 ToolTip.delay: 400
-                onClicked: {
-                    opacityPopup.visible = !opacityPopup.visible
-                    root.updateHitRects()
-                }
+                onClicked: opacityPopup.visible = !opacityPopup.visible
             }
 
             Rectangle {
@@ -404,10 +363,7 @@ Item {
                 ToolTip.visible: hovered
                 ToolTip.text: root.pinned ? I18n.toolbar.unpinToolbar : I18n.toolbar.pinToolbar
                 ToolTip.delay: 400
-                onClicked: {
-                    root.pinned = !root.pinned
-                    root.updateHitRects()
-                }
+                onClicked: root.pinned = !root.pinned
             }
         }
     }
@@ -460,7 +416,5 @@ Item {
                 Layout.preferredWidth: 32
             }
         }
-
-        onVisibleChanged: root.updateHitRects()
     }
 }

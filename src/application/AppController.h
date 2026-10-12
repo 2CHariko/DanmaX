@@ -6,7 +6,7 @@
 #include "infrastructure/SettingsStore.h"
 #include "platform/windows/MediaMonitor.h"
  #include "renderer/DanmakuItem.h"
- #include "platform/windows/OverlayInputFilter.h"
+ #include "platform/windows/ToolbarInputFilter.h"
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QTimer>
@@ -34,7 +34,6 @@ class AppController final : public QObject {
     Q_PROPERTY(bool playing READ playing NOTIFY stateChanged)
     Q_PROPERTY(bool manualMode READ manualMode NOTIFY stateChanged)
     Q_PROPERTY(bool overlayVisible READ overlayVisible NOTIFY stateChanged)
-    Q_PROPERTY(bool overlayHovered READ overlayHovered NOTIFY overlayHoveredChanged)
     Q_PROPERTY(bool danmakuVisible READ danmakuVisible WRITE setDanmakuVisible NOTIFY danmakuVisibleChanged)
      Q_PROPERTY(int total READ total NOTIFY stateChanged)
     Q_PROPERTY(double position READ position NOTIFY metricsChanged)
@@ -89,16 +88,13 @@ class AppController final : public QObject {
     bool overlayVisible() const {
         return visible_;
     }
-    bool overlayHovered() const {
-        return overlayInputFilter_.isHovering();
-    }
     bool danmakuVisible() const {
         return danmakuVisible_;
     }
      void setDanmakuVisible(bool visible);
-     OverlayInputFilter* overlayInputFilter() {
-         return &overlayInputFilter_;
-     }
+    ToolbarInputFilter* toolbarInputFilter() {
+        return &toolbarInputFilter_;
+    }
      int total() const {
         return static_cast<int>(engine_.items().size());
     }
@@ -112,7 +108,7 @@ class AppController final : public QObject {
         return metrics_;
     }
     bool hasFluentIcons() const;
-    Q_INVOKABLE void attach(QObject* renderer, QObject* overlay);
+    Q_INVOKABLE void attach(QObject* renderer, QObject* overlay, QObject* toolbar = nullptr);
     Q_INVOKABLE void loadFile(const QString& path);
     Q_INVOKABLE void cancelLoad();
     Q_INVOKABLE void start(bool manual = false);
@@ -125,7 +121,6 @@ class AppController final : public QObject {
      Q_INVOKABLE void clearActiveDanmaku();
      Q_INVOKABLE void stepTimeOffset(double delta);
      Q_INVOKABLE void stepFontSize(int delta);
-     Q_INVOKABLE void setOverlayInteractiveRects(const QVariantList& rects);
      Q_INVOKABLE void showMainWindow();
     void beginDemo(int activeCount = 40);
     void writeReport(const QString& path);
@@ -135,7 +130,6 @@ class AppController final : public QObject {
     void sessionsChanged();
     void screensChanged();
     void fontFamiliesChanged();
-    void overlayHoveredChanged();
     void danmakuVisibleChanged();
      void loadCompleted(bool success);
      void requestShowMainWindow();
@@ -166,7 +160,8 @@ class AppController final : public QObject {
     QElapsedTimer monotonicTime_;
     QPointer<DanmakuItem> renderer_;
     QPointer<QWindow> overlay_;
-    OverlayInputFilter overlayInputFilter_;
+    QPointer<QWindow> toolbarWindow_;
+    ToolbarInputFilter toolbarInputFilter_;
     QTimer timer_, metricsTimer_;
     QElapsedTimer frameTime_, sampleTime_, foregroundTime_, metricsTime_;
     std::jthread loader_;

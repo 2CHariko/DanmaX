@@ -111,7 +111,7 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/AppPaths.cpp src/infrastructure/AppPaths.h
         src/platform/windows/MediaMonitor.cpp src/platform/windows/MediaMonitor.h
         src/platform/windows/WindowBackdropController.cpp src/platform/windows/WindowBackdropController.h
-        src/platform/windows/OverlayInputFilter.cpp src/platform/windows/OverlayInputFilter.h
+        src/platform/windows/ToolbarInputFilter.cpp src/platform/windows/ToolbarInputFilter.h
         src/renderer/DanmakuItem.cpp src/renderer/DanmakuItem.h
         src/infrastructure/XmlLoader.cpp src/infrastructure/XmlLoader.h
         src/infrastructure/SettingsStore.cpp src/infrastructure/SettingsStore.h

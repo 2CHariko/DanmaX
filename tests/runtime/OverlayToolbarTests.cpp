@@ -1,49 +1,39 @@
 #include "application/AppController.h"
-#include "platform/windows/OverlayInputFilter.h"
+#include "platform/windows/ToolbarInputFilter.h"
 #include "infrastructure/SettingsStore.h"
 #include "renderer/DanmakuItem.h"
 #include <QTemporaryDir>
 #include <QSignalSpy>
+#include <QWindow>
 #include <QTest>
 
 class OverlayToolbarTests : public QObject {
     Q_OBJECT
 private slots:
-    void hitTestLogic() {
-        OverlayInputFilter filter;
-        // 初始没有任何矩形，所有坐标都应判定为穿透 (hitTest = false)
-        QVERIFY(!filter.hitTest(QPoint(0, 0)));
-        QVERIFY(!filter.hitTest(QPoint(500, 20)));
+    void toolbarFilterAttachment() {
+        ToolbarInputFilter filter;
+        QCOMPARE(filter.window(), nullptr);
 
-        // 模拟折叠状态：仅顶部中央有 80x8 像素把手
-        filter.setInteractiveRects({QRect(400, 0, 80, 8)});
-        QVERIFY(filter.hitTest(QPoint(400, 0)));
-        QVERIFY(filter.hitTest(QPoint(440, 4)));
-        QVERIFY(!filter.hitTest(QPoint(399, 4)));
-        QVERIFY(!filter.hitTest(QPoint(481, 4)));
-        QVERIFY(!filter.hitTest(QPoint(440, 9)));
+        QWindow window;
+        filter.attach(&window);
+        QCOMPARE(filter.window(), &window);
 
-        // 模拟展开状态：主胶囊栏 500x38 + 展开的 Popover 220x48
-        filter.setInteractiveRects({
-            QRect(200, 4, 500, 38),
-            QRect(340, 46, 220, 48)
-        });
-        // 命中主胶囊栏内部
-        QVERIFY(filter.hitTest(QPoint(250, 20)));
-        // 命中 Popover 浮层内部
-        QVERIFY(filter.hitTest(QPoint(400, 60)));
-        // 外部透明区域完全穿透
-        QVERIFY(!filter.hitTest(QPoint(100, 20)));
-        QVERIFY(!filter.hitTest(QPoint(250, 100)));
-        QVERIFY(!filter.hitTest(QPoint(800, 300)));
+        filter.attach(nullptr);
+        QCOMPARE(filter.window(), nullptr);
     }
-    void hoverDetection() {
-        OverlayInputFilter filter;
-        QSignalSpy hoverSpy(&filter, &OverlayInputFilter::hoverChanged);
-        QVERIFY(!filter.isHovering());
-        filter.setInteractiveRects({QRect(100, 0, 200, 40)});
-        QVERIFY(filter.hitTest(QPoint(150, 20)));
-        QVERIFY(!filter.hitTest(QPoint(50, 20)));
+
+    void dualWindowAttachment() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        AppController controller(dir.path(), nullptr, {}, dir.path());
+        QWindow overlayWindow;
+        QWindow toolbarWindow;
+        DanmakuItem renderer;
+
+        // 验证三参数双窗口 attach 挂接
+        controller.attach(&renderer, &overlayWindow, &toolbarWindow);
+        QCOMPARE(controller.toolbarInputFilter()->window(), &toolbarWindow);
     }
 
     void controllerStepOperations() {
@@ -92,18 +82,6 @@ private slots:
         QSignalSpy showMainSpy(&controller, &AppController::requestShowMainWindow);
         controller.showMainWindow();
         QCOMPARE(showMainSpy.count(), 1);
-
-        // 5. 交互区域同步
-        QVariantList rects;
-        QVariantMap r1;
-        r1[QStringLiteral("x")] = 100;
-        r1[QStringLiteral("y")] = 0;
-        r1[QStringLiteral("width")] = 200;
-        r1[QStringLiteral("height")] = 30;
-        rects.append(r1);
-        controller.setOverlayInteractiveRects(rects);
-        QVERIFY(controller.overlayInputFilter()->hitTest(QPoint(150, 15)));
-        QVERIFY(!controller.overlayInputFilter()->hitTest(QPoint(50, 15)));
     }
 
     void clearActiveDanmaku() {

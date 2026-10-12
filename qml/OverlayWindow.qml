@@ -2,15 +2,13 @@ import QtQuick
 import QtQuick.Window
 import DanmaX.Native
 import "i18n"
-import "components"
 Window {
     id:overlay
     required property QtObject backend
     property alias renderer:canvas
     color:"transparent"
-    flags: Qt.FramelessWindowHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus
+    flags: Qt.FramelessWindowHint | Qt.Tool | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus
     DanmakuCanvas { id: canvas; anchors.fill: parent; visible: overlay.backend ? overlay.backend.danmakuVisible : true }
-    DanmakuToolbar { id: toolbar; backend: overlay.backend; z: 10 }
     Rectangle {
         visible:overlay.backend.settings.values.debug
         color:"#b0202020";radius:4
