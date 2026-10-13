@@ -97,6 +97,16 @@
       "file": "chevron-right.svg",
       "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Chevron%20Right/SVG/ic_fluent_chevron_right_20_regular.svg",
       "sha256": "212c611689abb60d2cd56d868e070e44a4c4fbe1d4392622040d1d10a46463e2"
+    },
+    {
+      "file": "pause.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Pause/SVG/ic_fluent_pause_20_regular.svg",
+      "sha256": "cad333d70ced0f6f63d0c17689df6d269b6e0698bfca2fcae994aa30c677dd61"
+    },
+    {
+      "file": "stop.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Stop/SVG/ic_fluent_stop_20_regular.svg",
+      "sha256": "8023e072d92bf65ac7647ae651d828d083834abc2eee1a2d24d64e10815d493a"
     }
   ],
   "derivedAssets": [
@@ -251,6 +261,22 @@
     {
       "file": "chevron-right-dark.png",
       "sha256": "7b2048ebeab2192804cb8f5cb890192fc18e66a485347e4a799379b7efe3413b"
+    },
+    {
+      "file": "pause.png",
+      "sha256": "6c9b07deb18fcc73774be4d760c619a5311b5ef11d507023511a84af64605d03"
+    },
+    {
+      "file": "pause-dark.png",
+      "sha256": "47f46cc038358bd774433fee1263e1dc7a4d13819acccd7f7c247ca6f49ff2e7"
+    },
+    {
+      "file": "stop.png",
+      "sha256": "86dd432e93605410ead9ad8783c1a762a85455ce5e6b54a04d0ffa699f4cd8d1"
+    },
+    {
+      "file": "stop-dark.png",
+      "sha256": "47a5745710bf066b3180a9f26d7fb6ea9366a206ed2e4532244368fa0c4b7bee"
     }
   ],
   "rendering": "sharp 0.35.5; 60x60 PNG; dark=negate RGB preserving alpha"

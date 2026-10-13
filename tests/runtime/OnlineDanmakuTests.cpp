@@ -396,14 +396,14 @@ class OnlineDanmakuTests final : public QObject {
         QVERIFY(controller.running()); QVERIFY(controller.playing());
         server.response = [](QByteArray) { return Response{200, commentBody("新弹幕"), 100}; };
         const auto count = server.targets.size(); library->downloadEpisode(true); QTRY_VERIFY(server.targets.size() > count);
-        controller.stop(); QTest::qWait(160); QCOMPARE(controller.total(), 0); QCOMPARE(loaded.count(), 1);
+        controller.unload(); QTest::qWait(160); QCOMPARE(controller.total(), 0); QCOMPARE(loaded.count(), 1);
         const auto xml = root.filePath("local.xml"); writeBytes(xml, R"(<i><d p="0,1,25,16777215">local</d></i>)");
         library->downloadEpisode(true); QTest::qWait(20); controller.loadFile(xml);
         QTRY_VERIFY(!controller.loading()); QTest::qWait(120); QCOMPARE(controller.total(), 1); QCOMPARE(controller.filePath(), xml);
         // A queued cached result must also lose to an explicit stop.
         library->downloadEpisode(true); QTRY_VERIFY(!library->busy()); QCOMPARE(controller.total(), 2);
         QTRY_VERIFY(!library->scanning()); const auto cachedKey = library->cachedEntries().first().toMap()["key"].toString();
-        library->loadCached(cachedKey); controller.stop(); QTest::qWait(100); QCOMPARE(controller.total(), 0);
+        library->loadCached(cachedKey); controller.unload(); QTest::qWait(100); QCOMPARE(controller.total(), 0);
         // Switching from XML preparation must also notify QML that XML loading ended.
         controller.loadFile(xml); QVERIFY(controller.loading());
         QSignalSpy state(&controller, &AppController::stateChanged);

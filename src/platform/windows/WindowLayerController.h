@@ -12,6 +12,7 @@ public:
     explicit WindowLayerController(QObject* parent = nullptr, Positioner positioner = {});
     ~WindowLayerController() override;
     void attach(QWindow* main, QWindow* overlay, QWindow* toolbar);
+    void invalidate();
     bool reconcile(int strategy, bool panelForeground, bool overlayAllowed, bool periodic = false);
 signals:
     void invalidated();

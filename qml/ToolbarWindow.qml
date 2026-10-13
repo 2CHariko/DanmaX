@@ -17,7 +17,6 @@ Window {
     y: overlayWindow ? overlayWindow.y : 0
     screen: overlayWindow ? overlayWindow.screen : null
     visible: presentationAllowed && phase !== "hidden"
-    onVisibleChanged: if (visible) toolbarWin.raise()
 
     // Content intent and HWND lifetime are independent. Keep full geometry during exit.
     property string phase: "hidden"
@@ -34,7 +33,6 @@ Window {
         } else if (contentExpanded) {
             phase = "opening"
             transitionTimer.start()
-            toolbarWin.raise()
         } else if (phase !== "hidden") {
             phase = "closing"
             transitionTimer.start()
@@ -57,9 +55,16 @@ Window {
     width: toolbar.targetWidth
     height: toolbar.targetHeight
 
+    Binding {
+        target: toolbarWin.backend.toolbarPointer
+        property: "activationWidth"
+        value: Math.round(toolbar.activationWidth)
+    }
+
     DanmakuToolbar {
         id: toolbar
         backend: toolbarWin.backend
+        maximumWidth: toolbarWin.overlayWindow ? toolbarWin.overlayWindow.width : 1920
         presentationAllowed: toolbarWin.presentationAllowed && toolbarWin.backend.toolbarPointer.enabled
     }
 }

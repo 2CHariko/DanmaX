@@ -7,11 +7,347 @@
 #include <QSignalSpy>
 #include <QWindow>
 #include <QQuickWindow>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSaveFile>
+#include <QScopeGuard>
 #include <QTest>
+#include <algorithm>
+#include <cmath>
 
 class OverlayToolbarTests : public QObject {
     Q_OBJECT
 private slots:
+    void realMediaSessionReadOnlyLifecycle() {
+        const auto session = qEnvironmentVariable("DANMAKU_TEST_MEDIA_SESSION");
+        if (session.isEmpty())
+            QSKIP("Opt in with DANMAKU_TEST_MEDIA_SESSION; never creates or controls a player session.");
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        AppController controller(dir.path(), nullptr, {}, dir.path());
+        auto* monitor = controller.findChild<MediaMonitor*>();
+        QVERIFY(monitor);
+        auto* settings = qobject_cast<SettingsStore*>(controller.settings());
+        QVERIFY(settings->setValue("foregroundOnly", false));
+        QQuickWindow overlay;
+        overlay.resize(800, 600);
+        DanmakuItem renderer;
+        renderer.setParentItem(overlay.contentItem());
+        controller.attach(&renderer, &overlay);
+        connect(&controller, &AppController::stateChanged, &overlay,
+                [&] { overlay.setVisible(controller.overlayVisible()); });
+
+        MediaSample latest;
+        int foundSamples = 0;
+        QJsonArray observations, checkpoints;
+        const auto reportPath = qEnvironmentVariable("DANMAKU_TEST_MEDIA_REPORT");
+        const auto saveReport = qScopeGuard([&] {
+            if (reportPath.isEmpty()) return;
+            QSaveFile report(reportPath);
+            if (report.open(QIODevice::WriteOnly)) {
+                report.write(QJsonDocument(QJsonObject{{"session", session},
+                    {"readOnly", true}, {"samples", observations},
+                    {"checkpoints", checkpoints}}).toJson());
+                report.commit();
+            }
+        });
+        connect(monitor, &MediaMonitor::sampleReceived, this, [&](const MediaSample& sample) {
+            if (sample.id != session || !sample.found) return;
+            latest = sample;
+            ++foundSamples;
+            observations.append(QJsonObject{{"generation", static_cast<qint64>(sample.generation)},
+                {"observedAt", sample.observedAt}, {"position", sample.position},
+                {"duration", sample.duration}, {"rate", sample.rate},
+                {"playback", static_cast<int>(sample.playback)}, {"title", sample.title}});
+        });
+        const auto record = [&](const QString& stage) {
+            checkpoints.append(QJsonObject{{"stage", stage}, {"position", controller.position()},
+                {"danmakuPosition", controller.danmakuPosition()}, {"running", controller.running()},
+                {"playing", controller.playing()}, {"state", static_cast<int>(controller.playbackState())},
+                {"visible", controller.overlayVisible()}, {"total", controller.total()},
+                {"sampleGeneration", static_cast<qint64>(latest.generation)},
+                {"samplePosition", latest.position}});
+        };
+        QFile source(dir.filePath("source.xml"));
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        source.write("<i><d p=\"0,5,25,16777215,0,0,x,1\">zero</d><d p=\"600,5,25,16777215,0,0,x,2\">later</d></i>");
+        source.close();
+        QSignalSpy loaded(&controller, &AppController::loadCompleted);
+        controller.loadFile(source.fileName());
+        QTRY_COMPARE(loaded.count(), 1);
+        controller.selectSession(session);
+        controller.start(false);
+        QTRY_VERIFY_WITH_TIMEOUT(foundSamples >= 3 && !controller.mediaTitle().isEmpty(), 10000);
+        QVERIFY(latest.observedAt > 0);
+        QVERIFY(latest.duration > 0);
+        QVERIFY(controller.running());
+        QVERIFY(!controller.manualMode());
+        QVERIFY(controller.overlayVisible());
+        record("connected");
+
+        const double pausedPosition = controller.position();
+        const auto initial = latest;
+        const int observationStart = observations.size();
+        QTest::qWait(1200);
+        bool stablePause = initial.playback == MediaSample::Playback::Paused;
+        for (int i = observationStart; i < observations.size(); ++i) {
+            const auto sample = observations[i].toObject();
+            stablePause = stablePause && sample["playback"].toInt() == static_cast<int>(MediaSample::Playback::Paused)
+                && sample["position"].toDouble() == initial.position && sample["title"].toString() == initial.title;
+        }
+        if (stablePause) {
+            QCOMPARE(controller.playbackState(), AppController::Paused);
+            QCOMPARE(controller.position(), pausedPosition);
+            QVERIFY(!controller.playing());
+            record("real-pause-frozen");
+        } else {
+            qInfo("Stable external pause was not observed; its freeze assertion was not exercised.");
+            record("external-state-changing");
+        }
+        QVERIFY(std::abs(controller.position() - latest.position) < 0.5);
+        QVERIFY(settings->setValue("timeOffset", 1.5));
+        QCOMPARE(controller.danmakuPosition(), controller.position() + 1.5);
+        record("positive-offset");
+        QVERIFY(settings->setValue("timeOffset", -1.5));
+        QCOMPARE(controller.danmakuPosition(), std::max(0.0, controller.position() - 1.5));
+        record("negative-offset");
+        QVERIFY(settings->setValue("timeOffset", 0.0));
+        const auto sourceTitle = controller.sourceTitle();
+        quint64 previousGeneration = latest.generation;
+        for (int cycle = 0; cycle < 2; ++cycle) {
+            controller.stop();
+            QCOMPARE(controller.playbackState(), AppController::Ready);
+            QCOMPARE(controller.total(), 2);
+            QCOMPARE(controller.sourceTitle(), sourceTitle);
+            QVERIFY(!controller.overlayVisible());
+            QCOMPARE(controller.position(), 0.0);
+            const int count = foundSamples;
+            QTRY_VERIFY_WITH_TIMEOUT(foundSamples >= count + 3, 5000);
+            // Real monitor keeps reading, but exiting must not restart the overlay/time axis.
+            QVERIFY(!controller.running());
+            QCOMPARE(controller.position(), 0.0);
+            record("exited-retaining-source");
+            previousGeneration = latest.generation;
+            controller.start(false);
+            QTRY_VERIFY_WITH_TIMEOUT(latest.generation > previousGeneration &&
+                controller.playbackState() != AppController::WaitingForPlayer, 5000);
+            QVERIFY(std::abs(controller.position() - latest.position) < 0.5);
+            QVERIFY(controller.overlayVisible());
+            record("restarted-aligned");
+        }
+        controller.stop();
+        controller.start(true);
+        QTRY_VERIFY(controller.position() > 0);
+        controller.togglePause();
+        const double independentPosition = controller.position();
+        const int count = foundSamples;
+        QTRY_VERIFY_WITH_TIMEOUT(foundSamples >= count + 3, 5000);
+        QCOMPARE(controller.position(), independentPosition);
+        QCOMPARE(controller.playbackState(), AppController::Paused);
+        controller.togglePause();
+        QTRY_VERIFY(controller.position() > independentPosition);
+        QVERIFY(controller.playing());
+        record("independent-ignores-real-session");
+        controller.unload();
+        QCOMPARE(controller.total(), 0);
+        QCOMPARE(controller.playbackState(), AppController::Empty);
+        QVERIFY(!controller.overlayVisible());
+        record("unloaded");
+    }
+
+    void independentLifecycleAndRetainedSource() {
+        QTemporaryDir dir;
+        AppController controller(dir.path(), nullptr, {}, dir.path());
+        auto* monitor = controller.findChild<MediaMonitor*>();
+        QObject::disconnect(monitor, nullptr, &controller, nullptr);
+        QQuickWindow overlay;
+        overlay.resize(800, 600);
+        DanmakuItem renderer;
+        renderer.setParentItem(overlay.contentItem());
+        controller.attach(&renderer, &overlay);
+        connect(&controller, &AppController::stateChanged, &overlay,
+                [&] { overlay.setVisible(controller.overlayVisible()); });
+        QFile source(dir.filePath("source.xml"));
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        source.write("<i><d p=\"0,5,25,16777215,0,0,x,1\">zero</d><d p=\"10,5,25,16777215,0,0,x,2\">ten</d></i>");
+        source.close();
+        QSignalSpy loaded(&controller, &AppController::loadCompleted);
+        controller.loadFile(source.fileName());
+        QTRY_COMPARE(loaded.count(), 1);
+        QCOMPARE(controller.playbackState(), AppController::Ready);
+        auto* settings = qobject_cast<SettingsStore*>(controller.settings());
+        settings->setValue("timeOffset", 30.0);
+        controller.setManualMode(true);
+        controller.start(true);
+        QTRY_VERIFY(controller.position() > 0);
+        QCOMPARE(controller.danmakuPosition(), controller.position());
+        controller.setManualMode(false);
+        QVERIFY(controller.manualMode());
+        controller.selectSession("other-player");
+        QVERIFY(controller.playing());
+        QSignalSpy states(&controller, &AppController::stateChanged);
+        monitor->errorOccurred("independent-isolation");
+        QVERIFY(controller.error().isEmpty());
+        QCOMPARE(states.count(), 0);
+        controller.togglePause();
+        const double paused = controller.position();
+        QTest::qWait(100);
+        QCOMPARE(controller.position(), paused);
+        controller.seek(-5);
+        QCOMPARE(controller.position(), 0.0);
+        controller.seek(6);
+        QCOMPARE(controller.position(), 6.0);
+        QVERIFY(!controller.playing());
+        QVERIFY(renderer.snapshotCount() == 0);
+        controller.togglePause();
+        QTRY_VERIFY(controller.position() > 6);
+        controller.seek(1000);
+        QTRY_COMPARE(controller.playbackState(), AppController::Completed);
+        controller.seek(3);
+        QCOMPARE(controller.playbackState(), AppController::Paused);
+        QCOMPARE(controller.position(), 3.0);
+        controller.togglePause();
+        controller.seek(controller.duration());
+        QTRY_VERIFY(controller.completed());
+        controller.togglePause();
+        QVERIFY(controller.playing());
+        QCOMPARE(controller.position(), 0.0);
+        QTRY_VERIFY(controller.position() > 0);
+        const auto title = controller.sourceTitle();
+        const auto path = controller.filePath();
+        controller.stop();
+        QCOMPARE(controller.playbackState(), AppController::Ready);
+        QCOMPARE(controller.total(), 2);
+        QCOMPARE(controller.sourceTitle(), title);
+        QCOMPARE(controller.filePath(), path);
+        QCOMPARE(controller.position(), 0.0);
+        QVERIFY(controller.manualMode());
+        QVERIFY(!controller.overlayVisible());
+        QCOMPARE(renderer.snapshotCount(), 0);
+        QCOMPARE(renderer.cacheEntries(), 0);
+        controller.stop();
+        controller.start(true);
+        QCOMPARE(controller.position(), 0.0);
+        QTRY_VERIFY(controller.position() > 0);
+        controller.unload();
+        controller.unload();
+        QCOMPARE(controller.playbackState(), AppController::Empty);
+        QCOMPARE(controller.total(), 0);
+        QVERIFY(controller.sourceTitle().isEmpty());
+    }
+
+    void syncStateFreshnessAndOffset() {
+        QTemporaryDir dir;
+        AppController controller(dir.path(), nullptr, {}, dir.path());
+        auto* monitor = controller.findChild<MediaMonitor*>();
+        QObject::disconnect(monitor, nullptr, &controller, nullptr);
+        QQuickWindow overlay;
+        overlay.resize(800, 600);
+        DanmakuItem renderer;
+        renderer.setParentItem(overlay.contentItem());
+        controller.attach(&renderer, &overlay);
+        connect(&controller, &AppController::stateChanged, &overlay,
+                [&] { overlay.setVisible(controller.overlayVisible()); });
+        controller.beginDemo(50);
+        controller.stop();
+        controller.selectSession("player-one");
+        controller.start(false);
+        QCOMPARE(controller.playbackState(), AppController::WaitingForPlayer);
+        MediaSample sample;
+        sample.id = "player-one";
+        sample.identity = "video-one";
+        sample.title = "title";
+        sample.found = true;
+        sample.duration = 100;
+        sample.position = 10;
+        sample.playback = MediaSample::Playback::Paused;
+        auto send = [&](MediaSample value, bool stamp = true) {
+            if (stamp) {
+                value.generation = monitor->generation();
+                value.observedAt = MediaMonitor::monotonicSeconds();
+            }
+            QVERIFY(QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, value)));
+        };
+        send(sample);
+        QCOMPARE(controller.position(), 10.0);
+        QCOMPARE(controller.playbackState(), AppController::Paused);
+        auto* settings = qobject_cast<SettingsStore*>(controller.settings());
+        settings->setValue("timeOffset", 0.5);
+        QCOMPARE(controller.position(), 10.0);
+        QCOMPARE(controller.danmakuPosition(), 10.5);
+        settings->setValue("timeOffset", -0.5);
+        QCOMPARE(controller.danmakuPosition(), 9.5);
+        sample.playback = MediaSample::Playback::Playing;
+        sample.rate = 2;
+        sample.position = 0;
+        send(sample);
+        QTRY_VERIFY(renderer.snapshotCount() > 0);
+        const auto playing = controller.position();
+        QTest::qWait(100);
+        QVERIFY(controller.position() > playing + 0.1);
+        sample.playback = MediaSample::Playback::Stopped;
+        send(sample);
+        QCOMPARE(controller.playbackState(), AppController::PlayerStopped);
+        QCOMPARE(renderer.snapshotCount(), 0);
+        QVERIFY(controller.running());
+        QCOMPARE(controller.total(), 50);
+        sample.playback = MediaSample::Playback::Paused;
+        sample.position = 20;
+        send(sample);
+        QCOMPARE(controller.position(), 20.0);
+        sample.generation = monitor->generation();
+        sample.observedAt = MediaMonitor::monotonicSeconds() - 3;
+        sample.position = 70;
+        send(sample, false);
+        QCOMPARE(controller.position(), 20.0);
+        sample.observedAt = MediaMonitor::monotonicSeconds();
+        sample.generation--;
+        send(sample, false);
+        QCOMPARE(controller.position(), 20.0);
+        sample.generation = monitor->generation();
+        sample.observedAt = MediaMonitor::monotonicSeconds() - 1;
+        send(sample, false);
+        QCOMPARE(controller.position(), 20.0);
+        sample.found = false;
+        send(sample);
+        QCOMPARE(controller.playbackState(), AppController::WaitingForPlayer);
+        QCOMPARE(controller.position(), 20.0);
+        sample.found = true;
+        sample.position = 25;
+        sample.identity = "video-two";
+        send(sample);
+        QCOMPARE(controller.position(), 25.0);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.playbackState(), AppController::SyncTimeout, 3500);
+        QSignalSpy notifications(&controller, &AppController::stateChanged);
+        QTest::qWait(120);
+        QCOMPARE(notifications.count(), 0);
+        sample.position = 30;
+        send(sample);
+        QCOMPARE(controller.position(), 30.0);
+        controller.togglePause();
+        controller.seek(1);
+        QCOMPARE(controller.position(), 30.0);
+        MediaSample old = sample;
+        old.generation = monitor->generation();
+        old.observedAt = MediaMonitor::monotonicSeconds();
+        controller.stop();
+        controller.start(false);
+        send(old, false);
+        QCOMPARE(controller.position(), 0.0);
+        sample.position = 40;
+        send(sample);
+        QCOMPARE(controller.position(), 40.0);
+        controller.selectSession("player-two");
+        QCOMPARE(controller.playbackState(), AppController::WaitingForPlayer);
+        send(sample);
+        QCOMPARE(controller.position(), 0.0);
+        controller.stop();
+        QVERIFY(!controller.manualMode());
+        QCOMPARE(controller.total(), 50);
+    }
+
     void hiddenToolbarPointerSensing() {
         QPoint cursor(-1000, -200);
         ToolbarPointerMonitor monitor(nullptr, [&] { return cursor; });
@@ -20,23 +356,41 @@ private slots:
         overlay.setGeometry(-1920, -200, 1920, 1080);
         toolbar.setGeometry(-1200, -196, 480, 100);
         monitor.attach(&overlay, &toolbar);
-        QCOMPARE(monitor.activationRect(), QRect(-1000, -200, 80, 10));
+        monitor.setActivationWidth(480);
+        QCOMPARE(monitor.activationRect(), QRect(-1200, -200, 480, 10));
         monitor.setEnabled(true);
         QVERIFY(monitor.hovered());
         QVERIFY(!toolbar.isVisible());
-        cursor = QPoint(-921, -191);
+        cursor = QPoint(-1200, -200);
         QTRY_VERIFY(monitor.hovered());
-        cursor = QPoint(-920, -190);
+        cursor = QPoint(-721, -191);
+        QTRY_VERIFY(monitor.hovered());
+        cursor = QPoint(-720, -191);
         QTRY_VERIFY(!monitor.hovered());
+        cursor = QPoint(-1201, -200);
+        QTRY_VERIFY(!monitor.hovered());
+        cursor = QPoint(-1000, -190);
+        QTRY_VERIFY(!monitor.hovered());
+        cursor = QPoint(-1160, -195);
+        QTRY_VERIFY(monitor.hovered());
+        monitor.setActivationWidth(320);
+        QVERIFY(!monitor.hovered());
+        QCOMPARE(monitor.activationRect(), QRect(-1120, -200, 320, 10));
         toolbar.show();
         cursor = QPoint(-1150, -130);
         QTRY_VERIFY(monitor.hovered());
         toolbar.hide();
         QTRY_VERIFY(!monitor.hovered());
         overlay.setGeometry(200, 100, 1200, 800);
-        QCOMPARE(monitor.activationRect(), QRect(760, 100, 80, 10));
+        QCOMPARE(monitor.activationRect(), QRect(640, 100, 320, 10));
         cursor = QPoint(800, 105);
         QTRY_VERIFY(monitor.hovered());
+        monitor.setActivationWidth(2000);
+        QCOMPARE(monitor.activationRect(), QRect(200, 100, 1200, 10));
+        monitor.setActivationWidth(0);
+        QVERIFY(monitor.activationRect().isEmpty());
+        QVERIFY(!monitor.hovered());
+        monitor.setActivationWidth(320);
         monitor.setEnabled(false);
         QVERIFY(!monitor.hovered());
         QVERIFY(!monitor.enabled());
@@ -63,8 +417,8 @@ private slots:
         controller.beginDemo(50);
         QVERIFY(controller.running());
         QVERIFY(controller.overlayVisible());
-        QVERIFY(!controller.toolbarPresentationAllowed());
-        QVERIFY(!controller.toolbarPointer()->property("enabled").toBool());
+        QVERIFY(controller.toolbarPresentationAllowed());
+        QVERIFY(controller.toolbarPointer()->property("enabled").toBool());
         QTRY_VERIFY(controller.position() > 0);
         QVERIFY(renderer.snapshotCount() > 0);
         panelForeground = false;
@@ -76,7 +430,7 @@ private slots:
         overlay.show();
         QVERIFY(controller.toolbarPointer()->property("enabled").toBool());
         panelForeground = true;
-        QTRY_VERIFY(!controller.toolbarPresentationAllowed());
+        QTRY_VERIFY(controller.toolbarPresentationAllowed());
         QVERIFY(controller.overlayVisible());
         const double before = controller.position();
         QTest::qWait(100);
@@ -97,6 +451,7 @@ private slots:
         auto* settings = qobject_cast<SettingsStore*>(controller.settings());
         QVERIFY(settings->setValue("foregroundOnly", true));
         controller.beginDemo(50);
+        controller.stop();
         controller.start(false);
         QTRY_VERIFY(controller.overlayVisible());
         playerForeground = false;
@@ -107,7 +462,7 @@ private slots:
         panelForeground = true;
         playerForeground = false;
         QTRY_VERIFY(controller.overlayVisible());
-        QVERIFY(!controller.toolbarPresentationAllowed());
+        QVERIFY(controller.toolbarPresentationAllowed());
         panelForeground = false;
         // Leaving the panel forces a new player sample even within 250ms.
         QTRY_VERIFY(!controller.overlayVisible());
@@ -126,12 +481,13 @@ private slots:
         const auto notTopmost = ~quintptr(1);
         layers.attach(&panel, &overlay, &toolbar);
         QVERIFY(layers.reconcile(3, true, true, true));
-        QCOMPARE(calls.size(), std::size_t(3));
+        QCOMPARE(calls.size(), std::size_t(4));
         QCOMPARE(calls[0].window, overlay.winId());
         QCOMPARE(calls[0].after, notTopmost);
         QCOMPARE(calls[1].after, topmost);
-        QCOMPARE(calls.back().window, panel.winId());
-        for (const auto& call : calls) QCOMPARE(call.flags, unsigned(0x13)); // NOMOVE|NOSIZE|NOACTIVATE
+        QCOMPARE(calls[2].window, panel.winId());
+        QCOMPARE(calls.back().window, toolbar.winId());
+        for (const auto& call : calls) QCOMPARE(call.flags, unsigned(0x213)); // NOMOVE|NOSIZE|NOACTIVATE|NOOWNERZORDER
         calls.clear();
         QVERIFY(layers.reconcile(3, false, true, true));
         QCOMPARE(calls.front().window, panel.winId());
@@ -140,7 +496,7 @@ private slots:
         QCOMPARE(calls.back().after, topmost);
         calls.clear();
         QVERIFY(layers.reconcile(0, true, true));
-        QCOMPARE(calls.back().window, panel.winId());
+        QCOMPARE(calls[calls.size() - 2].window, panel.winId());
         QCOMPARE(calls.back().after, quintptr(0)); // HWND_TOP, ordinary band
         QVERIFY(layers.reconcile(1, true, true));
         calls.clear();
@@ -189,7 +545,7 @@ private slots:
         QTRY_VERIFY(controller.overlayVisible());
         QTRY_VERIFY(controller.position() > 0);
         QVERIFY(renderer.snapshotCount() > 0);
-        QVERIFY(!controller.toolbarPointer()->property("enabled").toBool());
+        QVERIFY(controller.toolbarPointer()->property("enabled").toBool());
         succeed = false;
         auto* settings = qobject_cast<SettingsStore*>(controller.settings());
         QVERIFY(settings->setValue("onTop", 2));

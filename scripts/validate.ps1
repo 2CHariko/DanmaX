@@ -28,6 +28,12 @@ Invoke-ProjectEnvironment {
         '--data-dir',(Join-Path $output 'xml-data'),'--cache-dir',$env:QML_DISK_CACHE_PATH,
         '--report',(Join-Path $output 'xml.json'),'--capture-overlay',(Join-Path $output 'xml-overlay.png'))
     if ($SessionId) {
+        $sessionTests = Get-ProjectPath 'out/build/windows-release/bin/overlay_toolbar_tests.exe'
+        if (-not (Test-Path -LiteralPath $sessionTests)) { throw 'Build Release with tests before validating a media session.' }
+        $env:DANMAKU_TEST_MEDIA_SESSION = $SessionId
+        $env:DANMAKU_TEST_MEDIA_REPORT = Join-Path $output 'session-lifecycle.json'
+        $sessionTestLog = (Join-Path $output 'session-tests.txt') + ',txt'
+        Invoke-Checked $sessionTests @('realMediaSessionReadOnlyLifecycle','-o',$sessionTestLog)
         Invoke-Checked $exe @('--benchmark','50','--seconds','5','--media-session',$SessionId,'--file',(Get-ProjectPath 'tests/fixtures/sample.xml'),
             '--data-dir',(Join-Path $output 'session-data'),'--cache-dir',$env:QML_DISK_CACHE_PATH,'--report',(Join-Path $output 'session.json'))
     }

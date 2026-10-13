@@ -36,15 +36,20 @@ class AppController final : public QObject {
     Q_PROPERTY(bool running READ running NOTIFY stateChanged)
     Q_PROPERTY(bool playing READ playing NOTIFY stateChanged)
     Q_PROPERTY(bool manualMode READ manualMode NOTIFY stateChanged)
+    Q_PROPERTY(PlaybackState playbackState READ playbackState NOTIFY stateChanged)
+    Q_PROPERTY(bool completed READ completed NOTIFY stateChanged)
     Q_PROPERTY(bool overlayVisible READ overlayVisible NOTIFY stateChanged)
     Q_PROPERTY(bool toolbarPresentationAllowed READ toolbarPresentationAllowed NOTIFY stateChanged)
     Q_PROPERTY(bool danmakuVisible READ danmakuVisible WRITE setDanmakuVisible NOTIFY danmakuVisibleChanged)
      Q_PROPERTY(int total READ total NOTIFY stateChanged)
     Q_PROPERTY(double position READ position NOTIFY metricsChanged)
+    Q_PROPERTY(double danmakuPosition READ danmakuPosition NOTIFY metricsChanged)
     Q_PROPERTY(double duration READ duration NOTIFY stateChanged)
     Q_PROPERTY(QVariantMap metrics READ metrics NOTIFY metricsChanged)
     Q_PROPERTY(bool hasFluentIcons READ hasFluentIcons CONSTANT)
   public:
+    enum PlaybackState { Empty, Ready, Playing, Paused, Completed, WaitingForPlayer, PlayerStopped, SyncTimeout };
+    Q_ENUM(PlaybackState)
     using ForegroundQuery = std::function<bool(const QString&)>;
     using MainForegroundQuery = std::function<bool(QWindow*)>;
     explicit AppController(QString dataDirectory, QObject* parent = nullptr,
@@ -94,6 +99,8 @@ class AppController final : public QObject {
     bool manualMode() const {
         return manual_;
     }
+    PlaybackState playbackState() const { return playbackState_; }
+    bool completed() const { return playbackState_ == Completed; }
     bool overlayVisible() const {
         return visible_;
     }
@@ -111,6 +118,7 @@ class AppController final : public QObject {
     double position() const {
         return position_;
     }
+    double danmakuPosition() const;
     double duration() const {
         return duration_;
     }
@@ -124,6 +132,8 @@ class AppController final : public QObject {
     Q_INVOKABLE void cancelLoad();
     Q_INVOKABLE void start(bool manual = false);
     Q_INVOKABLE void stop();
+    Q_INVOKABLE void unload();
+    Q_INVOKABLE void setManualMode(bool manual);
     Q_INVOKABLE void togglePause();
     Q_INVOKABLE void seek(double position);
     Q_INVOKABLE void selectSession(const QString& id);
@@ -153,7 +163,9 @@ class AppController final : public QObject {
     void configure();
     void applyRendererSettings();
     void discardLoad();
-    void resetPlayback();
+    void resetPlayback(bool unloadSource);
+    void setPlaybackState(PlaybackState state);
+    void resetDanmakuTimeline();
     void commitItems(std::vector<danmaku::Item> items, const QString& title);
 
     void fail(const QString& message);
@@ -184,6 +196,11 @@ class AppController final : public QObject {
     std::shared_ptr<XmlResult> pendingLoad_;
     quint64 loadGeneration_{};
     quint64 onlineLoadGeneration_{};
+    quint64 mediaGeneration_{};
+    double lastSampleObservedAt_{};
+    double sampleAgeAtReceive_{};
+    bool syncConnected_{};
+    PlaybackState playbackState_{Empty};
     QString sourceTitle_;
     QVariantList sessions_;
     QStringList fontFamilies_;
@@ -196,7 +213,7 @@ class AppController final : public QObject {
     bool awaitingInitialExposure_{};
     bool loading_{}, running_{}, playing_{}, manual_{}, visible_{}, snapshotDirty_{true}, demo_{}, danmakuVisible_{true};
     int progress_{}, frames_{};
-    double position_{}, duration_{}, rate_{1}, samplePosition_{};
+    double position_{}, duration_{}, loadedDuration_{}, rate_{1}, samplePosition_{};
     std::vector<double> frameTimes_;
     double engineMs_{}, snapshotMs_{};
     quint64 renderedFrames_{};

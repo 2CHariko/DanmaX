@@ -36,6 +36,7 @@
 - [18. 设置更新保留在屏弹幕 (2026-10-07)](#设置更新保留在屏弹幕2026-10-07)
 - [19. 弹幕排列与 XML 字号修复 (2026-10-07)](#弹幕排列与-xml-字号修复2026-10-07)
 - [20. 同步帧驱动与渲染器重构 (2026-10-07)](#弹幕引擎重构增量2026-10-07)
+- [工具栏播放操作与同步状态整理 (2026-10-14)](#工具栏播放操作与同步状态整理2026-10-14)
 
 ---
 
@@ -511,7 +512,7 @@ Windows 10/早期 Windows 11、系统透明开关与节能切换、高对比度�
 
 ## 工具栏层级与完全自动隐藏修复（2026-10-14）
 
-本节记录初版验收，主面板前台隐藏弹幕的策略已由下方“主面板前台临时置顶”实现替代；工具栏自动隐藏行为继续保留。
+本节记录初版验收，主面板前台隐藏弹幕的策略已由下方“主面板前台临时置顶”实现替代；80×10 感应区已由后续“工具栏同宽顶部感应”优化替代。工具栏自动隐藏行为继续保留。
 
 ### 已实现
 
@@ -561,3 +562,62 @@ Windows 10/早期 Windows 11、系统透明开关与节能切换、高对比度�
 - Qt Test `debugHudLongTitleLayout` 纳入现有 UI 入口，覆盖长中文、连续英文/网址、emoji、HTML 样式字符、换行、空标题、较大指标、160/240/1024 宽度、四角定位和内部放大字号，检查两行限制、宽度稳定、指标完整与标题原值保留。Debug 200% 缩放、13.5pt 应用字体补测为 3 passed、0 failed、0 skipped（含初始化与清理）；截图与日志在 `out/validation/debug-hud/`。
 - 最终常规 Debug、Release 均完成构建，全量 CTest 各为 **14/14 通过**（101.84 秒、48.44 秒）。本轮各自 `ui_workflow` 为 **9 passed、0 failed、2 skipped**；跳过的原生鼠标和所属对话框用例未获得 Windows 前台，不计为本轮实机通过。长标题 HUD 用例两种构建均实际执行通过。完整日志保存为 `out/validation/debug-hud/{debug,release}-ctest.log` 和对应 `*-ui-tests.txt`。
 - Release 编译后程序对 Chrome 真实暂停 SMTC 会话进行 4 秒只读同步 smoke，退出码 0，无 QML 警告；媒体位置约 50 秒，原始长标题完整保存在 `real-smtc/context.json`。已检查覆盖层截图，标题两行省略、指标未截断；原生透明输入与不激活属性为 true。`real-smtc/panel.png` 是从完整截图裁出的 HUD 区域。此检查不代表真实播放、全屏、多屏混合 DPI 或光学性能验收；Qt Test 截图使用 software 后端，不作为性能成绩。
+
+## 工具栏播放操作与同步状态整理（2026-10-14）
+
+本节的“进入主面板取消工具栏交互”记录为当时行为，已由后续“工具栏提示与主面板共存”优化替代；停止和覆盖层显示许可撤销时的立即关闭与拖动取消规则继续保留。
+
+### 已实现
+
+- 独立工具栏新增暂停／继续、停止、前后 5 秒跳转，以及当前位置／总时长／滑块组成的进度浮层；自然完成时播放按钮提供从头重播。进度拖动只预览、释放提交一次，保持播放／暂停状态；完成后跳转进入暂停。跟随模式保持只读，仅提供退出覆盖层与同步偏移，不控制外部播放器。
+- `stop()` 关闭覆盖层、重置进度并保留已载入记录、来源及所选模式；`unload()` 额外卸载数据。主面板分别提供停止与卸载，来源清除与命令行退出清理明确使用卸载。停止保留模型和池容量，不等同于工作集立即归零；绘制资源仍遵守渲染线程清理规则。
+- 所选模式由控制器提供，运行期间锁定，停止后保留。`playbackState` 明确区分 Empty/Ready/Playing/Paused/Completed/WaitingForPlayer/PlayerStopped/SyncTimeout，兼容原有 running/playing/manualMode；completed 提供 QML 重播入口判断。
+- 播放器原始 `position` 与弹幕投放 `danmakuPosition=max(0, position+timeOffset)` 分开。独立模式忽略同步偏移及媒体接口错误，不再因会话选择改变而暂停；跟随模式偏移即时重定位，暂停时也生效。修正工具栏提示为正值提前、负值延后。
+- `MediaSample` 携带播放状态、观测代次和 steady_clock 采样时间；选择、停止、重新启动更新代次，拒绝旧代次、超过 2.5 秒和乱序结果。超时计入 GUI 排队时间且只在进入状态时通知；播放器停止清空活动对象，丢失／超时冻结，恢复和媒体切换强制重定位。保留适配器已有 LastUpdatedTime 外推，GUI 不再次外推首次采样边界，防止零时刻弹幕被微小正向跳转跳过。
+- 工具栏两种浮层互斥，共用拖动保护、离开 1 秒关闭与固定策略；进入面板或显示许可撤销取消未提交的拖动。窄屏功能组换行，尺寸与原生窗口／感应区域同步。播放图标沿用现有资源，新增暂停、停止图标来自同一锁定微软 Fluent commit，sharp 0.35.5 预渲染并更新源／PNG SHA-256，无构建或运行依赖增加。
+
+### 验证证据与边界
+
+- 常规 Debug、Release 已构建；补入真实会话用例后，全量 CTest 再次均 **14/14 通过**，分别为 94.77 秒与 54.46 秒。两者 `overlay_toolbar` 均 **12 passed、0 failed、1 skipped**（默认未指定真实会话，真实用例另行显式执行通过）；`ui_workflow` 均 **12 passed、0 failed、0 skipped**。本次完整 CTest 明细保存在 `out/validation/playback-controls/real-smtc/{debug,release}-ctest.log`，Qt Test 明细为 `real-smtc/*-ui-tests.txt`、`real-smtc/*-state-tests.txt`。之前首次回归的 105.17 秒／53.31 秒日志仍保留在上级目录。
+- 新增生命周期／采样回归覆盖停止保留、重开、重复停止与卸载、完成／跳转／重播、会话与错误独立隔离、倍速、播放器停止、偏移、旧代次／过时／乱序样本、会话丢失、恢复、超时及不重复通知；保留已有首次曝光、隐藏恢复、暂停寿命和跳转回归。
+- QML 用例加载项目源码，验证两模式按钮、前后跳转、预览期间不跳转、释放提交、拖动防收起、浮层互斥、面板介入取消、固定恢复、退出隐藏及来源保留，并覆盖浅深主题和 200/320/800 逻辑宽度。窗口宽度输入通过工具栏最大宽度模拟；控制器仍按真实选屏维持覆盖窗尺寸。截图位于 `debug/`、`release/`，分别包含 progress/narrow/follow 三种状态。
+- Debug 200% 缩放、13.5pt 字体的新增进度交互检查为 **3 passed、0 failed、1 skipped**（含初始化／清理；真实鼠标前台检查跳过）；既有自动隐藏补测为 **3 passed、0 failed、0 skipped**。日志为 `debug-scaled-tests.txt`、`debug-scaled-autohide.txt`，截图位于 `debug-scaled/`。已检查两模式工具栏、进度浮层与换行截图；software 后端截图和缩放模拟不作为性能或混合 DPI 成绩。
+- Release 编译后程序在 520 逻辑宽度下完成浅色和 200% 深色主面板播放 smoke，均退出 0，无 QML 警告，暂停／停止／卸载按钮可见；证据为 `panel-light/`、`panel-dark-scaled/`。仅这两个隔离数据目录关闭 Mica 以获得完整截图，未改变用户配置；截图不代表 Mica 材质验收。
+- 用户打开媒体会话后补测：Chrome 真实 SMTC 处于暂停，位置 **42.80222 秒**、总时长 257 秒。Release 4 秒只读 smoke 退出 0、无 QML 警告，读取 31 个样本，原生透明输入与不激活属性为 true；报告与覆盖层截图为 `real-smtc/context.json`、`real-smtc/overlay.png`。已检查截图，长标题保持紧凑换行。窗口属性检查不等同于实际点击穿透验证。
+- 新增可选真实会话 Qt Test `realMediaSessionReadOnlyLifecycle`，Debug、Release 均 **3 passed、0 failed、0 skipped**（含初始化／清理）。真实暂停 1.2 秒期间进度冻结；±1.5 秒偏移即时生效且原始媒体时间不变；两轮退出保留数据、关闭覆盖层且不被后续媒体样本重启，重新启动按新代次对齐 42.80222 秒；独立暂停／恢复不受持续真实样本影响；卸载清空模型。证据为 `real-smtc/{debug,release}-tests.txt`、`real-smtc/{debug,release}-lifecycle.json`，JSON 保存原始观测时间、代次、媒体状态及各阶段检查点。测试全程只读，不向播放器发送控制命令。该会话始终暂停，真实播放、跳转、停止、丢失／重连和倍速变化未在本轮观察到，仍待实机验证。
+- 本次两种构建均取得 Windows 测试窗口前台：`nativeToolbarMousePolicy` 与 `nativePanelAndDialogPolicy` 执行通过。真实 SendInput 点击穿过弹幕进入测试播放器窗口；顶部唤出、浮层及新增暂停／退出按钮操作后前台 HWND 不变。原生面板及嵌套 owner 测试覆盖四种置顶策略、前台顺序、最小化和停止后恢复普通层级；同时直接 HWND 顺序用例通过。证据保存至 `real-smtc/native-{debug,release}/`。这里播放器输入目标为 Qt 测试窗口，所属对话框为 Win32 owner 探针，不能替代 Chrome 上实际点击或系统文件对话框。全屏、真实动态播放／跳转、实际多屏混合 DPI 和 Mica/Snap 仍需实机验收；本次不修改渲染架构、归档、配置格式或正式发布打包。
+
+### 重复真实会话检查
+
+构建 Release（包含测试目标）后运行 `pwsh -File scripts/validate.ps1 -SessionId Chrome`，将执行可选真实会话生命周期检查及现有只读同步 smoke，输出 `session-tests.txt`、`session-lifecycle.json` 和 `session.json` 至本次 `out/validation/` 目录。会话 ID 取实际会话列表，不使用媒体标题；测试创建隔离的临时弹幕来源和设置，不修改用户配置。
+
+本次该完整入口实际运行退出 0，产物为 `out/validation/20261014-041747-663/`；真实会话用例 3 passed、0 failed、0 skipped，5 秒 SMTC smoke 读取 39 个样本且仍为暂停 42.80222 秒。环境信息保存至 `environment.json`（Windows 11、Release、Qt 6.11.0、Ryzen 5 5600、RTX 4070），本次不作性能验收。
+
+也可在项目工具环境中单独运行 `overlay_toolbar_tests realMediaSessionReadOnlyLifecycle`：设置 `DANMAKU_TEST_MEDIA_SESSION` 为目标会话 ID，可选设置 `DANMAKU_TEST_MEDIA_REPORT` 为证据 JSON 的绝对路径。默认 CTest 不要求外部播放器，此用例在未设置会话 ID 时明确跳过。已显式选择会话但无法读取时测试失败；不能将等待播放器或跳过记为真实同步通过。若采样期间播放器状态变化，稳定暂停冻结断言未执行会写入日志和检查点，不能记为暂停实机通过。
+
+## 工具栏提示与主面板共存（2026-10-14）
+
+### 已实现
+
+- 提示统一为“暂停”“停止并退出”“播放进度”“一键清屏”；跟随模式的停止只关闭覆盖层，外部播放器保持只读。提示内容使用纯文本 NoWrap，宿主宽度按自然文字宽度和官方内边距计算；沿用官方 Fluent 背景、字体和调色板。操作按下／拖动期间关闭提示，避免提示窗口干扰当前输入。
+- 工具栏显示许可改为覆盖层显示许可，不再排除主面板前台。固定、临时展开、离开计时、顶部感应和已打开浮层继续保持；进入面板不取消进度预览。停止或覆盖层隐藏仍立即关闭浮层／提示并取消未提交拖动，保留固定状态。播放器前台限制与面板前台例外保持原有语义。
+- `WindowLayerController` 统一维持“主面板所属对话框 → 工具栏及其提示／浮层 → 主面板 → 弹幕”。原生检查发现提升工具栏会连带提升弹幕 owner，因此定位增加 SWP_NOOWNERZORDER；恢复主面板基线时仍整体恢复其所属组。移除 QML 分散的工具栏 raise，新建 Qt 所属提示窗口的显隐事件纳入 GUI 线程协调。重复主动打开已激活面板后显式重新协调，不请求额外激活，不修改模态规则、渲染架构、配置格式、归档或正式发布包。
+
+### 验证证据与边界
+
+- 新增 `toolbarSingleLineTips` 在浅／深主题下逐个打开提示，检查单行、无截断、自然宽度和四个指定文案；两种模式均检查，跟随模式“重置偏移”保持单行。提示截图保存在 `out/validation/toolbar-coexist/{debug,release}-dpr*/`。
+- 现有进度／自动隐藏用例替换旧的面板抑制断言：面板前台保留展开、固定、按钮按下、滑块拖动、进度预览、不透明度浮层与提示；离开计时和覆盖层许可撤销仍验证自动关闭与取消。控制器检查首次曝光、播放器前台限制恢复、隐藏维护、层级失败恢复以及停止清理。
+- 原生测试增加四种策略下工具栏高于面板、面板高于弹幕及 owner 对话框高于工具栏；新弹出提示也保持在原生所属对话框之下。真实 SendInput 检查在面板前台点击继续／停止后前台 HWND 不变，并检查再次主动打开面板后工具栏仍可点击。最大化、最小化、表面重建、基线恢复和嵌套 owner 保留验证。输入目标为 Qt 测试窗口、对话框为 Win32 owner 探针；不作为真实播放器全屏、系统文件对话框、混合 DPI 或 Narrator 验收。
+- 最终 Debug、Release 完整 CTest 均 **14/14 通过**，分别为 102.56 秒、56.06 秒；两者 `ui_workflow` 均 **13 passed、0 failed、0 skipped**，`overlay_toolbar` 均 **12 passed、0 failed、1 skipped**（本轮未指定真实媒体会话，默认可选会话用例跳过，不计真实 SMTC 验收）。完整日志为 `toolbar-coexist/{debug,release}-ctest-final.log`，Qt Test 明细为 `*-ui-final.txt`、`*-state-final.txt`；原生层级报告／截图为 `native-{debug,release}/`。
+- Debug 200% 缩放及 13.5pt 应用字体下，提示、进度和自动隐藏补测 **5 passed、0 failed、0 skipped**（含初始化与清理），日志 `scaled-ui-tests.txt`，提示截图为 `debug-dpr2/`。Release 清空 software 后端覆盖、使用默认渲染环境复测提示及两个原生输入／层级用例，结果同为 **5 passed、0 failed、0 skipped**，日志 `native-render-tests.txt`，最终浅深提示截图为 `release-dpr1/`；已目视检查“停止并退出”和“重置偏移”的单行显示。缩放模拟及短交互不作为混合 DPI、光学或性能成绩。
+
+## 工具栏同宽顶部感应（2026-10-14）
+
+- 顶部感应带改为与主工具栏底板同宽，高度保留 10 逻辑单位，沿所选屏幕居中；不计宿主透明内边距、进度和不透明度浮层。QML 将实际底板宽度绑定到 GUI 指针监测器，隐藏时仍保留布局计算，模式、文字缩放及窄屏布局变化立即更新；宽度限制在所选覆盖窗范围内。
+- 继续使用 Qt 全局逻辑坐标和既有 50ms 采样，不创建透明输入窗口；完全隐藏、离开 1 秒、拖动保护、固定及主面板共存规则保持。无新增配置或依赖。
+- Qt Test 验证负坐标、两端及带外边界、隐藏时宽度变化、屏幕几何更新、超宽钳制与零宽停用。项目 QML 回归验证隐藏后的左右两端唤出、反复展开／收起、两模式宽度变化、浮层不改变感应宽度，并检查浅深主题及 200/320/800 逻辑宽度下与可视底板对齐。
+- Debug 与 Release 均完成构建，全量 CTest 各 **14/14 通过**（103.56 秒、56.07 秒）；两者 `ui_workflow` 各 **13 passed、0 failed、0 skipped**，`overlay_toolbar` 各 **12 passed、0 failed、1 skipped**。跳过项为未指定真实会话的可选 SMTC 检查，不计本轮真实播放器验收。日志保存至 `out/validation/toolbar-wide-sensing/`。
+- Debug 在 `QT_SCALE_FACTOR=2`、13.5pt 字体下复测进度与自动隐藏，**4 passed、0 failed、0 skipped**（含初始化与清理，37.27 秒），证据为 `scaled-ui-tests.txt`。缩放模拟和 software 后端交互不计混合 DPI 或性能实测。
+- 正常 Debug 程序在运行并锁住原可执行文件，本轮保留该实例，重新配置并构建 `out/build/windows-debug-wide-sensing/` 后执行完整 CTest；Release 使用常规目录。运行中的旧实例未更新，使用新构建需要重新启动。
+- 两端边界与负坐标使用注入的逻辑坐标验证；完整 UI 套件中的 Windows 原生输入／层级检查执行通过，但不替代真实播放器全屏、实际多屏混合 DPI 或人工桌面边缘操作验收。本轮未修改渲染架构、归档、用户配置或执行正式发布打包。
+- 后续用户反馈“没生效”时，确认默认 `out/build/windows-debug/bin/DanmaX.exe` 仍为旧二进制；程序已关闭后重新构建常规 Debug 入口，未继续使用替代目录。原生用例补入 `QCursor::setPos()` 移到感应带左右两端（旧中央 80 单位以外），验证完全隐藏后唤出且前台不变；与自动隐藏补测共 **4 passed、0 failed、0 skipped**，日志 `default-debug-native-edges.txt`。常规 Debug 编译后程序 3 秒默认渲染 smoke 退出 0，报告为 `default-debug-smoke/report.json`；随后通过常规运行脚本打开新版。此补测输入目标为 Qt 测试播放器窗口，仍不作为真实播放器或混合 DPI 全面验收。

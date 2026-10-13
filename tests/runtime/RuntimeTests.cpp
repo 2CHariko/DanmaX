@@ -19,6 +19,13 @@
 #include <QImage>
 #include <QLocale>
 #include <iostream>
+#include <cmath>
+static bool injectSample(AppController& controller, MediaSample sample) {
+    sample.generation = controller.findChild<MediaMonitor*>()->generation();
+    sample.observedAt = MediaMonitor::monotonicSeconds();
+    sample.playback = sample.playing ? MediaSample::Playback::Playing : MediaSample::Playback::Paused;
+    return QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
+}
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
     // Optional read-only probe for a real hosted player window; no playback or focus changes.
@@ -420,6 +427,7 @@ int main(int argc, char** argv) {
         controller.selectSession("test-session");
         // Isolate injected snapshots from real machine session discovery.
         QObject::disconnect(controller.findChild<MediaMonitor*>(), nullptr, &controller, nullptr);
+        controller.stop();
         controller.start(false);
         MediaSample sample;
         sample.found = true;
@@ -428,18 +436,17 @@ int main(int argc, char** argv) {
         sample.position = 42;
         sample.duration = 100;
         sample.playing = false;
-        check(QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection,
-                                        Q_ARG(MediaSample, sample)),
+        check(injectSample(controller, sample),
               "Inject media snapshot");
         check(controller.position() == 42 && !controller.playing(), "SMTC paused position");
         sample.position = 10;
         sample.playing = true;
-        QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
-        check(controller.position() == 10 && controller.playing(), "SMTC backwards seek and resume");
+        injectSample(controller, sample);
+        check(std::abs(controller.position() - 10) < 0.01 && controller.playing(), "SMTC backwards seek and resume");
         sample.identity = "two";
         sample.position = 0;
-        QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
-        check(controller.position() == 0, "Media change resets timeline");
+        injectSample(controller, sample);
+        check(controller.position() < 0.01, "Media change resets timeline");
         overlay.resize(800, 600);
         renderer.setParentItem(overlay.contentItem());
         renderer.setSize(QSizeF(800, 600));
@@ -453,7 +460,7 @@ int main(int argc, char** argv) {
         renderer.setSize(QSizeF(overlay.width(), overlay.height()));
         sample.identity = "frame-cadence";
         sample.position = 0;
-        QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
+        injectSample(controller, sample);
         swaps = 0;
         wait(600);
         if (swaps < 8 || controller.position() <= 0.3)
@@ -463,7 +470,7 @@ int main(int argc, char** argv) {
               "One playing media snapshot sustains frames without more samples");
         sample.playing = false;
         sample.position = controller.position();
-        QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
+        injectSample(controller, sample);
         wait(100);
         const int pausedSwaps = swaps;
         wait(150);
@@ -491,7 +498,7 @@ int main(int argc, char** argv) {
         wait(150);
         check(swaps <= editedSwaps + 1, "Appearance refresh does not restart paused continuous frames");
         sample.playing = true;
-        QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
+        injectSample(controller, sample);
         wait(300);
         check(swaps >= pausedSwaps + 5, "One resume sample restarts continuous frames");
         const auto nativeHideId = renderer.firstSnapshotId();
@@ -510,7 +517,7 @@ int main(int argc, char** argv) {
               "Native reappearance retains the live ID and advances position instead of restarting");
         sample.playing = false;
         sample.position = controller.position();
-        QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
+        injectSample(controller, sample);
         wait(80);
         const auto hiddenPauseId = renderer.firstSnapshotId();
         const auto hiddenPauseX = renderer.firstSnapshotX();
@@ -523,15 +530,15 @@ int main(int argc, char** argv) {
         QObject::disconnect(frameConnection);
         overlay.hide();
         sample.found = false;
-        QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
+        injectSample(controller, sample);
         check(!controller.playing(), "Missing session freezes playback");
         const auto invalidationsBeforeStop = sceneInvalidations.load();
-        controller.stop();
+        controller.unload();
         check(!controller.running(), "Controller stop");
         check(controller.total() == 0 && controller.position() == 0 && controller.duration() == 0 &&
-                  !controller.playing() && !controller.manualMode() && !controller.overlayVisible() &&
+                  !controller.playing() && !controller.overlayVisible() &&
                   renderer.cacheEntries() == 0 && renderer.snapshotCount() == 0 && !overlay.isVisible(),
-              "Stop unloads file, cached layouts and timeline while keeping the file path");
+              "Unload releases file, cached layouts and timeline while keeping the file path");
         check(controller.filePath() == path, "Stop preserves the path for explicit reload");
         wait(100);
         if (qEnvironmentVariable("QSG_RENDER_LOOP") == "threaded")
@@ -539,11 +546,11 @@ int main(int argc, char** argv) {
                   "Stop invalidates the persistent hidden window on the rendering thread");
         check(renderer.sceneEntries() == 0 && renderer.imageNodeCount() == 0 && renderer.textureBytes() == 0,
               "Stop releases the already hidden scene graph and textures");
-        controller.stop();
+        controller.unload();
         liveSettings->setValue("maxActive", 1000);
         wait(50);
         controller.start(true);
-        check(!controller.running() && controller.total() == 0, "A stopped file requires a reload");
+        check(!controller.running() && controller.total() == 0, "An unloaded file requires a reload");
         controller.clearError();
         success = false;
         controller.loadFile(path);
@@ -619,7 +626,7 @@ int main(int argc, char** argv) {
         sample.found = true; sample.id = "hidden-session"; sample.identity = "visibility";
         sample.position = 0; sample.duration = 100; sample.playing = true;
         const auto inject = [&] {
-            QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
+            injectSample(controller, sample);
         };
         inject();
         wait(100);

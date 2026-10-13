@@ -41,9 +41,18 @@ MediaMonitor::~MediaMonitor() {
     if (worker_.joinable())
         worker_.join();
 }
-void MediaMonitor::select(QString id) {
+quint64 MediaMonitor::select(QString id, bool renew) {
     std::lock_guard lock(mutex_);
+    if (renew || id != selected_) ++generation_;
     selected_ = std::move(id);
+    return generation_;
+}
+quint64 MediaMonitor::generation() {
+    std::lock_guard lock(mutex_);
+    return generation_;
+}
+double MediaMonitor::monotonicSeconds() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 void MediaMonitor::run(std::stop_token stop) {
     bool initialized = false;
@@ -60,13 +69,18 @@ void MediaMonitor::run(std::stop_token stop) {
         }
         manager = managerRequest.GetResults();
         while (!stop.stop_requested()) {
+            quint64 generation;
+            QString selected;
+            {
+                std::lock_guard lock(mutex_);
+                selected = selected_;
+                generation = generation_;
+            }
+            MediaSample sample;
+            sample.id = selected;
+            sample.generation = generation;
+            sample.observedAt = monotonicSeconds();
             try {
-                QString selected;
-                {
-                    std::lock_guard lock(mutex_);
-                    selected = selected_;
-                }
-                MediaSample sample;
                 QVariantList list;
                 const auto sessions = manager.GetSessions();
                 const bool listDue = cycle++ % 10 == 0;
@@ -87,6 +101,7 @@ void MediaMonitor::run(std::stop_token stop) {
                         continue;
                     auto timeline = session.GetTimelineProperties();
                     auto playback = session.GetPlaybackInfo();
+                    sample.observedAt = monotonicSeconds();
                     sample.id = id;
                     sample.title = title;
                     sample.found = true;
@@ -94,8 +109,20 @@ void MediaMonitor::run(std::stop_token stop) {
                         std::chrono::duration<double>(timeline.EndTime() - timeline.StartTime()).count();
                     sample.position =
                         std::chrono::duration<double>(timeline.Position() - timeline.StartTime()).count();
-                    sample.playing = playback.PlaybackStatus() ==
-                                     GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing;
+                    switch (playback.PlaybackStatus()) {
+                    case GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing:
+                        sample.playback = MediaSample::Playback::Playing; break;
+                    case GlobalSystemMediaTransportControlsSessionPlaybackStatus::Paused:
+                        sample.playback = MediaSample::Playback::Paused; break;
+                    case GlobalSystemMediaTransportControlsSessionPlaybackStatus::Stopped:
+                        sample.playback = MediaSample::Playback::Stopped; break;
+                    case GlobalSystemMediaTransportControlsSessionPlaybackStatus::Closed:
+                        sample.playback = MediaSample::Playback::Closed; break;
+                    case GlobalSystemMediaTransportControlsSessionPlaybackStatus::Changing:
+                        sample.playback = MediaSample::Playback::Changing; break;
+                    default: sample.playback = MediaSample::Playback::Unknown; break;
+                    }
+                    sample.playing = sample.playback == MediaSample::Playback::Playing;
                     if (auto rate = playback.PlaybackRate())
                         sample.rate = std::clamp(rate.Value(), 0.0, 8.0);
                     const double age =
@@ -120,14 +147,16 @@ void MediaMonitor::run(std::stop_token stop) {
                     emit errorOccurred(msg);
                     lastError = msg;
                 }
-                emit sampleReceived({});
+                sample.found = false;
+                emit sampleReceived(sample);
             } catch (const std::exception& e) {
                 const auto msg = QString::fromUtf8(e.what());
                 if (msg != lastError) {
                     emit errorOccurred(msg);
                     lastError = msg;
                 }
-                emit sampleReceived({});
+                sample.found = false;
+                emit sampleReceived(sample);
             }
             for (int i = 0; i < 4 && !stop.stop_requested(); ++i)
                 std::this_thread::sleep_for(std::chrono::milliseconds(25));

@@ -8,7 +8,9 @@
 #include <windows.h>
 
 namespace {
-constexpr unsigned positioningFlags = SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE;
+// Raising an owned toolbar must not also raise its owner (the full-screen
+// overlay) above the panel. Keep each owner's already reconciled position.
+constexpr unsigned positioningFlags = SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER;
 quintptr insertion(HWND value) { return reinterpret_cast<quintptr>(value); }
 bool ourWindow(quintptr value) {
     const auto window = reinterpret_cast<HWND>(value);
@@ -47,9 +49,13 @@ WindowLayerController::WindowLayerController(QObject* parent, Positioner positio
         return ourWindow(window) && SetWindowPos(reinterpret_cast<HWND>(window),
             reinterpret_cast<HWND>(after), 0, 0, 0, 0, flags);
     };
+    if (qGuiApp) qGuiApp->installEventFilter(this);
 }
 
-WindowLayerController::~WindowLayerController() { restoreMain(); }
+WindowLayerController::~WindowLayerController() {
+    if (qGuiApp) qGuiApp->removeEventFilter(this);
+    restoreMain();
+}
 
 quintptr WindowLayerController::handle(QWindow* window) const {
     // winId() creates a surface; never recreate one from an about-to-destroy event.
@@ -76,7 +82,10 @@ bool WindowLayerController::restoreMain() {
         baselineHandle_ = 0;
         return true;
     }
-    if (!position(baselineHandle_, insertion(baselineTopmost_ ? HWND_TOPMOST : HWND_NOTOPMOST)))
+    // Restore the entire panel owner group to its original band. Owner isolation
+    // is only needed while arranging the interleaved panel/toolbar groups.
+    if (!positioner_(baselineHandle_, insertion(baselineTopmost_ ? HWND_TOPMOST : HWND_NOTOPMOST),
+                     positioningFlags & ~SWP_NOOWNERZORDER))
         return false;
     modified_ = false;
     return true;
@@ -86,7 +95,6 @@ void WindowLayerController::attach(QWindow* main, QWindow* overlay, QWindow* too
     restoreMain();
     for (auto* window : {main_.data(), overlay_.data(), toolbar_.data()}) {
         if (!window) continue;
-        window->removeEventFilter(this);
         disconnect(window, nullptr, this, nullptr);
     }
     main_ = main;
@@ -97,7 +105,6 @@ void WindowLayerController::attach(QWindow* main, QWindow* overlay, QWindow* too
     dirty_ = true;
     for (auto* window : {main, overlay, toolbar}) {
         if (!window) continue;
-        window->installEventFilter(this);
         connect(window, &QObject::destroyed, this, [this] {
             dirty_ = true;
             if (!main_) { baselineHandle_ = 0; modified_ = false; }
@@ -112,10 +119,26 @@ void WindowLayerController::scheduleInvalidation() {
     QTimer::singleShot(0, this, [this] { queued_ = false; emit invalidated(); });
 }
 
+void WindowLayerController::invalidate() {
+    dirty_ = true;
+    scheduleInvalidation();
+}
+
 bool WindowLayerController::eventFilter(QObject* watched, QEvent* event) {
+    const auto type = event->type();
+    if (type != QEvent::PlatformSurface && type != QEvent::Show && type != QEvent::Hide &&
+        type != QEvent::WinIdChange && type != QEvent::WindowStateChange) return false;
+    auto* window = qobject_cast<QWindow*>(watched);
+    if (!window) return false;
+    bool managed = window == main_ || window == overlay_ || window == toolbar_;
+    // Native QML tooltip windows are created lazily. Reconcile their first show
+    // too, otherwise a newly opened tooltip can rise above an existing dialog.
+    for (auto* owner = window->transientParent(); !managed && owner; owner = owner->transientParent())
+        managed = owner == main_ || owner == toolbar_;
+    if (!managed) return false;
     if (event->type() == QEvent::PlatformSurface) {
-        const auto type = static_cast<QPlatformSurfaceEvent*>(event)->surfaceEventType();
-        if (watched == main_ && type == QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed) {
+        const auto surfaceType = static_cast<QPlatformSurfaceEvent*>(event)->surfaceEventType();
+        if (watched == main_ && surfaceType == QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed) {
             restoreMain();
             baselineHandle_ = 0;
             modified_ = false;
@@ -170,16 +193,26 @@ bool WindowLayerController::reconcile(int strategy, bool panelForeground, bool o
             success = position(overlayId, insertion(HWND_TOPMOST)) && success;
         if (strategy == 0 && topmost(overlay_))
             success = position(overlayId, insertion(HWND_NOTOPMOST)) && success;
-        if (!panel && toolbar_ && toolbar_->isVisible()) {
-            const auto toolbarId = handle(toolbar_);
-            success = position(toolbarId, insertion(strategy > 0 ? HWND_TOPMOST : HWND_TOP)) && success;
-        }
     }
 
     if (panel) {
         modified_ = modified_ || (strategy > 0 && !baselineTopmost_);
         const auto after = insertion(strategy > 0 || baselineTopmost_ ? HWND_TOPMOST : HWND_TOP);
         success = position(mainId, after) && success;
+    }
+
+    // Raise the toolbar after the panel so it remains usable with a maximized
+    // panel. Its native tips/popups follow it; panel dialogs retain precedence.
+    if (overlayAllowed && toolbar_ && toolbar_->isVisible()) {
+        const auto toolbarId = handle(toolbar_);
+        const auto after = insertion(strategy > 0 || (panel && baselineTopmost_) ? HWND_TOPMOST : HWND_TOP);
+        success = position(toolbarId, after) && success;
+        for (const auto& owned : visibleOwnedWindows(toolbarId))
+            success = position(owned.handle, after) && success;
+    }
+
+    if (panel) {
+        const auto after = insertion(strategy > 0 || baselineTopmost_ ? HWND_TOPMOST : HWND_TOP);
         // Native dialogs do not necessarily have a QWindow.
         for (const auto& owned : visibleOwnedWindows(mainId))
             success = position(owned.handle, after) && success;

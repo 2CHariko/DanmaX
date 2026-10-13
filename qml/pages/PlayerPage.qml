@@ -10,8 +10,7 @@ PageFrame {
     id: page
     required property QtObject backend
     property int sourceTab: 0
-    property bool independent: false
-    readonly property bool effectiveManual: backend.running ? backend.manualMode : independent
+    readonly property bool effectiveManual: backend.manualMode
     readonly property string blockedReason: backend.loading ? I18n.player.blockedLoading : backend.total <= 0 ? I18n.player.blockedNoDanmaku : !effectiveManual && backend.settings.values.targetSession.length === 0 ? I18n.player.blockedNoSession : ""
     signal openSettings()
     title: I18n.player.title
@@ -164,11 +163,11 @@ PageFrame {
                     spacing: 8
 
                     Button {
-                        objectName: "stopPlayback"
+                        objectName: "unloadDanmaku"
                         visible: page.backend.running || page.backend.total > 0 || page.backend.loading || page.backend.library.busy
-                        text: I18n.player.stopPlayback
-                        Accessible.description: I18n.player.stopPlaybackDesc
-                        onClicked: page.backend.stop()
+                        text: I18n.player.unloadDanmaku
+                        Accessible.description: I18n.player.unloadDanmakuDesc
+                        onClicked: page.backend.unload()
                     }
 
                     Button {
@@ -181,7 +180,7 @@ PageFrame {
                         font.weight: Font.DemiBold
                         Layout.preferredHeight: 36
                         Layout.preferredWidth: Math.max(104, implicitWidth)
-                        onClicked: page.backend.start(page.independent)
+                        onClicked: page.backend.start(page.effectiveManual)
                     }
                 }
             }
@@ -238,14 +237,20 @@ PageFrame {
                         Button {
                             objectName: "pausePlayback"
                             visible: page.backend.running && page.backend.manualMode
-                            text: page.backend.playing ? I18n.player.pausePlayback : I18n.player.resumePlayback
+                            text: page.backend.completed ? I18n.player.replayPlayback : page.backend.playing ? I18n.player.pausePlayback : I18n.player.resumePlayback
                             highlighted: !page.backend.playing
                             onClicked: page.backend.togglePause()
                         }
                         Button {
+                            objectName: "stopPlayback"
                             text: I18n.player.stopPlayback
                             Accessible.description: I18n.player.stopPlaybackDesc
                             onClicked: page.backend.stop()
+                        }
+                        Button {
+                            text: I18n.player.unloadDanmaku
+                            Accessible.description: I18n.player.unloadDanmakuDesc
+                            onClicked: page.backend.unload()
                         }
                     }
                 }
@@ -258,7 +263,8 @@ PageFrame {
                     RowLayout {
                         Layout.fillWidth: true
                         Label {
-                            text: page.formatTime(page.backend.position) + " / " + page.formatTime(page.backend.duration)
+                            text: page.formatTime(manualSeek.pendingSeek ? manualSeek.value : page.backend.position)
+                                + " / " + page.formatTime(page.backend.duration)
                             font.pixelSize: Ui.bodySize
                             font.weight: Font.DemiBold
                             color: Ui.textColor
@@ -272,13 +278,40 @@ PageFrame {
                     }
 
                     Slider {
+                        id: manualSeek
                         visible: page.backend.manualMode
+                        property bool pendingSeek: false
+                        property bool cancelling: false
                         Layout.fillWidth: true
                         from: 0
                         to: Math.max(1, page.backend.duration)
-                        value: page.backend.position
+                        Binding on value { value: page.backend.position; when: !manualSeek.pressed && !manualSeek.pendingSeek }
                         Accessible.name: I18n.player.manualSeekAccessible
-                        onMoved: page.backend.seek(value)
+                        onMoved: {
+                            pendingSeek = true
+                            if (!pressed && page.backend.running) {
+                                const target = value
+                                pendingSeek = false
+                                page.backend.seek(target)
+                            }
+                        }
+                        onPressedChanged: {
+                            if (!pressed && pendingSeek && !cancelling && page.backend.running) {
+                                const target = value
+                                pendingSeek = false
+                                page.backend.seek(target)
+                            }
+                        }
+                        Connections {
+                            target: page.backend
+                            function onStateChanged() {
+                                if (!page.backend.running) {
+                                    manualSeek.cancelling = true
+                                    manualSeek.pendingSeek = false
+                                    manualSeek.cancelling = false
+                                }
+                            }
+                        }
                     }
 
                     ProgressBar {
@@ -420,7 +453,7 @@ PageFrame {
                         Button {
                             text: I18n.player.clearDanmakuBtn
                             onClicked: {
-                                page.backend.stop()
+                                page.backend.unload()
                                 if (pathInput) pathInput.text = ""
                             }
                         }
@@ -510,14 +543,14 @@ PageFrame {
                 text: I18n.player.syncMode
                 checked: !page.effectiveManual
                 enabled: !page.backend.running
-                onClicked: page.independent = false
+                onClicked: page.backend.setManualMode(false)
             }
             RadioButton {
                 objectName: "manualMode"
                 text: I18n.player.manualMode
                 checked: page.effectiveManual
                 enabled: !page.backend.running
-                onClicked: page.independent = true
+                onClicked: page.backend.setManualMode(true)
             }
         }
 

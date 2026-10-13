@@ -1,5 +1,6 @@
 #include "platform/windows/ToolbarPointerMonitor.h"
 #include <QCursor>
+#include <algorithm>
 #include <utility>
 
 ToolbarPointerMonitor::ToolbarPointerMonitor(QObject* parent, CursorQuery cursorQuery)
@@ -28,7 +29,17 @@ void ToolbarPointerMonitor::attach(QWindow* overlay, QWindow* toolbar) {
 QRect ToolbarPointerMonitor::activationRect() const {
     if (!overlay_) return {};
     const auto geometry = overlay_->geometry();
-    return {geometry.x() + qRound((geometry.width() - 80) / 2.0), geometry.y(), 80, 10};
+    const auto width = std::min(activationWidth_, geometry.width());
+    if (width <= 0 || geometry.height() <= 0) return {};
+    return {geometry.x() + qRound((geometry.width() - width) / 2.0), geometry.y(), width, 10};
+}
+
+void ToolbarPointerMonitor::setActivationWidth(int width) {
+    width = std::max(0, width);
+    if (activationWidth_ == width) return;
+    activationWidth_ = width;
+    sample();
+    emit activationWidthChanged();
 }
 
 void ToolbarPointerMonitor::setEnabled(bool enabled) {

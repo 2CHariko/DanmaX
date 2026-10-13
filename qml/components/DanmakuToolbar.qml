@@ -13,9 +13,11 @@ Item {
     enabled: presentationAllowed
     property bool pinned: false
     property bool autoExpanded: false
-    readonly property bool popoverOpen: opacityPopup.visible
+    property real maximumWidth: 1920
+    readonly property bool popoverOpen: opacityPopup.visible || seekPopup.visible
     readonly property bool isHovered: backend.toolbarPointer.hovered
-    readonly property bool interactionHeld: opacitySlider.pressed || toggleDanmakuBtn.pressed
+    readonly property bool interactionHeld: opacitySlider.pressed || seekSlider.pressed
+        || playbackBtn.pressed || exitBtn.pressed || toggleDanmakuBtn.pressed
         || stepDecBtn.pressed || offsetResetBtn.pressed || stepIncBtn.pressed || opacityBtn.pressed
         || fontDecBtn.pressed || fontIncBtn.pressed || clearBtn.pressed || debugBtn.pressed
         || settingsBtn.pressed || pinBtn.pressed
@@ -23,17 +25,42 @@ Item {
     readonly property bool transitionRunning: slideAnimation.running || fadeAnimation.running
 
     // 暴露所需的实际内容尺寸给宿主微型窗口
-    readonly property int targetWidth: barCard.width + 12
-    readonly property int targetHeight: 4 + barCard.height + (popoverOpen ? opacityPopup.height + 8 : 4)
+    readonly property real activationWidth: barCard.width
+    readonly property int targetWidth: Math.max(barCard.width,
+        seekPopup.visible ? seekPopup.width : opacityPopup.visible ? opacityPopup.width : 0) + 12
+    readonly property int targetHeight: 4 + barCard.height +
+        (seekPopup.visible ? seekPopup.height + 8 : opacityPopup.visible ? opacityPopup.height + 8 : 4)
 
     anchors.fill: parent
+
+    function formatTime(value) {
+        const seconds = Math.max(0, Math.floor(value || 0))
+        const minutes = Math.floor(seconds / 60)
+        return (seconds >= 3600 ? Math.floor(minutes / 60) + ":" + String(minutes % 60).padStart(2, "0")
+                               : String(minutes).padStart(2, "0")) + ":" + String(seconds % 60).padStart(2, "0")
+    }
+    function closePopovers() {
+        seekSlider.pendingSeek = false
+        seekPopup.visible = false
+        opacityPopup.visible = false
+    }
 
     // An item popup is clamped into this short HWND and can cover its button.
     // Keep the official ToolTip style in a non-activating native tooltip window.
     component ToolbarTip: ToolTip {
+        id: tipControl
+        objectName: "toolbarTip"
         required property bool trigger
         popupType: Popup.Window
-        visible: root.expanded && trigger && !root.popoverOpen
+        width: implicitWidth
+        contentItem: Text {
+            text: tipControl.text
+            font: tipControl.font
+            color: tipControl.palette.toolTipText
+            textFormat: Text.PlainText
+            wrapMode: Text.NoWrap
+        }
+        visible: root.expanded && trigger && !root.popoverOpen && !root.interactionHeld
         delay: 400
         y: parent.height + 4 - topInset
     }
@@ -43,7 +70,7 @@ Item {
         collapseTimer.stop()
         if (!presentationAllowed) {
             autoExpanded = false
-            opacityPopup.visible = false
+            closePopovers()
             return
         }
         if (isHovered) autoExpanded = true
@@ -63,7 +90,7 @@ Item {
         repeat: false
         onTriggered: {
             if (!root.presentationAllowed || root.isHovered || root.interactionHeld) return
-            opacityPopup.visible = false
+            root.closePopovers()
             if (!root.pinned) root.autoExpanded = false
             root.updateCollapse()
         }
@@ -73,13 +100,12 @@ Item {
     Rectangle {
         id: barCard
         anchors.top: parent.top
-        anchors.topMargin: root.expanded ? 4 : -56
+        anchors.topMargin: root.expanded ? 4 : -height - 8
         anchors.horizontalCenter: parent.horizontalCenter
-        width: contentLayout.implicitWidth + 20
-        height: 42
+        width: Math.min(contentLayout.naturalWidth + 20, Math.max(0, root.maximumWidth - 12))
+        height: contentLayout.height + 8
         radius: 8
         opacity: root.expanded ? 1.0 : 0.0
-        visible: opacity > 0.01
 
         color: Ui.dark ? "#202020" : "#F6F6F6"
         border.width: 1
@@ -92,18 +118,60 @@ Item {
             NumberAnimation { id: fadeAnimation; duration: 160 }
         }
 
-        RowLayout {
+        Flow {
             id: contentLayout
-            anchors.centerIn: parent
+            objectName: "toolbarFlow"
+            x: 10
+            y: 4
+            width: parent.width - 20
+            readonly property real naturalWidth: {
+                let size = 0
+                let count = 0
+                for (let child of children) {
+                    if (child === playbackBtn && !root.backend.manualMode) continue
+                    size += child.implicitWidth || child.width
+                    count++
+                }
+                return size + Math.max(0, count - 1) * spacing
+            }
             spacing: 2
+
+            Button {
+                id: playbackBtn
+                objectName: "toolbarPlaybackButton"
+                visible: root.backend.manualMode
+                flat: true
+                implicitWidth: 34; implicitHeight: 34
+                leftPadding: 4; rightPadding: 4; topPadding: 4; bottomPadding: 4
+                icon.source: Ui.icon(root.backend.playing ? "pause" : "play")
+                icon.width: 18; icon.height: 18
+                display: AbstractButton.IconOnly
+                Accessible.name: root.backend.completed ? I18n.toolbar.replayPlayback
+                    : root.backend.playing ? I18n.toolbar.pausePlayback : I18n.toolbar.resumePlayback
+                ToolbarTip { trigger: parent.hovered; text: parent.Accessible.name }
+                onClicked: root.backend.togglePause()
+            }
+            Button {
+                id: exitBtn
+                objectName: "toolbarExitButton"
+                flat: true
+                implicitWidth: 34; implicitHeight: 34
+                leftPadding: 4; rightPadding: 4; topPadding: 4; bottomPadding: 4
+                icon.source: Ui.icon("stop")
+                icon.width: 18; icon.height: 18
+                display: AbstractButton.IconOnly
+                Accessible.name: root.backend.manualMode ? I18n.toolbar.stopPlayback : I18n.toolbar.exitOverlay
+                ToolbarTip { trigger: parent.hovered; text: parent.Accessible.name }
+                onClicked: root.backend.stop()
+            }
 
             // 1. 弹幕显隐切换（微软官方 Fluent eye / eye-off 图标）
             Button {
                 id: toggleDanmakuBtn
                 flat: true
                 leftPadding: 4; rightPadding: 4; topPadding: 4; bottomPadding: 4
-                Layout.preferredWidth: 34
-                Layout.preferredHeight: 34
+                implicitWidth: 34
+                implicitHeight: 34
                 checkable: true
                 checked: root.backend ? root.backend.danmakuVisible : true
                 icon.source: Ui.icon(checked ? "eye" : "eye-off")
@@ -118,10 +186,15 @@ Item {
                 onClicked: if (root.backend) root.backend.danmakuVisible = !root.backend.danmakuVisible
             }
 
-            Rectangle {
-                Layout.preferredWidth: 1
-                Layout.preferredHeight: 18
-                color: Ui.cardBorder
+            Item {
+                width: 1
+                height: 34
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 1
+                    height: 18
+                    color: Ui.cardBorder
+                }
             }
 
             // 2. 时间轴微调组（官方 Fluent chevron-left / timer / chevron-right）
@@ -130,64 +203,85 @@ Item {
 
                 Button {
                     id: stepDecBtn
+                    objectName: "toolbarSeekBackButton"
                     flat: true
                     leftPadding: 2; rightPadding: 2; topPadding: 2; bottomPadding: 2
-                    Layout.preferredWidth: 28
-                    Layout.preferredHeight: 34
+                    implicitWidth: 28
+                    implicitHeight: 34
                     icon.source: Ui.icon("chevron-left")
                     icon.width: 16
                     icon.height: 16
                     display: AbstractButton.IconOnly
-                    Accessible.name: I18n.toolbar.offsetDec
+                    Accessible.name: root.backend.manualMode ? I18n.toolbar.seekBack : I18n.toolbar.offsetDec
                     ToolbarTip {
                         trigger: parent.hovered
-                        text: I18n.toolbar.offsetDec
+                        text: parent.Accessible.name
                     }
-                    onClicked: if (root.backend) root.backend.stepTimeOffset(-0.5)
+                    onClicked: {
+                        if (root.backend.manualMode) root.backend.seek(root.backend.position - 5)
+                        else root.backend.stepTimeOffset(-0.5)
+                    }
                 }
 
                 Button {
                     id: offsetResetBtn
+                    objectName: "toolbarTimeButton"
                     flat: true
                     leftPadding: 6; rightPadding: 6; topPadding: 2; bottomPadding: 2
-                    Layout.preferredHeight: 34
+                    implicitHeight: 34
                     readonly property real offsetVal: root.backend && root.backend.settings.values.timeOffset ? root.backend.settings.values.timeOffset : 0.0
                     icon.source: Ui.icon("timer")
                     icon.width: 16
                     icon.height: 16
-                    text: (offsetVal >= 0 ? "+" : "") + offsetVal.toFixed(1) + "s"
+                    text: root.backend.manualMode ? root.formatTime(root.backend.position)
+                        : (offsetVal >= 0 ? "+" : "") + offsetVal.toFixed(1) + "s"
                     display: AbstractButton.TextBesideIcon
-                    Accessible.name: I18n.toolbar.offsetReset
+                    Accessible.name: root.backend.manualMode ? I18n.toolbar.seekTitle : I18n.toolbar.offsetReset
                     ToolbarTip {
                         trigger: parent.hovered
-                        text: I18n.toolbar.offsetReset
+                        text: parent.Accessible.name
                     }
-                    onClicked: if (root.backend) root.backend.settings.setValue("timeOffset", 0.0)
+                    onClicked: {
+                        if (root.backend.manualMode) {
+                            const open = !seekPopup.visible
+                            root.closePopovers()
+                            seekPopup.visible = open
+                        } else root.backend.settings.setValue("timeOffset", 0.0)
+                    }
                 }
 
                 Button {
                     id: stepIncBtn
+                    objectName: "toolbarSeekForwardButton"
                     flat: true
                     leftPadding: 2; rightPadding: 2; topPadding: 2; bottomPadding: 2
-                    Layout.preferredWidth: 28
-                    Layout.preferredHeight: 34
+                    implicitWidth: 28
+                    implicitHeight: 34
                     icon.source: Ui.icon("chevron-right")
                     icon.width: 16
                     icon.height: 16
                     display: AbstractButton.IconOnly
-                    Accessible.name: I18n.toolbar.offsetInc
+                    Accessible.name: root.backend.manualMode ? I18n.toolbar.seekForward : I18n.toolbar.offsetInc
                     ToolbarTip {
                         trigger: parent.hovered
-                        text: I18n.toolbar.offsetInc
+                        text: parent.Accessible.name
                     }
-                    onClicked: if (root.backend) root.backend.stepTimeOffset(0.5)
+                    onClicked: {
+                        if (root.backend.manualMode) root.backend.seek(root.backend.position + 5)
+                        else root.backend.stepTimeOffset(0.5)
+                    }
                 }
             }
 
-            Rectangle {
-                Layout.preferredWidth: 1
-                Layout.preferredHeight: 18
-                color: Ui.cardBorder
+            Item {
+                width: 1
+                height: 34
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 1
+                    height: 18
+                    color: Ui.cardBorder
+                }
             }
 
             // 3. 不透明度调节（官方 Fluent appearance 图标 + 百分比数值）
@@ -196,7 +290,7 @@ Item {
                 objectName: "toolbarOpacityButton"
                 flat: true
                 leftPadding: 6; rightPadding: 6; topPadding: 2; bottomPadding: 2
-                Layout.preferredHeight: 34
+                implicitHeight: 34
                 icon.source: Ui.icon("appearance")
                 icon.width: 16
                 icon.height: 16
@@ -207,13 +301,22 @@ Item {
                     trigger: parent.hovered
                     text: I18n.toolbar.opacityTitle
                 }
-                onClicked: opacityPopup.visible = !opacityPopup.visible
+                onClicked: {
+                    const open = !opacityPopup.visible
+                    root.closePopovers()
+                    opacityPopup.visible = open
+                }
             }
 
-            Rectangle {
-                Layout.preferredWidth: 1
-                Layout.preferredHeight: 18
-                color: Ui.cardBorder
+            Item {
+                width: 1
+                height: 34
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 1
+                    height: 18
+                    color: Ui.cardBorder
+                }
             }
 
             // 4. 字号微调组（A- / 数值 / A+）
@@ -224,8 +327,8 @@ Item {
                     id: fontDecBtn
                     flat: true
                     leftPadding: 2; rightPadding: 2; topPadding: 2; bottomPadding: 2
-                    Layout.preferredWidth: 26
-                    Layout.preferredHeight: 34
+                    implicitWidth: 26
+                    implicitHeight: 34
                     text: "A-"
                     font.pixelSize: 12
                     font.bold: true
@@ -243,7 +346,7 @@ Item {
                     font.bold: true
                     color: Ui.textColor
                     Layout.alignment: Qt.AlignVCenter
-                    Layout.preferredWidth: 20
+                    Layout.preferredWidth: Math.max(20, implicitWidth)
                     horizontalAlignment: Text.AlignHCenter
                     ToolbarTip {
                         trigger: fontMouse.containsMouse
@@ -260,8 +363,8 @@ Item {
                     id: fontIncBtn
                     flat: true
                     leftPadding: 2; rightPadding: 2; topPadding: 2; bottomPadding: 2
-                    Layout.preferredWidth: 26
-                    Layout.preferredHeight: 34
+                    implicitWidth: 26
+                    implicitHeight: 34
                     text: "A+"
                     font.pixelSize: 12
                     font.bold: true
@@ -274,10 +377,15 @@ Item {
                 }
             }
 
-            Rectangle {
-                Layout.preferredWidth: 1
-                Layout.preferredHeight: 18
-                color: Ui.cardBorder
+            Item {
+                width: 1
+                height: 34
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 1
+                    height: 18
+                    color: Ui.cardBorder
+                }
             }
 
             // 5. 一键清屏（官方 Fluent delete 图标）
@@ -285,8 +393,8 @@ Item {
                 id: clearBtn
                 flat: true
                 leftPadding: 4; rightPadding: 4; topPadding: 4; bottomPadding: 4
-                Layout.preferredWidth: 34
-                Layout.preferredHeight: 34
+                implicitWidth: 34
+                implicitHeight: 34
                 icon.source: Ui.icon("delete")
                 icon.width: 18
                 icon.height: 18
@@ -304,8 +412,8 @@ Item {
                 id: debugBtn
                 flat: true
                 leftPadding: 4; rightPadding: 4; topPadding: 4; bottomPadding: 4
-                Layout.preferredWidth: 34
-                Layout.preferredHeight: 34
+                implicitWidth: 34
+                implicitHeight: 34
                 checkable: true
                 checked: root.backend && root.backend.settings.values.debug ? true : false
                 icon.source: Ui.icon("info")
@@ -330,8 +438,8 @@ Item {
                 id: settingsBtn
                 flat: true
                 leftPadding: 4; rightPadding: 4; topPadding: 4; bottomPadding: 4
-                Layout.preferredWidth: 34
-                Layout.preferredHeight: 34
+                implicitWidth: 34
+                implicitHeight: 34
                 icon.source: Ui.icon("settings")
                 icon.width: 18
                 icon.height: 18
@@ -344,10 +452,15 @@ Item {
                 onClicked: if (root.backend) root.backend.showMainWindow()
             }
 
-            Rectangle {
-                Layout.preferredWidth: 1
-                Layout.preferredHeight: 18
-                color: Ui.cardBorder
+            Item {
+                width: 1
+                height: 34
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 1
+                    height: 18
+                    color: Ui.cardBorder
+                }
             }
 
             // 8. 图钉固定常驻（官方 Fluent pin / pin-off 图标）
@@ -356,8 +469,8 @@ Item {
                 objectName: "toolbarPinButton"
                 flat: true
                 leftPadding: 4; rightPadding: 4; topPadding: 4; bottomPadding: 4
-                Layout.preferredWidth: 34
-                Layout.preferredHeight: 34
+                implicitWidth: 34
+                implicitHeight: 34
                 checkable: true
                 checked: root.pinned
                 icon.source: Ui.icon(root.pinned ? "pin" : "pin-off")
@@ -383,7 +496,7 @@ Item {
         anchors.top: barCard.bottom
         anchors.topMargin: 4
         anchors.horizontalCenter: parent.horizontalCenter
-        width: 220
+        width: Math.min(220 * Ui.textScale, Math.max(0, root.maximumWidth - 12))
         height: 48
         radius: 8
         color: Ui.dark ? "#262626" : "#FFFFFF"
@@ -422,7 +535,62 @@ Item {
                 text: Math.round(opacitySlider.value * 100) + "%"
                 font.pixelSize: Ui.captionSize
                 color: Ui.textColor
-                Layout.preferredWidth: 32
+                Layout.preferredWidth: Math.max(32, implicitWidth)
+            }
+        }
+    }
+
+    Rectangle {
+        id: seekPopup
+        objectName: "toolbarSeekPopup"
+        visible: false
+        anchors.top: barCard.bottom
+        anchors.topMargin: 4
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: Math.min(320 * Ui.textScale, Math.max(0, root.maximumWidth - 12))
+        height: seekContent.implicitHeight + 20
+        radius: 8
+        color: Ui.dark ? "#262626" : "#FFFFFF"
+        border.width: 1
+        border.color: Ui.cardBorder
+        onVisibleChanged: if (!visible) seekSlider.pendingSeek = false
+        ColumnLayout {
+            id: seekContent
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 4
+            Label {
+                Layout.fillWidth: true
+                text: root.formatTime(seekSlider.pendingSeek ? seekSlider.value : root.backend.position)
+                    + " / " + root.formatTime(root.backend.duration)
+                font.pixelSize: Ui.captionSize
+                color: Ui.textColor
+                elide: Text.ElideRight
+            }
+            Slider {
+                id: seekSlider
+                objectName: "toolbarSeekSlider"
+                Layout.fillWidth: true
+                from: 0
+                to: Math.max(1, root.backend.duration)
+                property bool pendingSeek: false
+                Binding on value { value: root.backend.position; when: !seekSlider.pressed && !seekSlider.pendingSeek }
+                Accessible.name: I18n.toolbar.seekTitle
+                onMoved: {
+                    pendingSeek = true
+                    if (!pressed && root.presentationAllowed && seekPopup.visible) {
+                        const target = value
+                        pendingSeek = false
+                        root.backend.seek(target)
+                    }
+                }
+                onPressedChanged: {
+                    if (!pressed && pendingSeek && root.presentationAllowed && seekPopup.visible) {
+                        const target = value
+                        pendingSeek = false
+                        root.backend.seek(target)
+                    }
+                }
             }
         }
     }

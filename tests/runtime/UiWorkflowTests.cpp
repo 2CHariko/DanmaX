@@ -33,6 +33,82 @@
 class UiWorkflowTests : public QObject {
     Q_OBJECT
 private slots:
+    void toolbarSingleLineTips() {
+        QTemporaryDir directory;
+        AppController backend(directory.path(), nullptr, {}, directory.path(), [](QWindow*) { return true; });
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* panel = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+        auto* toolbar = panel->findChild<QQuickWindow*>("danmakuToolbarWindow");
+        auto* bar = toolbar->findChild<QQuickItem*>("danmakuToolbar");
+        QVERIFY(panel && toolbar && bar);
+        panel->show();
+        backend.beginDemo(50);
+        bar->setProperty("pinned", true);
+        QTRY_COMPARE(toolbar->property("phase").toString(), QString("shown"));
+        auto tips = bar->findChildren<QObject*>("toolbarTip");
+        tips.append(bar->findChild<QObject*>("toolbarPinTooltip"));
+        QVERIFY(tips.size() >= 12);
+        QStringList texts;
+        for (auto* tip : tips) {
+            QVERIFY(tip);
+            texts.append(tip->property("text").toString());
+        }
+        QVERIFY(texts.contains(QStringLiteral("暂停")));
+        QVERIFY(texts.contains(QStringLiteral("停止并退出")));
+        QVERIFY(texts.contains(QStringLiteral("播放进度")));
+        QVERIFY(texts.contains(QStringLiteral("一键清屏")));
+        const auto originalScheme = qGuiApp->styleHints()->colorScheme();
+#if defined(QT_DEBUG)
+        const auto build = QStringLiteral("debug");
+#else
+        const auto build = QStringLiteral("release");
+#endif
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/toolbar-coexist/") + build +
+            QStringLiteral("-dpr%1").arg(toolbar->devicePixelRatio());
+        QDir().mkpath(evidence);
+        for (auto theme : {Qt::ColorScheme::Light, Qt::ColorScheme::Dark}) {
+            qGuiApp->styleHints()->setColorScheme(theme);
+            for (auto* tip : tips) {
+                tip->setProperty("delay", 0);
+                tip->setProperty("trigger", true);
+                QTRY_VERIFY(tip->property("opened").toBool());
+                auto* content = qobject_cast<QQuickItem*>(tip->property("contentItem").value<QObject*>());
+                QVERIFY(content && content->window());
+                QCOMPARE(content->property("lineCount").toInt(), 1);
+                QCOMPARE(content->property("wrapMode").toInt(), 0); // Text.NoWrap
+                QVERIFY(content->width() >= content->implicitWidth() - 0.5);
+                QVERIFY(!content->property("truncated").toBool());
+                if (tip->property("text").toString() == QStringLiteral("停止并退出")) {
+                    QTest::qWait(30);
+                    QVERIFY(content->window()->grabWindow().save(evidence +
+                        (theme == Qt::ColorScheme::Light ? "/tip-light.png" : "/tip-dark.png")));
+                }
+                tip->setProperty("trigger", false);
+                QTRY_VERIFY(!tip->property("visible").toBool());
+            }
+        }
+        backend.stop(); backend.start(false);
+        QTRY_COMPARE(toolbar->property("phase").toString(), QString("shown"));
+        auto* time = toolbar->findChild<QQuickItem*>("toolbarTimeButton");
+        auto* offsetTip = time->findChild<QObject*>("toolbarTip");
+        QVERIFY(offsetTip);
+        QCOMPARE(offsetTip->property("text").toString(), QStringLiteral("重置偏移"));
+        offsetTip->setProperty("trigger", true);
+        QTRY_VERIFY(offsetTip->property("opened").toBool());
+        auto* content = qobject_cast<QQuickItem*>(offsetTip->property("contentItem").value<QObject*>());
+        QCOMPARE(content->property("lineCount").toInt(), 1);
+        QTest::qWait(30);
+        QVERIFY(content->window()->grabWindow().save(evidence + "/offset-tip.png"));
+        backend.stop();
+        QTRY_VERIFY(!offsetTip->property("visible").toBool());
+        qGuiApp->styleHints()->setColorScheme(originalScheme);
+        QCOMPARE(warnings.count(), 0);
+    }
+
     void debugHudLongTitleLayout() {
         QQmlApplicationEngine engine;
         QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
@@ -162,7 +238,7 @@ private slots:
         toolbar.setColor(QColor("#404040"));
         overlay.setTransientParent(nullptr);
         toolbar.setTransientParent(&overlay);
-        panel.show(); overlay.show();
+        panel.show(); overlay.show(); toolbar.show();
         QTest::qWait(100);
         const auto foreground = GetForegroundWindow();
         const auto above = [](HWND upper, HWND lower) {
@@ -177,7 +253,9 @@ private slots:
         for (int strategy = 0; strategy < 4; ++strategy) {
             overlay.setFlag(Qt::WindowStaysOnTopHint, strategy > 0);
             toolbar.setFlag(Qt::WindowStaysOnTopHint, strategy > 0);
+            toolbar.show();
             QVERIFY(layers.reconcile(strategy, true, true, true));
+            QVERIFY(above(reinterpret_cast<HWND>(toolbar.winId()), panelHandle));
             QVERIFY(above(panelHandle, overlayHandle));
             QCOMPARE(bool(GetWindowLongPtrW(panelHandle, GWL_EXSTYLE) & WS_EX_TOPMOST), strategy > 0);
             QCOMPARE(bool(GetWindowLongPtrW(overlayHandle, GWL_EXSTYLE) & WS_EX_TOPMOST), strategy > 0);
@@ -205,6 +283,8 @@ private slots:
         QVERIFY(layers.reconcile(3, true, true, true));
         QVERIFY(above(nested.window, dialog.window));
         QVERIFY(above(dialog.window, panelHandle));
+        QVERIFY(above(dialog.window, reinterpret_cast<HWND>(toolbar.winId())));
+        QVERIFY(above(reinterpret_cast<HWND>(toolbar.winId()), panelHandle));
         QVERIFY(above(panelHandle, overlayHandle));
         QCOMPARE(GetForegroundWindow(), foreground);
         QVERIFY(layers.reconcile(3, false, false));
@@ -232,7 +312,8 @@ private slots:
         QFile report(evidence + "/native-order.json");
         QVERIFY(report.open(QIODevice::WriteOnly));
         const QJsonObject result{{"strategies", 4}, {"nestedOwners", true}, {"surfaceRecreated", true},
-            {"baselineRestored", true}, {"foregroundPreserved", true}, {"foregroundPolicySimulated", true}};
+            {"baselineRestored", true}, {"foregroundPreserved", true}, {"foregroundPolicySimulated", true},
+            {"toolbarAbovePanel", true}, {"dialogsAboveToolbar", true}};
         QVERIFY(report.write(QJsonDocument(result).toJson()) > 0);
 #endif
     }
@@ -284,8 +365,20 @@ private slots:
         inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
         QCOMPARE(SendInput(2, inputs, sizeof(INPUT)), UINT(2));
         QTRY_COMPARE(counter.presses, 1);
-        QCursor::setPos(overlay->x() + overlay->width() / 2, overlay->y() + 2);
-        QTRY_COMPARE(toolbar->property("phase").toString(), QString("shown"));
+        auto* pointer = qobject_cast<ToolbarPointerMonitor*>(backend.toolbarPointer());
+        QVERIFY(pointer);
+        QTRY_VERIFY(pointer->activationRect().width() > 80);
+        // Exercise the widened band through QCursor, beyond the old central 80px.
+        for (const bool right : {false, true}) {
+            const auto band = pointer->activationRect();
+            QCursor::setPos(right ? band.right() - 2 : band.left() + 2, band.top() + 2);
+            QTRY_COMPARE(toolbar->property("phase").toString(), QString("shown"));
+            QCOMPARE(GetForegroundWindow(), playerHandle);
+            if (!right) {
+                QCursor::setPos(overlay->x() + 10, overlay->y() + 100);
+                QTRY_COMPARE(toolbar->property("phase").toString(), QString("hidden"));
+            }
+        }
         const auto toolbarHandle = reinterpret_cast<HWND>(toolbar->winId());
         QVERIFY(GetForegroundWindow() != toolbarHandle);
         auto* button = toolbar->findChild<QQuickItem*>("toolbarOpacityButton");
@@ -300,7 +393,49 @@ private slots:
         QCOMPARE(SendInput(2, inputs, sizeof(INPUT)), UINT(2));
         QTRY_VERIFY(popup->isVisible());
         QCOMPARE(GetForegroundWindow(), playerHandle);
-        backend.stop();
+        // New transport buttons use the same non-activating native host.
+        auto* play = toolbar->findChild<QQuickItem*>("toolbarPlaybackButton");
+        auto* exit = toolbar->findChild<QQuickItem*>("toolbarExitButton");
+        QVERIFY(play && exit);
+        auto expectedForeground = playerHandle;
+        for (auto* control : {play, exit}) {
+            QCursor::setPos(toolbar->mapToGlobal(control->mapToScene(
+                QPointF(control->width() / 2, control->height() / 2)).toPoint()));
+            QTest::qWait(80);
+            GetCursorPos(&point);
+            if (GetForegroundWindow() != expectedForeground || WindowFromPoint(point) != toolbarHandle)
+                QSKIP("The transport button is occluded; no global mouse input was injected.");
+            QCOMPARE(SendInput(2, inputs, sizeof(INPUT)), UINT(2));
+            if (control == play) QTRY_VERIFY(!backend.playing());
+            else QTRY_VERIFY(!backend.running());
+            QCOMPARE(GetForegroundWindow(), expectedForeground);
+            if (control == play) {
+                toolbar->findChild<QQuickItem*>("danmakuToolbar")->setProperty("pinned", true);
+                panel->show();
+                panel->requestActivate();
+                expectedForeground = reinterpret_cast<HWND>(panel->winId());
+                SetForegroundWindow(expectedForeground);
+                QTest::qWait(200);
+                if (GetForegroundWindow() != expectedForeground)
+                    QSKIP("Windows did not grant the panel foreground; coexistence mouse check not exercised.");
+                QVERIFY(toolbar->isVisible());
+                // The same physical click resumes while the panel stays foreground.
+                QCursor::setPos(toolbar->mapToGlobal(play->mapToScene(
+                    QPointF(play->width() / 2, play->height() / 2)).toPoint()));
+                QTest::qWait(80);
+                GetCursorPos(&point);
+                QCOMPARE(WindowFromPoint(point), reinterpret_cast<HWND>(toolbar->winId()));
+                QCOMPARE(SendInput(2, inputs, sizeof(INPUT)), UINT(2));
+                QTRY_VERIFY(backend.playing());
+                QCOMPARE(GetForegroundWindow(), expectedForeground);
+                backend.showMainWindow();
+                QTest::qWait(100);
+                GetCursorPos(&point);
+                QCOMPARE(WindowFromPoint(point), reinterpret_cast<HWND>(toolbar->winId()));
+                QCOMPARE(GetForegroundWindow(), expectedForeground);
+            }
+        }
+        QCOMPARE(backend.total(), 50);
 #endif
     }
 
@@ -328,8 +463,11 @@ private slots:
             QSKIP("Windows foreground was not granted to the test panel; native owner policy needs an available desktop.");
         backend.beginDemo(50);
         QTRY_VERIFY(overlay->isExposed());
-        QVERIFY(!backend.toolbarPresentationAllowed());
-        QVERIFY(!toolbar->isVisible());
+        QVERIFY(backend.toolbarPresentationAllowed());
+        auto* bar = toolbar->findChild<QQuickItem*>("danmakuToolbar");
+        QVERIFY(bar);
+        bar->setProperty("pinned", true);
+        QTRY_COMPARE(toolbar->property("phase").toString(), QString("shown"));
         const auto nativeOverlay = reinterpret_cast<HWND>(overlay->winId());
         const auto above = [](HWND upper, HWND lower) {
             for (auto current = GetWindow(lower, GW_HWNDPREV); current; current = GetWindow(current, GW_HWNDPREV))
@@ -341,11 +479,18 @@ private slots:
             QVERIFY(settings->setValue("onTop", strategy));
             QTest::qWait(1100);
             QVERIFY(above(owner, nativeOverlay));
+            QVERIFY(above(reinterpret_cast<HWND>(toolbar->winId()), owner));
             QCOMPARE(bool(GetWindowLongPtrW(owner, GWL_EXSTYLE) & WS_EX_TOPMOST), strategy > 0);
             QCOMPARE(bool(GetWindowLongPtrW(nativeOverlay, GWL_EXSTYLE) & WS_EX_TOPMOST), strategy > 0);
             QVERIFY(!panel->flags().testFlag(Qt::WindowStaysOnTopHint));
             QCOMPARE(GetForegroundWindow(), owner);
         }
+        panel->showMaximized();
+        QTest::qWait(200);
+        QVERIFY(toolbar->isVisible());
+        QVERIFY(above(reinterpret_cast<HWND>(toolbar->winId()), owner));
+        QCOMPARE(GetForegroundWindow(), owner);
+        panel->showNormal();
 
         WNDCLASSW probeClass{};
         probeClass.lpfnWndProc = DefWindowProcW;
@@ -364,9 +509,20 @@ private slots:
         QVERIFY(MediaMonitor::windowOrOwnerForeground(panel->winId()));
         QTest::qWait(100);
         QVERIFY(backend.overlayVisible());
-        QVERIFY(!toolbar->isVisible());
+        QVERIFY(toolbar->isVisible());
+        QVERIFY(above(dialog.handle, reinterpret_cast<HWND>(toolbar->winId())));
         QVERIFY(above(dialog.handle, owner));
         QVERIFY(above(owner, nativeOverlay));
+        auto* tip = toolbar->findChild<QObject*>("toolbarPinTooltip");
+        QVERIFY(tip);
+        tip->setProperty("delay", 0);
+        tip->setProperty("trigger", true);
+        QTRY_VERIFY(tip->property("opened").toBool());
+        auto* tipContent = qobject_cast<QQuickItem*>(tip->property("contentItem").value<QObject*>());
+        QVERIFY(tipContent && tipContent->window());
+        QTRY_VERIFY(above(dialog.handle, reinterpret_cast<HWND>(tipContent->window()->winId())));
+        QCOMPARE(GetForegroundWindow(), dialog.handle);
+        tip->setProperty("trigger", false);
         NativeDialog nested{CreateWindowExW(WS_EX_TOOLWINDOW, probeClass.lpszClassName, L"Nested owner probe",
             WS_POPUP | WS_CAPTION | WS_VISIBLE, 240, 240, 280, 120, dialog.handle, nullptr,
             probeClass.hInstance, nullptr)};
@@ -376,6 +532,7 @@ private slots:
         QTest::qWait(1100);
         QVERIFY(MediaMonitor::windowOrOwnerForeground(panel->winId()));
         QVERIFY(above(nested.handle, dialog.handle));
+        QVERIFY(above(dialog.handle, reinterpret_cast<HWND>(toolbar->winId())));
         QVERIFY(above(dialog.handle, owner));
         QVERIFY(above(owner, nativeOverlay));
         ShowWindow(nested.handle, SW_HIDE);
@@ -389,7 +546,10 @@ private slots:
         QVERIFY(!GetWindow(nativeOverlay, GW_OWNER));
         panel->showNormal();
         panel->requestActivate();
-        QTRY_VERIFY(GetForegroundWindow() == owner);
+        SetForegroundWindow(owner);
+        QTest::qWait(200);
+        if (GetForegroundWindow() != owner)
+            QSKIP("Windows did not regrant the panel foreground after minimization; maximized foreground check not exercised.");
         QTRY_VERIFY(GetWindowLongPtrW(owner, GWL_EXSTYLE) & WS_EX_TOPMOST);
 #if defined(QT_DEBUG)
         const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/panel-layer/debug");
@@ -403,6 +563,177 @@ private slots:
         backend.stop();
         QVERIFY(!(GetWindowLongPtrW(owner, GWL_EXSTYLE) & WS_EX_TOPMOST));
 #endif
+    }
+
+    void toolbarPlaybackWorkflow() {
+        QTemporaryDir directory;
+        QPoint cursor;
+        bool panelOperating = false;
+        AppController backend(directory.path(), nullptr, {}, directory.path(),
+                              [&](QWindow*) { return panelOperating; }, [&] { return cursor; });
+        QObject::disconnect(backend.findChild<MediaMonitor*>(), nullptr, &backend, nullptr);
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        QQmlComponent overlayComponent(&engine, QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/OverlayWindow.qml")));
+        QVERIFY2(overlayComponent.isReady(), qPrintable(overlayComponent.errorString()));
+        std::unique_ptr<QObject> overlayObject(overlayComponent.createWithInitialProperties({{"backend", QVariant::fromValue(&backend)}}));
+        auto* overlay = qobject_cast<QQuickWindow*>(overlayObject.get());
+        QVERIFY(overlay);
+        auto* renderer = qobject_cast<DanmakuItem*>(overlay->property("renderer").value<QObject*>());
+        QQmlComponent toolbarComponent(&engine, QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/ToolbarWindow.qml")));
+        QVERIFY2(toolbarComponent.isReady(), qPrintable(toolbarComponent.errorString()));
+        std::unique_ptr<QObject> toolbarObject(toolbarComponent.createWithInitialProperties(
+            {{"backend", QVariant::fromValue(&backend)}, {"overlayWindow", QVariant::fromValue(overlayObject.get())}}));
+        auto* toolbar = qobject_cast<QQuickWindow*>(toolbarObject.get());
+        QVERIFY(toolbar && renderer);
+        QWindow panel;
+        panel.show();
+        backend.attach(renderer, overlay, toolbar, &panel);
+        connect(&backend, &AppController::stateChanged, overlay,
+                [&] { overlay->setVisible(backend.overlayVisible()); });
+        auto find = [&](const char* name) { return toolbar->findChild<QQuickItem*>(name); };
+        auto* bar = find("danmakuToolbar");
+        auto* play = find("toolbarPlaybackButton");
+        auto* exit = find("toolbarExitButton");
+        auto* time = find("toolbarTimeButton");
+        auto* seekPopup = find("toolbarSeekPopup");
+        auto* seek = find("toolbarSeekSlider");
+        auto* opacity = find("toolbarOpacityButton");
+        auto* opacityPopup = find("toolbarOpacityPopup");
+        QVERIFY(bar && play && exit && time && seekPopup && seek && opacity && opacityPopup);
+        auto point = [](QQuickItem* item, double fraction = 0.5) {
+            return item->mapToScene(QPointF(item->width() * fraction, item->height() / 2)).toPoint();
+        };
+        auto click = [&](QQuickItem* item) {
+            cursor = toolbar->mapToGlobal(point(item));
+            QTest::mouseClick(toolbar, Qt::LeftButton, Qt::NoModifier, point(item));
+        };
+        QSignalSpy loaded(&backend, &AppController::loadCompleted);
+        backend.loadFile(QStringLiteral(DANMAKU_SOURCE_DIR "/tests/fixtures/sample.xml"));
+        QTRY_COMPARE(loaded.count(), 1);
+        backend.setManualMode(true);
+        backend.start(true);
+        bar->setProperty("pinned", true);
+        QTRY_COMPARE(toolbar->property("phase").toString(), QString("shown"));
+        const int initialActivationWidth = backend.toolbarPointer()->property("activationWidth").toInt();
+        QCOMPARE(initialActivationWidth, qRound(bar->property("activationWidth").toDouble()));
+        QVERIFY(play->isVisible());
+        click(play);
+        QVERIFY(!backend.playing());
+        backend.seek(20);
+        click(find("toolbarSeekForwardButton"));
+        QCOMPARE(backend.position(), 25.0);
+        click(find("toolbarSeekBackButton"));
+        QCOMPARE(backend.position(), 20.0);
+        click(time);
+        QTRY_VERIFY(seekPopup->isVisible());
+        QCOMPARE(backend.toolbarPointer()->property("activationWidth").toInt(), initialActivationWidth);
+        QVERIFY(!opacityPopup->isVisible());
+        QTest::mousePress(toolbar, Qt::LeftButton, Qt::NoModifier, point(seek, 0.3));
+        QTest::mouseMove(toolbar, point(seek, 0.7));
+        QTRY_VERIFY(seek->property("pressed").toBool());
+        QVERIFY(seek->property("pendingSeek").toBool());
+        QCOMPARE(backend.position(), 20.0);
+        bar->setProperty("pinned", false);
+        cursor = overlay->geometry().center();
+        QTest::qWait(1100);
+        QVERIFY(toolbar->isVisible());
+        const double target = seek->property("value").toDouble();
+        QTest::mouseRelease(toolbar, Qt::LeftButton, Qt::NoModifier, point(seek, 0.7));
+        QCOMPARE(backend.position(), target);
+        QVERIFY(!backend.playing());
+        bar->setProperty("pinned", true);
+        click(opacity);
+        QVERIFY(opacityPopup->isVisible());
+        QCOMPARE(backend.toolbarPointer()->property("activationWidth").toInt(), initialActivationWidth);
+        QVERIFY(!seekPopup->isVisible());
+        click(time);
+        QVERIFY(seekPopup->isVisible());
+        QVERIFY(!opacityPopup->isVisible());
+        const double beforeCancel = backend.position();
+        QTest::mousePress(toolbar, Qt::LeftButton, Qt::NoModifier, point(seek, 0.2));
+        QTest::mouseMove(toolbar, point(seek, 0.4));
+        QTRY_VERIFY(seek->property("pressed").toBool());
+        panelOperating = true;
+        QTest::qWait(100);
+        QVERIFY(backend.toolbarPresentationAllowed());
+        QVERIFY(toolbar->isVisible());
+        QVERIFY(seekPopup->isVisible());
+        QVERIFY(seek->property("pendingSeek").toBool());
+        // Only revoking presentation cancels a preview, not activating the panel.
+        overlay->hide();
+        QTRY_VERIFY(!toolbar->isVisible());
+        QVERIFY(!seekPopup->isVisible());
+        QTest::mouseRelease(toolbar, Qt::LeftButton, Qt::NoModifier, point(seek, 0.4));
+        QCOMPARE(backend.position(), beforeCancel);
+        QVERIFY(bar->property("pinned").toBool());
+        overlay->show();
+        panelOperating = false;
+        QTRY_COMPARE(toolbar->property("phase").toString(), QString("shown"));
+        for (const auto theme : {Qt::ColorScheme::Light, Qt::ColorScheme::Dark}) {
+            qGuiApp->styleHints()->setColorScheme(theme);
+            for (const int width : {800, 320, 200}) {
+                // AppController intentionally keeps the overlay at the selected
+                // screen size. Exercise the same width input without resizing it.
+                bar->setProperty("maximumWidth", width);
+                QTest::qWait(80);
+                QVERIFY(toolbar->width() <= width);
+                auto* flow = find("toolbarFlow");
+                QVERIFY(flow);
+                auto* pointer = qobject_cast<ToolbarPointerMonitor*>(backend.toolbarPointer());
+                QVERIFY(pointer);
+                QCOMPARE(pointer->activationRect().width(), qRound(bar->property("activationWidth").toDouble()));
+                const auto barLeft = toolbar->mapToGlobal(flow->parentItem()->mapToScene(QPointF(0, 0)).toPoint()).x();
+                QVERIFY(qAbs(pointer->activationRect().left() - barLeft) <= 1);
+                if (width <= 320) QVERIFY(flow->height() > 34);
+                for (auto* control : {play, exit, time, opacity}) {
+                    const auto scene = control->mapToScene(QPointF(0, 0));
+                    QVERIFY(scene.x() >= 0 && scene.x() + control->width() <= toolbar->width() + 1);
+                    QVERIFY(scene.y() >= 0 && scene.y() + control->height() <= toolbar->height() + 1);
+                }
+            }
+        }
+#if defined(QT_DEBUG)
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/playback-controls/debug") +
+                              (qEnvironmentVariableIsSet("DANMAKU_UI_LARGE_TEXT") ? "-scaled" : "");
+#else
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/playback-controls/release") +
+                              (qEnvironmentVariableIsSet("DANMAKU_UI_LARGE_TEXT") ? "-scaled" : "");
+#endif
+        QDir().mkpath(evidence);
+        QVERIFY(toolbar->grabWindow().save(evidence + "/toolbar-narrow.png"));
+        bar->setProperty("maximumWidth", 1024);
+        click(time);
+        QTRY_VERIFY(seekPopup->isVisible());
+        QTest::qWait(80);
+        QVERIFY(toolbar->grabWindow().save(evidence + "/toolbar-progress.png"));
+        const int manualActivationWidth = backend.toolbarPointer()->property("activationWidth").toInt();
+        click(exit);
+        QVERIFY(!backend.running());
+        QVERIFY(backend.total() > 0);
+        QTRY_VERIFY(!toolbar->isVisible());
+        QVERIFY(!seekPopup->isVisible());
+        backend.selectSession("fixture");
+        backend.start(false);
+        QTRY_COMPARE(toolbar->property("phase").toString(), QString("shown"));
+        QTRY_VERIFY(backend.toolbarPointer()->property("activationWidth").toInt() != manualActivationWidth);
+        QCOMPARE(backend.toolbarPointer()->property("activationWidth").toInt(),
+                 qRound(bar->property("activationWidth").toDouble()));
+        QVERIFY(!play->isVisible());
+        click(time);
+        QVERIFY(!seekPopup->isVisible());
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
+        click(find("toolbarSeekForwardButton"));
+        QCOMPARE(settings->values()["timeOffset"].toDouble(), 0.5);
+        click(time);
+        QCOMPARE(settings->values()["timeOffset"].toDouble(), 0.0);
+        QTest::qWait(80);
+        QVERIFY(toolbar->grabWindow().save(evidence + "/toolbar-follow.png"));
+        click(exit);
+        QVERIFY(!backend.running());
+        QVERIFY(backend.total() > 0);
+        backend.unload();
+        QCOMPARE(warnings.count(), 0);
     }
 
     void toolbarAutoHideWorkflow() {
@@ -457,7 +788,10 @@ private slots:
         const auto originalCursor = QCursor::pos();
         struct CursorRestore { QPoint point; ~CursorRestore() { QCursor::setPos(point); } } restore{originalCursor};
         auto outside = [&] { sensedCursor = overlay.geometry().center() + QPoint(0, 150); };
-        auto enter = [&] { sensedCursor = QPoint(overlay.x() + overlay.width() / 2, overlay.y() + 2); };
+        auto enter = [&](bool right = false) {
+            const auto rect = qobject_cast<ToolbarPointerMonitor*>(backend.toolbarPointer())->activationRect();
+            sensedCursor = right ? rect.topRight() : rect.topLeft();
+        };
         auto click = [&](QQuickItem* item) {
             QSignalSpy clicked(item, SIGNAL(clicked()));
             const auto point = item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint();
@@ -476,7 +810,8 @@ private slots:
         QTRY_VERIFY(backend.toolbarPointer()->property("enabled").toBool());
         QVERIFY(!window->isVisible());
         for (int cycle = 0; cycle < 3; ++cycle) {
-            enter();
+            // Both ends are outside the previous 80-unit sensing strip.
+            enter(cycle % 2 != 0);
             QTRY_VERIFY(backend.toolbarPointer()->property("hovered").toBool());
             QVERIFY(bar->property("presentationAllowed").toBool());
             QTRY_COMPARE(window->property("phase").toString(), QString("shown"));
@@ -493,9 +828,9 @@ private slots:
                 outside();
             } else if (cycle == 1) {
                 panelOperating = true;
-                QTRY_VERIFY(!backend.toolbarPresentationAllowed());
-                QCOMPARE(window->property("phase").toString(), QString("hidden"));
-                QVERIFY(!window->isVisible());
+                QTest::qWait(50);
+                QVERIFY(backend.toolbarPresentationAllowed());
+                QVERIFY(backend.toolbarPointer()->property("enabled").toBool());
                 panelOperating = false;
                 QTRY_VERIFY(backend.toolbarPresentationAllowed());
             }
@@ -508,12 +843,18 @@ private slots:
         QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, pinPoint);
         QVERIFY(bar->property("interactionHeld").toBool());
         outside();
-        QTest::mouseMove(window, QPoint(-100, 200));
+        // Keep the button press inside its hit area while the injected region
+        // sensor is outside. Moving outside a Button cancels its press in Qt.
         QTest::qWait(1200);
+        QVERIFY(bar->property("interactionHeld").toBool());
         QVERIFY(window->isVisible());
         panelOperating = true;
-        QTRY_VERIFY(!window->isVisible());
-        QVERIFY(!backend.toolbarPresentationAllowed());
+        QTest::qWait(100);
+        QVERIFY2(window->isVisible(), qPrintable(QString("phase=%1 held=%2 pressed=%3 expanded=%4 allowed=%5")
+            .arg(window->property("phase").toString()).arg(bar->property("interactionHeld").toBool())
+            .arg(pinButton->property("pressed").toBool()).arg(bar->property("expanded").toBool())
+            .arg(backend.toolbarPresentationAllowed())));
+        QVERIFY(backend.toolbarPresentationAllowed());
         QVERIFY(overlay.isVisible());
         QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, QPoint(-100, 200));
         panelOperating = false;
@@ -534,8 +875,12 @@ private slots:
         QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, thumb);
         QTRY_VERIFY(slider->property("pressed").toBool());
         panelOperating = true;
-        QTRY_VERIFY(!backend.toolbarPresentationAllowed());
+        QTest::qWait(100);
+        QVERIFY(backend.toolbarPresentationAllowed());
         QVERIFY(overlay.isVisible());
+        QVERIFY(window->isVisible());
+        QVERIFY(popup->isVisible());
+        overlay.hide();
         QVERIFY(!window->isVisible());
         QCOMPARE(window->property("phase").toString(), QString("hidden"));
         QVERIFY(!popup->isVisible());
@@ -543,6 +888,7 @@ private slots:
         QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, thumb);
         panelOperating = false;
         outside();
+        overlay.show();
         QTRY_VERIFY(backend.toolbarPresentationAllowed());
         QVERIFY(!window->isVisible());
         enter();
@@ -618,14 +964,15 @@ private slots:
         };
         hoverPinTooltip();
         panelOperating = true;
-        QTRY_VERIFY(!window->isVisible());
-        QTRY_VERIFY(!pinTooltip->property("visible").toBool());
+        QTest::qWait(100);
+        QVERIFY(window->isVisible());
+        QVERIFY(pinTooltip->property("visible").toBool());
         QVERIFY(bar->property("pinned").toBool());
         enter();
         QTest::qWait(1100);
-        QVERIFY(!window->isVisible());
+        QVERIFY(window->isVisible());
         QVERIFY(overlay.isVisible());
-        QVERIFY(!backend.toolbarPointer()->property("enabled").toBool());
+        QVERIFY(backend.toolbarPointer()->property("enabled").toBool());
         outside();
         panelOperating = false;
         QTRY_COMPARE(window->property("phase").toString(), QString("shown"));
@@ -891,7 +1238,7 @@ ApplicationWindow {
         QVERIFY(tabLabel);
         QVERIFY(tabLabel->property("color").value<QColor>().alpha() > 0);
         QVERIFY(!start->isEnabled());
-        QVERIFY(!find("stopPlayback")->isVisible());
+        QVERIFY(!find("unloadDanmaku")->isVisible());
         auto* disclosure = find("sessionDisclosure");
         QVERIFY(disclosure);
         disclosure->setProperty("expanded", true);
@@ -920,6 +1267,13 @@ ApplicationWindow {
         QVERIFY(backend.playing());
         activate(find("stopPlayback"));
         QVERIFY(!backend.running());
+        QVERIFY(backend.total() > 0);
+        QVERIFY(backend.manualMode());
+        QTRY_VERIFY(start->isEnabled());
+        activate(start);
+        QVERIFY(backend.running());
+        backend.stop();
+        activate(find("unloadDanmaku"));
         QCOMPARE(backend.total(), 0);
         activate(find("syncMode"));
         backend.selectSession("ui-test-session");

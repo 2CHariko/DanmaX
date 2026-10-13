@@ -266,7 +266,7 @@ int main(int argc, char* argv[]) {
                                  controller.metrics().value("active").toInt(),
                                  controller.metrics().value("suppressedWhileHidden").toULongLong(),
                                  controller.metrics().value("maintenanceTicks").toULongLong());
-                controller.stop();
+                controller.unload();
                 app.exit(passed ? 0 : 2);
             });
         }

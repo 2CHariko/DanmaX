@@ -61,7 +61,9 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     });
     connect(&monitor_, &MediaMonitor::sampleReceived, this, &AppController::onSample);
     connect(&monitor_, &MediaMonitor::errorOccurred, this,
-            [this](const QString& message) { fail(QStringLiteral("媒体接口：") + message); });
+            [this](const QString& message) {
+                if (!manual_) fail(QStringLiteral("媒体接口：") + message);
+            });
     connect(qGuiApp, &QGuiApplication::screenAdded, this, [this] {
         emit screensChanged();
         updateWindow();
@@ -196,13 +198,31 @@ void AppController::configure() {
     const auto s = settings_.values();
     library_.setServers(s["danmakuServers"].toStringList());
     logs_.configure(s["logToFile"].toBool(), s["logLevel"].toString());
-    monitor_.select(s["targetSession"].toString());
     if (lastSettings_.value("targetSession") != s["targetSession"]) {
-        mediaIdentity_.clear();
-        playing_ = false;
-        sampleTime_.invalidate();
-        if (running_ && !manual_)
-            status_ = QStringLiteral("等待所选播放器");
+        mediaGeneration_ = monitor_.select(s["targetSession"].toString(), true);
+        if (!manual_) {
+            mediaIdentity_.clear();
+            syncConnected_ = false;
+            lastSampleObservedAt_ = 0;
+            mediaClock_ = {};
+            sampleTime_.invalidate();
+            if (running_) {
+                playing_ = false;
+                position_ = 0;
+                duration_ = 0;
+                mediaTitle_.clear();
+                resetDanmakuTimeline();
+                setPlaybackState(WaitingForPlayer);
+            }
+        }
+    }
+    if (running_ && !manual_ && lastSettings_.value("timeOffset") != s["timeOffset"]) {
+        if (syncConnected_) {
+            mediaClock_.advance(monotonicTime_.nsecsElapsed() * 1e-9);
+            position_ = mediaClock_.position();
+        }
+        resetDanmakuTimeline();
+        emit metricsChanged();
     }
     const QStringList rendererKeys{"fontFamily", "fontSize", "strokeWidth", "speed", "fixedSeconds",
                                    "maxActive", "maxTracks", "lineSpacing", "overlap", "opacity",
@@ -245,7 +265,7 @@ bool AppController::updatePresentationVisibility(bool forceForeground, bool noti
     const bool layerReady = windowLayers_.reconcile(settings_.values()["onTop"].toInt(),
                                                    panelForeground_, desiredOverlayAllowed_);
     const bool show = desiredOverlayAllowed_ && (!panelForeground_ || layerReady);
-    const bool toolbarAllowed = show && !panelForeground_;
+    const bool toolbarAllowed = show;
     const bool changed = show != visible_ || toolbarAllowed != toolbarAllowed_;
     visible_ = show;
     toolbarAllowed_ = toolbarAllowed;
@@ -308,7 +328,7 @@ void AppController::loadFile(const QString& input) {
     const auto path = localPath(input);
     if (path.isEmpty())
         return;
-    stop();
+    unload();
     const auto generation = ++loadGeneration_;
     loading_ = true;
     progress_ = 0;
@@ -385,14 +405,19 @@ void AppController::discardLoad() {
     progress_ = 0;
 }
 void AppController::start(bool manual) {
+    if (running_) return;
     if (rendererSettingsPending_) applyRendererSettings();
     if (loading_ || engine_.items().empty() || !renderer_) {
         fail(QStringLiteral("请先载入有效弹幕文件"));
         return;
     }
-    if (manual && position_ >= duration_)
-        position_ = 0;
     manual_ = manual;
+    position_ = 0;
+    duration_ = manual ? loadedDuration_ : 0;
+    mediaClock_ = {};
+    syncConnected_ = false;
+    lastSampleObservedAt_ = 0;
+    mediaGeneration_ = monitor_.select(settings_.values()["targetSession"].toString(), true);
     awaitingInitialExposure_ = manual && overlay_ && !overlay_->isExposed();
     if (auto* quick = qobject_cast<QQuickWindow*>(overlay_.data())) {
         quick->setPersistentSceneGraph(true);
@@ -404,39 +429,54 @@ void AppController::start(bool manual) {
     rate_ = 1;
     mediaIdentity_.clear();
     sampleTime_.invalidate();
-    engine_.seek(position_);
+    engine_.seek(danmakuPosition());
     renderer_->present(engine_);
     updatePresentationVisibility(true, false);
-    status_ = manual ? QStringLiteral("独立播放") : QStringLiteral("等待所选播放器");
+    setPlaybackState(manual ? Playing : WaitingForPlayer);
     frameTime_.start();
     timer_.start();
     emit stateChanged();
+    emit metricsChanged();
 }
 void AppController::stop() {
     library_.cancel();
     discardLoad();
-    resetPlayback();
+    resetPlayback(false);
+}
+void AppController::unload() {
+    library_.cancel();
+    discardLoad();
+    resetPlayback(true);
+}
+void AppController::setManualMode(bool manual) {
+    if (running_ || manual_ == manual) return;
+    manual_ = manual;
+    emit stateChanged();
 }
 void AppController::commitItems(std::vector<danmaku::Item> items, const QString& title) {
-    resetPlayback();
+    resetPlayback(true);
     engine_.load(std::move(items));
     sourceTitle_ = title;
-    duration_ = engine_.items().back().time + 15;
+    loadedDuration_ = duration_ = engine_.items().back().time + 15;
+    playbackState_ = Ready;
     status_ = QStringLiteral("已载入 %1 条，选择播放方式后开始播放").arg(total());
     error_.clear();
     logs_.append("INFO", status_);
     emit stateChanged();
 }
-void AppController::resetPlayback() {
+void AppController::resetPlayback(bool unloadSource) {
     timer_.stop();
-    running_ = playing_ = visible_ = manual_ = demo_ = false;
+    running_ = playing_ = visible_ = demo_ = false;
     toolbarAllowed_ = desiredOverlayAllowed_ = false;
     windowLayers_.reconcile(settings_.values()["onTop"].toInt(), false, false);
     toolbarPointer_.setEnabled(false);
     awaitingInitialExposure_ = false;
     snapshotDirty_ = true;
-    engine_.unload();
-    sourceTitle_.clear();
+    if (unloadSource) {
+        engine_.unload();
+        sourceTitle_.clear();
+        loadedDuration_ = 0;
+    } else engine_.seek(0);
     if (renderer_) renderer_->clearContent();
     if (auto* quick = qobject_cast<QQuickWindow*>(overlay_.data())) {
         // Hiding alone retains Qt's scene graph. Release it on its own render thread,
@@ -447,9 +487,13 @@ void AppController::resetPlayback() {
         quick->releaseResources();
     } else if (overlay_) overlay_->hide();
     mediaClock_ = {};
+    syncConnected_ = false;
+    lastSampleObservedAt_ = 0;
+    mediaGeneration_ = monitor_.select(settings_.values()["targetSession"].toString(), true);
     mediaIdentity_.clear();
     mediaTitle_.clear();
-    position_ = duration_ = samplePosition_ = 0;
+    position_ = samplePosition_ = 0;
+    duration_ = loadedDuration_;
     rate_ = 1;
     frameTime_.invalidate();
     sampleTime_.invalidate();
@@ -458,65 +502,123 @@ void AppController::resetPlayback() {
     std::vector<double>().swap(frameTimes_);
     frames_ = 0;
     engineMs_ = snapshotMs_ = 0;
-    status_ = file_.isEmpty() ? QStringLiteral("请选择弹幕文件") : QStringLiteral("已停止，弹幕已卸载；请重新载入");
+    setPlaybackState(engine_.items().empty() ? Empty : Ready);
     updateMetrics();
     emit stateChanged();
 }
 void AppController::togglePause() {
     if (!running_ || !manual_)
         return;
+    if (playbackState_ == Completed) {
+        position_ = 0;
+        duration_ = loadedDuration_;
+        resetDanmakuTimeline();
+    }
     playing_ = !playing_;
     if (playing_ && renderer_) renderer_->update();
     frameTime_.restart();
-    status_ = playing_ ? QStringLiteral("独立播放") : QStringLiteral("已暂停");
+    setPlaybackState(playing_ ? Playing : Paused);
     emit stateChanged();
+    emit metricsChanged();
 }
 void AppController::seek(double position) {
-    if (!manual_ && running_)
+    if (!manual_ || !running_ || !std::isfinite(position))
         return;
     position_ = std::clamp(position, 0.0, std::max(0.0, duration_));
-    engine_.seek(position_);
-    if (renderer_)
-        renderer_->present(engine_);
+    resetDanmakuTimeline();
+    frameTime_.restart();
+    if (playbackState_ == Completed) {
+        setPlaybackState(Paused);
+        emit stateChanged();
+    }
     emit metricsChanged();
 }
 void AppController::selectSession(const QString& id) {
     settings_.setValue("targetSession", id);
+}
+void AppController::setPlaybackState(PlaybackState state) {
+    playbackState_ = state;
+    switch (state) {
+    case Empty: status_ = QStringLiteral("请选择弹幕文件"); break;
+    case Ready: status_ = QStringLiteral("弹幕已就绪，可再次开始"); break;
+    case Playing: status_ = manual_ ? QStringLiteral("独立播放") : QStringLiteral("跟随播放器"); break;
+    case Paused: status_ = manual_ ? QStringLiteral("已暂停") : QStringLiteral("播放器已暂停"); break;
+    case Completed: status_ = QStringLiteral("播放完成"); break;
+    case WaitingForPlayer: status_ = QStringLiteral("等待所选播放器"); break;
+    case PlayerStopped: status_ = QStringLiteral("播放器已停止，等待恢复"); break;
+    case SyncTimeout: status_ = QStringLiteral("媒体同步超时"); break;
+    }
+}
+double AppController::danmakuPosition() const {
+    return manual_ ? position_ : std::max(0.0, position_ + settings_.values()["timeOffset"].toDouble());
+}
+void AppController::resetDanmakuTimeline() {
+    engine_.seek(danmakuPosition());
+    mediaClock_.takeMotion();
+    snapshotDirty_ = true;
+    if (renderer_) {
+        if (danmakuVisible_) renderer_->present(engine_);
+        else renderer_->clearContent();
+        renderer_->update();
+    }
 }
 void AppController::exportLogs(const QString& path) {
     if (!logs_.exportTo(localPath(path)))
         fail(QStringLiteral("日志导出失败"));
 }
 void AppController::onSample(const MediaSample& s) {
-    if (!running_ || manual_)
+    if (!running_ || manual_ || s.generation != mediaGeneration_ ||
+        s.id != settings_.values()["targetSession"].toString() ||
+        !std::isfinite(s.observedAt) || s.observedAt <= lastSampleObservedAt_)
         return;
+    const double age = MediaMonitor::monotonicSeconds() - s.observedAt;
+    if (age < 0 || age > 2.5) return;
+    lastSampleObservedAt_ = s.observedAt;
+    sampleAgeAtReceive_ = age;
     ++mediaSamples_;
-    if (!s.found || s.id != settings_.values()["targetSession"].toString()) {
+    if (!s.found || s.playback == MediaSample::Playback::Closed ||
+        s.playback == MediaSample::Playback::Changing || s.playback == MediaSample::Playback::Unknown) {
         mediaClock_.freeze(monotonicTime_.nsecsElapsed() * 1e-9);
+        if (syncConnected_) position_ = mediaClock_.position();
+        syncConnected_ = false;
         playing_ = false;
-        status_ = QStringLiteral("等待所选播放器");
         sampleTime_.invalidate();
-        emit stateChanged();
+        if (playbackState_ != WaitingForPlayer) {
+            setPlaybackState(WaitingForPlayer);
+            emit stateChanged();
+            emit metricsChanged();
+        }
         return;
     }
-    const double actual = std::max(0.0, s.position + settings_.values()["timeOffset"].toDouble());
-    const bool changed = mediaIdentity_ != s.identity;
-    if (mediaClock_.synchronize(actual, s.rate, s.playing,
-                                monotonicTime_.nsecsElapsed() * 1e-9, changed)) {
+    if (!std::isfinite(s.position) || !std::isfinite(s.duration)) return;
+    const bool samplePlaying = s.playback == MediaSample::Playback::Playing;
+    const double rate = std::isfinite(s.rate) && s.rate > 0 ? s.rate : 1;
+    // The adapter already projects SMTC's LastUpdatedTime to acquisition time.
+    // Keep that sampled boundary exact: a second projection here would turn a
+    // time-zero seek into a positive seek and discard its comments.
+    double actual = std::max(0.0, s.position);
+    if (s.duration > 0) actual = std::min(actual, s.duration);
+    const bool stopped = s.playback == MediaSample::Playback::Stopped;
+    const bool changed = !syncConnected_ || mediaIdentity_ != s.identity ||
+                         (stopped && playbackState_ != PlayerStopped);
+    const bool reset = mediaClock_.synchronize(actual, rate, samplePlaying,
+                                monotonicTime_.nsecsElapsed() * 1e-9, changed);
+    if (reset) {
         ++sampleResets_;
-        engine_.seek(actual);
-        if(renderer_)renderer_->present(engine_);
     }
     mediaIdentity_ = s.identity;
     mediaTitle_ = s.title;
     duration_ = s.duration;
     position_ = samplePosition_ = actual;
-    rate_ = s.rate;
-    playing_ = s.playing;
+    rate_ = rate;
+    playing_ = samplePlaying;
+    syncConnected_ = true;
+    if (reset) resetDanmakuTimeline();
     if (playing_ && renderer_) renderer_->update();
     sampleTime_.start();
-    status_ = playing_ ? QStringLiteral("跟随播放器") : QStringLiteral("播放器已暂停");
+    setPlaybackState(stopped ? PlayerStopped : playing_ ? Playing : Paused);
     emit stateChanged();
+    emit metricsChanged();
 }
 void AppController::tick() {
     if (!running_ || !renderer_)
@@ -537,10 +639,13 @@ void AppController::tick() {
         if (frameTimes_.size() > 3600)
             frameTimes_.erase(frameTimes_.begin(), frameTimes_.begin() + 600);
     }
-    if (!manual_ && sampleTime_.isValid() && sampleTime_.elapsed() > 2500) {
+    if (!manual_ && syncConnected_ && sampleTime_.isValid() &&
+        sampleTime_.elapsed() * 1e-3 + sampleAgeAtReceive_ > 2.5) {
         mediaClock_.freeze(monotonicTime_.nsecsElapsed() * 1e-9);
         playing_ = false;
-        status_ = QStringLiteral("媒体同步超时");
+        position_ = mediaClock_.position();
+        syncConnected_ = false;
+        setPlaybackState(SyncTimeout);
         emit stateChanged();
     }
     if (playing_) {
@@ -559,7 +664,7 @@ void AppController::tick() {
     const double motion = manual_ ? elapsed : mediaClock_.takeMotion();
     QElapsedTimer stage;
     stage.start();
-    engine_.tick(position_, motion, playing_,
+    engine_.tick(danmakuPosition(), motion, playing_,
                  [this](const auto& item) { return renderer_->measure(item); }, renderable);
     engineMs_ += stage.nsecsElapsed() * 1e-6;
     stage.restart();
@@ -575,8 +680,8 @@ void AppController::tick() {
     if (manual_ && !demo_ && playing_) {
         if (engine_.finished()) {
             playing_ = false;
-            duration_ = position_;
-            status_ = QStringLiteral("播放完成");
+            loadedDuration_ = duration_ = position_;
+            setPlaybackState(Completed);
             emit stateChanged();
         } else if (position_ >= duration_) {
             duration_ = position_ + 1;
@@ -600,6 +705,9 @@ void AppController::updateMetrics() {
     metrics_["animationCallbacks"] = static_cast<qulonglong>(animationCallbacks_);
     metrics_["mediaSamples"] = static_cast<qulonglong>(mediaSamples_);
     metrics_["sampleResets"] = static_cast<qulonglong>(sampleResets_);
+    metrics_["danmakuPosition"] = danmakuPosition();
+    metrics_["mediaGeneration"] = static_cast<qulonglong>(mediaGeneration_);
+    metrics_["playbackState"] = static_cast<int>(playbackState_);
     metrics_["frameTicks"] = static_cast<qulonglong>(frameTicks_);
     metrics_["maintenanceTicks"] = static_cast<qulonglong>(maintenanceTicks_);
     metrics_["engineMeanMs"] = frames_ ? engineMs_ / frames_ : 0;
@@ -652,7 +760,7 @@ void AppController::beginDemo(int count) {
                          QStringLiteral("弹幕测试 %1 · Fluent / Qt Quick").arg(i).toUtf8().toStdString(),
                          0xffffff});
     engine_.load(std::move(items));
-    duration_ = 30;
+    loadedDuration_ = duration_ = 30;
     position_ = 0;
     demo_ = true;
     start(true);
@@ -720,4 +828,7 @@ void AppController::stepFontSize(int delta) {
 }
 void AppController::showMainWindow() {
     emit requestShowMainWindow();
+    // Explicitly opening an already-active panel can raise it without an
+    // activation change. Reapply the toolbar order after the QML raise.
+    windowLayers_.invalidate();
 }
