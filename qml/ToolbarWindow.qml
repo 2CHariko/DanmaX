@@ -4,6 +4,7 @@ import "components"
 
 Window {
     id: toolbarWin
+    objectName: "danmakuToolbarWindow"
     required property QtObject backend
     property Window overlayWindow: null
     transientParent: overlayWindow
@@ -15,36 +16,50 @@ Window {
     x: overlayWindow ? (overlayWindow.x + Math.round((overlayWindow.width - width) / 2)) : 0
     y: overlayWindow ? overlayWindow.y : 0
     screen: overlayWindow ? overlayWindow.screen : null
-    visible: overlayWindow ? overlayWindow.visible : false
+    visible: presentationAllowed && phase !== "hidden"
     onVisibleChanged: if (visible) toolbarWin.raise()
 
-    // 窗口物理尺寸：展开时扩大为工具栏尺寸，收起时平滑收缩为 80x10 微型把手
-    property bool windowExpanded: toolbar.expanded
-    onWindowExpandedChanged: {
-        if (toolbar.expanded) {
-            shrinkTimer.stop()
-            windowExpanded = true
+    // Content intent and HWND lifetime are independent. Keep full geometry during exit.
+    property string phase: "hidden"
+    readonly property bool contentExpanded: toolbar.expanded
+    readonly property bool overlayShown: overlayWindow && overlayWindow.visible
+    readonly property bool presentationAllowed: overlayShown && backend.toolbarPresentationAllowed
+    onContentExpandedChanged: syncPresentation()
+    onOverlayShownChanged: syncPresentation()
+    onPresentationAllowedChanged: syncPresentation()
+    function syncPresentation() {
+        transitionTimer.stop()
+        if (!presentationAllowed) {
+            phase = "hidden"
+        } else if (contentExpanded) {
+            phase = "opening"
+            transitionTimer.start()
             toolbarWin.raise()
-        } else {
-            shrinkTimer.restart()
+        } else if (phase !== "hidden") {
+            phase = "closing"
+            transitionTimer.start()
         }
     }
 
     Timer {
-        id: shrinkTimer
-        interval: 200 // 等待内部平滑淡出动画结束后再收缩窗口物理边界
+        id: transitionTimer
+        interval: 200 // Both the 180ms slide and 160ms fade must finish before hiding.
         repeat: false
         onTriggered: {
-            if (!toolbar.expanded)
-                toolbarWin.windowExpanded = false
+            if (toolbar.transitionRunning) {
+                restart()
+                return
+            }
+            toolbarWin.phase = toolbar.expanded && toolbarWin.presentationAllowed ? "shown" : "hidden"
         }
     }
 
-    width: windowExpanded ? toolbar.targetWidth : 80
-    height: windowExpanded ? toolbar.targetHeight : 10
+    width: toolbar.targetWidth
+    height: toolbar.targetHeight
 
     DanmakuToolbar {
         id: toolbar
         backend: toolbarWin.backend
+        presentationAllowed: toolbarWin.presentationAllowed && toolbarWin.backend.toolbarPointer.enabled
     }
 }

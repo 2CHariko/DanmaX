@@ -5,6 +5,8 @@ import "i18n"
 Window {
     id:overlay
     required property QtObject backend
+    transientParent: null
+    objectName: "danmakuOverlay"
     property alias renderer:canvas
     color:"transparent"
     flags: Qt.FramelessWindowHint | Qt.Tool | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus

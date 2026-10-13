@@ -8,10 +8,13 @@
 #include <QQuickWindow>
 #include <QSaveFile>
 #include <QScreen>
+#include <QScopedValueRollback>
 #include <QUrl>
 #include <algorithm>
 #include <cmath>
-AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQuery foregroundQuery, QString cacheDirectory)
+AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQuery foregroundQuery,
+                             QString cacheDirectory, MainForegroundQuery mainForegroundQuery,
+                             ToolbarPointerMonitor::CursorQuery cursorQuery, WindowLayerController::Positioner positioner)
     : QObject(parent), settings_(dataDirectory),
 #ifdef DANMAKU_STATIC_PORTABLE
       logs_(dataDirectory),
@@ -20,12 +23,18 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
 #endif
       library_(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       monitor_(this),
-      foregroundQuery_(foregroundQuery ? std::move(foregroundQuery) : ForegroundQuery(MediaMonitor::targetForeground)) {
+      foregroundQuery_(foregroundQuery ? std::move(foregroundQuery) : ForegroundQuery(MediaMonitor::targetForeground)),
+      mainForegroundQuery_(mainForegroundQuery ? std::move(mainForegroundQuery) : MainForegroundQuery([](QWindow* window) {
+          return window && window->handle() && MediaMonitor::windowOrOwnerForeground(window->winId());
+      })), toolbarPointer_(this, std::move(cursorQuery)), windowLayers_(this, std::move(positioner)) {
     connect(&logs_, &LogModel::writeFailed, this, [this](const QString& message) {
         error_ = message;
         emit stateChanged();
     });
     LogModel::install(&logs_);
+    connect(&windowLayers_, &WindowLayerController::invalidated, this, [this] { updatePresentationVisibility(true); });
+    connect(&windowLayers_, &WindowLayerController::operationFailed, this,
+            [this](const QString& message) { logs_.append("WARN", message); });
     file_ = settings_.values()["lastFile"].toString();
     library_.setServers(settings_.values()["danmakuServers"].toStringList());
     connect(&library_, &DanmakuLibrary::sourceLoadStarted, this, [this] {
@@ -70,6 +79,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     // Hidden/paused windows have no continuous frame callbacks. Keep media and
     // foreground tracking alive without driving a second visible animation loop.
     connect(&timer_, &QTimer::timeout, this, [this] {
+        updatePresentationVisibility();
         if (!overlay_ || !overlay_->isVisible() || !overlay_->isExposed() || !visible_ || !playing_) {
             ++maintenanceTicks_;
             tick();
@@ -88,6 +98,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     logs_.append("INFO", QStringLiteral("C++ / Qt FluentWinUI3 已启动"));
 }
 AppController::~AppController() {
+    windowLayers_.attach(nullptr, nullptr, nullptr);
     settings_.flushPending();
     discardLoad();
     library_.cancel();
@@ -123,20 +134,30 @@ void AppController::refreshFontFamilies(bool notify) {
     fontFamilies_ = std::move(families);
     if (notify) emit fontFamiliesChanged();
 }
-void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar) {
+void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar, QObject* mainWindow) {
+    if (mainWindow_) disconnect(mainWindow_, nullptr, this, nullptr);
     renderer_ = qobject_cast<DanmakuItem*>(renderer);
     overlay_ = qobject_cast<QWindow*>(overlay);
     toolbarWindow_ = qobject_cast<QWindow*>(toolbar);
+    mainWindow_ = qobject_cast<QWindow*>(mainWindow);
     if (!renderer_ || !overlay_) {
         fail(QStringLiteral("弹幕窗口初始化失败"));
         return;
     }
-    if (toolbarWindow_) {
-        toolbarInputFilter_.attach(toolbarWindow_);
+    toolbarInputFilter_.attach(toolbarWindow_);
+    toolbarPointer_.attach(overlay_, toolbarWindow_);
+    windowLayers_.attach(mainWindow_, overlay_, toolbarWindow_);
+    if (mainWindow_) {
+        connect(mainWindow_, &QWindow::activeChanged, this, [this] { updatePresentationVisibility(true); });
+        connect(mainWindow_, &QWindow::visibleChanged, this, [this] { updatePresentationVisibility(true); });
+        connect(mainWindow_, &QWindow::windowStateChanged, this, [this] { updatePresentationVisibility(true); });
+        connect(mainWindow_, &QObject::destroyed, this, [this] { updatePresentationVisibility(true); });
     }
     connect(overlay_, &QWindow::widthChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::heightChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::visibleChanged, this, [this](bool shown) {
+        windowLayers_.reconcile(settings_.values()["onTop"].toInt(), panelForeground_, desiredOverlayAllowed_);
+        toolbarPointer_.setEnabled(toolbarAllowed_ && shown);
         snapshotDirty_ = true;
         if (shown && running_ && visible_ && renderer_) {
             // Replace the last visible snapshot before exposure, including paused reappearance.
@@ -202,7 +223,36 @@ void AppController::configure() {
     }
     lastSettings_ = s;
     updateWindow();
+    updatePresentationVisibility(true, false);
     emit stateChanged();
+}
+bool AppController::updatePresentationVisibility(bool forceForeground, bool notify) {
+    if (presentationUpdating_) return false;
+    QScopedValueRollback guard(presentationUpdating_, true);
+    const bool panelForeground = mainWindow_ && mainWindow_->isVisible() &&
+                                mainWindow_->windowState() != Qt::WindowMinimized &&
+                                mainForegroundQuery_(mainWindow_);
+    // Leaving the panel must not reuse its preceding player foreground sample.
+    forceForeground = forceForeground || (panelForeground_ && !panelForeground);
+    panelForeground_ = panelForeground;
+    const bool checkForeground = !manual_ && settings_.values()["foregroundOnly"].toBool();
+    if (running_ && checkForeground &&
+        (forceForeground || !foregroundTime_.isValid() || foregroundTime_.elapsed() >= 250)) {
+        foreground_ = foregroundQuery_(settings_.values()["targetSession"].toString());
+        foregroundTime_.start();
+    }
+    desiredOverlayAllowed_ = running_ && (!checkForeground || foreground_ || panelForeground_);
+    const bool layerReady = windowLayers_.reconcile(settings_.values()["onTop"].toInt(),
+                                                   panelForeground_, desiredOverlayAllowed_);
+    const bool show = desiredOverlayAllowed_ && (!panelForeground_ || layerReady);
+    const bool toolbarAllowed = show && !panelForeground_;
+    const bool changed = show != visible_ || toolbarAllowed != toolbarAllowed_;
+    visible_ = show;
+    toolbarAllowed_ = toolbarAllowed;
+    if (changed) snapshotDirty_ = true;
+    toolbarPointer_.setEnabled(toolbarAllowed_ && overlay_ && overlay_->isVisible());
+    if (changed && notify) emit stateChanged();
+    return changed;
 }
 void AppController::applyRendererSettings() {
     rendererSettingsPending_ = false;
@@ -245,7 +295,6 @@ void AppController::updateWindow() {
     if (overlay_->geometry() != screen->geometry())
         overlay_->setGeometry(screen->geometry());
     const bool top = s["onTop"].toInt() > 0;
-    if (overlay_->flags().testFlag(Qt::WindowStaysOnTopHint) != top)
     if (overlay_->flags().testFlag(Qt::WindowStaysOnTopHint) != top)
         overlay_->setFlag(Qt::WindowStaysOnTopHint, top);
     if (toolbarWindow_) {
@@ -351,13 +400,13 @@ void AppController::start(bool manual) {
     }
     running_ = true;
     playing_ = manual;
-    visible_ = true;
     snapshotDirty_ = true;
     rate_ = 1;
     mediaIdentity_.clear();
     sampleTime_.invalidate();
     engine_.seek(position_);
     renderer_->present(engine_);
+    updatePresentationVisibility(true, false);
     status_ = manual ? QStringLiteral("独立播放") : QStringLiteral("等待所选播放器");
     frameTime_.start();
     timer_.start();
@@ -381,6 +430,9 @@ void AppController::commitItems(std::vector<danmaku::Item> items, const QString&
 void AppController::resetPlayback() {
     timer_.stop();
     running_ = playing_ = visible_ = manual_ = demo_ = false;
+    toolbarAllowed_ = desiredOverlayAllowed_ = false;
+    windowLayers_.reconcile(settings_.values()["onTop"].toInt(), false, false);
+    toolbarPointer_.setEnabled(false);
     awaitingInitialExposure_ = false;
     snapshotDirty_ = true;
     engine_.unload();
@@ -469,6 +521,7 @@ void AppController::onSample(const MediaSample& s) {
 void AppController::tick() {
     if (!running_ || !renderer_)
         return;
+    const bool visibilityChanged = updatePresentationVisibility();
     if (rendererSettingsPending_) applyRendererSettings();
     // Independent playback begins on first exposure. Before that, the hidden-window
     // maintenance path must not consume time-zero comments. Later hides still advance.
@@ -502,15 +555,7 @@ void AppController::tick() {
         position_ = 0;
         engine_.seek(0);
     }
-    const bool checkForeground = !manual_ && settings_.values()["foregroundOnly"].toBool();
-    if (checkForeground && (!foregroundTime_.isValid() || foregroundTime_.elapsed() >= 250)) {
-        foreground_ = foregroundQuery_(settings_.values()["targetSession"].toString());
-        foregroundTime_.start();
-    }
-    const bool show = !checkForeground || foreground_;
-    const bool visibilityChanged = show != visible_;
-    visible_ = show;
-    const bool renderable = show && (visibilityChanged || (overlay_ && overlay_->isVisible() && overlay_->isExposed()));
+    const bool renderable = visible_ && overlay_ && overlay_->isVisible() && overlay_->isExposed();
     const double motion = manual_ ? elapsed : mediaClock_.takeMotion();
     QElapsedTimer stage;
     stage.start();
@@ -527,8 +572,6 @@ void AppController::tick() {
         snapshotDirty_ = false;
     } else if (!renderable) snapshotDirty_ = true;
     snapshotMs_ += stage.nsecsElapsed() * 1e-6;
-    // QML visibility changes happen after the current snapshot has been prepared.
-    if (visibilityChanged) emit stateChanged();
     if (manual_ && !demo_ && playing_) {
         if (engine_.finished()) {
             playing_ = false;
@@ -588,12 +631,8 @@ void AppController::updateMetrics() {
         metrics_["height"] = overlay_->height();
         metrics_["dpr"] = overlay_->devicePixelRatio();
     }
-    if (visible_ && overlay_) {
-        const int strategy = settings_.values()["onTop"].toInt();
-        MediaMonitor::maintainTopmost(overlay_->winId(), strategy);
-        if (toolbarWindow_ && toolbarWindow_->isVisible())
-            MediaMonitor::maintainTopmost(toolbarWindow_->winId(), strategy);
-    }
+    windowLayers_.reconcile(settings_.values()["onTop"].toInt(), panelForeground_, desiredOverlayAllowed_, true);
+    updatePresentationVisibility();
     emit metricsChanged();
 }
 void AppController::beginDemo(int count) {

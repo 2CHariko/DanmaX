@@ -212,14 +212,19 @@ QVariantMap MediaMonitor::processMetrics() {
     return {{"memoryMiB", static_cast<double>(mem.WorkingSetSize) / 1048576}, {"cpuPercent", percent}};
 }
 
-void MediaMonitor::maintainTopmost(quintptr handle, int strategy) {
-    const auto hwnd = reinterpret_cast<HWND>(handle);
-    constexpr UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
-    if (strategy == 3)
-        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
-    if (strategy > 1)
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
+bool MediaMonitor::windowOrOwnerForeground(quintptr handle) {
+    const auto main = reinterpret_cast<HWND>(handle);
+    if (!main || !IsWindow(main)) return false;
+    auto foreground = GetForegroundWindow();
+    if (foreground) foreground = GetAncestor(foreground, GA_ROOT);
+    // Native file dialogs may have no corresponding QWindow. Follow HWND owners.
+    for (int depth = 0; foreground && depth < 64; ++depth) {
+        if (foreground == main) return true;
+        foreground = GetWindow(foreground, GW_OWNER);
+    }
+    return false;
 }
+
 QVariantMap MediaMonitor::windowMetrics(quintptr handle) {
     const auto hwnd = reinterpret_cast<HWND>(handle);
     const auto style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);

@@ -7,6 +7,8 @@
 #include "platform/windows/MediaMonitor.h"
  #include "renderer/DanmakuItem.h"
  #include "platform/windows/ToolbarInputFilter.h"
+#include "platform/windows/ToolbarPointerMonitor.h"
+#include "platform/windows/WindowLayerController.h"
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QTimer>
@@ -20,6 +22,7 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* settings READ settings CONSTANT)
     Q_PROPERTY(QObject* logs READ logs CONSTANT)
     Q_PROPERTY(QObject* library READ library CONSTANT)
+    Q_PROPERTY(QObject* toolbarPointer READ toolbarPointer CONSTANT)
     Q_PROPERTY(QString sourceTitle READ sourceTitle NOTIFY stateChanged)
     Q_PROPERTY(QVariantList sessions READ sessions NOTIFY sessionsChanged)
     Q_PROPERTY(QStringList screens READ screens NOTIFY screensChanged)
@@ -34,6 +37,7 @@ class AppController final : public QObject {
     Q_PROPERTY(bool playing READ playing NOTIFY stateChanged)
     Q_PROPERTY(bool manualMode READ manualMode NOTIFY stateChanged)
     Q_PROPERTY(bool overlayVisible READ overlayVisible NOTIFY stateChanged)
+    Q_PROPERTY(bool toolbarPresentationAllowed READ toolbarPresentationAllowed NOTIFY stateChanged)
     Q_PROPERTY(bool danmakuVisible READ danmakuVisible WRITE setDanmakuVisible NOTIFY danmakuVisibleChanged)
      Q_PROPERTY(int total READ total NOTIFY stateChanged)
     Q_PROPERTY(double position READ position NOTIFY metricsChanged)
@@ -42,8 +46,12 @@ class AppController final : public QObject {
     Q_PROPERTY(bool hasFluentIcons READ hasFluentIcons CONSTANT)
   public:
     using ForegroundQuery = std::function<bool(const QString&)>;
+    using MainForegroundQuery = std::function<bool(QWindow*)>;
     explicit AppController(QString dataDirectory, QObject* parent = nullptr,
-                           ForegroundQuery foregroundQuery = {}, QString cacheDirectory = {});
+                           ForegroundQuery foregroundQuery = {}, QString cacheDirectory = {},
+                           MainForegroundQuery mainForegroundQuery = {},
+                           ToolbarPointerMonitor::CursorQuery cursorQuery = {},
+                           WindowLayerController::Positioner positioner = {});
     ~AppController() override;
     QObject* settings() {
         return &settings_;
@@ -52,6 +60,7 @@ class AppController final : public QObject {
         return &logs_;
     }
     QObject* library() { return &library_; }
+    QObject* toolbarPointer() { return &toolbarPointer_; }
     QString sourceTitle() const { return sourceTitle_; }
     QVariantList sessions() const {
         return sessions_;
@@ -88,6 +97,7 @@ class AppController final : public QObject {
     bool overlayVisible() const {
         return visible_;
     }
+    bool toolbarPresentationAllowed() const { return toolbarAllowed_; }
     bool danmakuVisible() const {
         return danmakuVisible_;
     }
@@ -108,7 +118,8 @@ class AppController final : public QObject {
         return metrics_;
     }
     bool hasFluentIcons() const;
-    Q_INVOKABLE void attach(QObject* renderer, QObject* overlay, QObject* toolbar = nullptr);
+    Q_INVOKABLE void attach(QObject* renderer, QObject* overlay, QObject* toolbar = nullptr,
+                           QObject* mainWindow = nullptr);
     Q_INVOKABLE void loadFile(const QString& path);
     Q_INVOKABLE void cancelLoad();
     Q_INVOKABLE void start(bool manual = false);
@@ -147,6 +158,7 @@ class AppController final : public QObject {
 
     void fail(const QString& message);
     void updateWindow();
+    bool updatePresentationVisibility(bool forceForeground = false, bool notify = true);
     void updateMetrics();
     void refreshFontFamilies(bool notify = true);
     static QString localPath(const QString& path);
@@ -155,13 +167,17 @@ class AppController final : public QObject {
     DanmakuLibrary library_;
     MediaMonitor monitor_;
     ForegroundQuery foregroundQuery_;
+    MainForegroundQuery mainForegroundQuery_;
     danmaku::Engine engine_;
     danmaku::MediaClock mediaClock_;
     QElapsedTimer monotonicTime_;
     QPointer<DanmakuItem> renderer_;
     QPointer<QWindow> overlay_;
     QPointer<QWindow> toolbarWindow_;
+    QPointer<QWindow> mainWindow_;
     ToolbarInputFilter toolbarInputFilter_;
+    ToolbarPointerMonitor toolbarPointer_;
+    WindowLayerController windowLayers_;
     QTimer timer_, metricsTimer_;
     QElapsedTimer frameTime_, sampleTime_, foregroundTime_, metricsTime_;
     std::jthread loader_;
@@ -176,6 +192,7 @@ class AppController final : public QObject {
     bool rendererSettingsPending_{};
     QString status_{QStringLiteral("请选择弹幕文件")}, error_, file_, mediaTitle_, mediaIdentity_;
     bool foreground_{true};
+    bool panelForeground_{}, desiredOverlayAllowed_{}, toolbarAllowed_{}, presentationUpdating_{};
     bool awaitingInitialExposure_{};
     bool loading_{}, running_{}, playing_{}, manual_{}, visible_{}, snapshotDirty_{true}, demo_{}, danmakuVisible_{true};
     int progress_{}, frames_{};

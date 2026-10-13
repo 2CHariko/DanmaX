@@ -183,7 +183,7 @@ ApplicationWindow {
         windowAgent.setSystemButton(WindowAgent.Close, captionButtons.closeBtn)
         windowAgent.setHitTestVisible(navPane, true)
         root.syncTheme()
-        root.backend.attach(overlay.renderer, overlay, toolbarWindow)
+        root.backend.attach(overlay.renderer, overlay, toolbarWindow, root)
     }
     onClosing: root.backend.stop()
 }

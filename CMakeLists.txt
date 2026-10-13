@@ -112,6 +112,8 @@ if(DANMAKU_BUILD_APP)
         src/platform/windows/MediaMonitor.cpp src/platform/windows/MediaMonitor.h
         src/platform/windows/WindowBackdropController.cpp src/platform/windows/WindowBackdropController.h
         src/platform/windows/ToolbarInputFilter.cpp src/platform/windows/ToolbarInputFilter.h
+        src/platform/windows/ToolbarPointerMonitor.cpp src/platform/windows/ToolbarPointerMonitor.h
+        src/platform/windows/WindowLayerController.cpp src/platform/windows/WindowLayerController.h
         src/renderer/DanmakuItem.cpp src/renderer/DanmakuItem.h
         src/infrastructure/XmlLoader.cpp src/infrastructure/XmlLoader.h
         src/infrastructure/SettingsStore.cpp src/infrastructure/SettingsStore.h
@@ -199,7 +201,7 @@ if(DANMAKU_BUILD_APP)
             qt_import_plugins(overlay_toolbar_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin)
         endif()
         danmaku_compile_options(overlay_toolbar_tests)
-        add_test(NAME overlay_toolbar COMMAND overlay_toolbar_tests)
+        add_test(NAME overlay_toolbar COMMAND overlay_toolbar_tests -o "${CMAKE_BINARY_DIR}/overlay-toolbar-tests.txt,txt")
         set_tests_properties(overlay_toolbar PROPERTIES TIMEOUT 60
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
         add_test(NAME application_smoke COMMAND danmaku_app --smoke-test

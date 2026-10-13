@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <memory>
 #include <stdexcept>
 #ifdef DANMAKU_STATIC_PORTABLE
 #include <windows.h>
@@ -169,7 +170,34 @@ int main(int argc, char* argv[]) {
         if (parser.isSet("window-width"))
             mainWindow->setWidth(parser.value("window-width").toInt());
         backdrop.attach(mainWindow);
+        bool overlayCaptured = false;
         mainWindow->show();
+        // Validation workloads must satisfy the same foreground policy as normal playback.
+        // UI captures restore the panel after the overlay has actually presented a frame.
+        if (parser.isSet("smoke-test") || parser.isSet("benchmark")) {
+            mainWindow->showMinimized();
+            if (parser.isSet("capture")) {
+                auto restored = std::make_shared<bool>(false);
+                for (auto* window : app.allWindows()) {
+                    if (window->objectName() != "danmakuOverlay") continue;
+                    auto* quick = qobject_cast<QQuickWindow*>(window);
+                    if (!quick) continue;
+                    QObject::connect(quick, &QQuickWindow::frameSwapped, mainWindow,
+                                     [&, mainWindow, quick, restored] {
+                        if (*restored) return;
+                        *restored = true;
+                        QTimer::singleShot(200, mainWindow, [&, mainWindow, quick] {
+                            // Combined captures save the overlay before activating its panel.
+                            if (parser.isSet("capture-overlay"))
+                                overlayCaptured = quick->isVisible() && quick->isExposed() &&
+                                    quick->grabWindow().save(parser.value("capture-overlay"));
+                            mainWindow->showNormal();
+                            mainWindow->requestActivate();
+                        });
+                    }, Qt::QueuedConnection);
+                }
+            }
+        }
         if (parser.isSet("smoke-test") && parser.isSet("capture-state")) {
             QTimer::singleShot(300, &app, [&, mainWindow] {
                 mainWindow->setProperty("selectedPage", 2);
@@ -223,11 +251,12 @@ int main(int argc, char* argv[]) {
                     passed = passed && !controller.manualMode() && !controller.mediaTitle().isEmpty();
                 if (parser.isSet("capture"))
                     passed = mainWindow->grabWindow().save(parser.value("capture")) && passed;
-                if (parser.isSet("capture-overlay"))
+                if (parser.isSet("capture-overlay") && !overlayCaptured)
                     for (auto* window : app.allWindows())
-                        if (window != mainWindow)
+                        if (window->objectName() == "danmakuOverlay")
                             if (auto* quick = qobject_cast<QQuickWindow*>(window))
-                                passed = quick->grabWindow().save(parser.value("capture-overlay")) && passed;
+                                passed = quick->isVisible() && quick->isExposed() &&
+                                         quick->grabWindow().save(parser.value("capture-overlay")) && passed;
                 if (parser.isSet("report"))
                     controller.writeReport(parser.value("report"));
                 if (!passed)

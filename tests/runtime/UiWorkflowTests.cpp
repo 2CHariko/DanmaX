@@ -2,6 +2,7 @@
 #include <QGuiApplication>
 #include <QCursor>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQuickWindow>
 #include <QQuickItem>
 #include <QTest>
@@ -10,8 +11,17 @@
 #include <QFontDatabase>
 #include <QTemporaryDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QWheelEvent>
 #include <QStyleHints>
+#include <memory>
+#if defined(Q_OS_WIN)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include "application/AppController.h"
 #include "renderer/DanmakuItem.h"
 #include "infrastructure/SettingsStore.h"
@@ -22,6 +32,507 @@
 class UiWorkflowTests : public QObject {
     Q_OBJECT
 private slots:
+    void nativeLayerOrderingWithoutActivation() {
+#if defined(Q_OS_WIN)
+        QQuickWindow panel, overlay, toolbar;
+        panel.setFlags(Qt::Window | Qt::WindowDoesNotAcceptFocus);
+        panel.setGeometry(180, 180, 600, 400);
+        panel.setColor(QColor("#303030"));
+        overlay.setFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus | Qt::WindowTransparentForInput);
+        overlay.setGeometry(panel.screen()->geometry());
+        overlay.setColor(Qt::transparent);
+        toolbar.setFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
+        toolbar.setGeometry(400, 0, 300, 48);
+        toolbar.setColor(QColor("#404040"));
+        overlay.setTransientParent(nullptr);
+        toolbar.setTransientParent(&overlay);
+        panel.show(); overlay.show();
+        QTest::qWait(100);
+        const auto foreground = GetForegroundWindow();
+        const auto above = [](HWND upper, HWND lower) {
+            for (auto current = GetWindow(lower, GW_HWNDPREV); current; current = GetWindow(current, GW_HWNDPREV))
+                if (current == upper) return true;
+            return false;
+        };
+        WindowLayerController layers;
+        layers.attach(&panel, &overlay, &toolbar);
+        const auto panelHandle = reinterpret_cast<HWND>(panel.winId());
+        const auto overlayHandle = reinterpret_cast<HWND>(overlay.winId());
+        for (int strategy = 0; strategy < 4; ++strategy) {
+            overlay.setFlag(Qt::WindowStaysOnTopHint, strategy > 0);
+            toolbar.setFlag(Qt::WindowStaysOnTopHint, strategy > 0);
+            QVERIFY(layers.reconcile(strategy, true, true, true));
+            QVERIFY(above(panelHandle, overlayHandle));
+            QCOMPARE(bool(GetWindowLongPtrW(panelHandle, GWL_EXSTYLE) & WS_EX_TOPMOST), strategy > 0);
+            QCOMPARE(bool(GetWindowLongPtrW(overlayHandle, GWL_EXSTYLE) & WS_EX_TOPMOST), strategy > 0);
+            QVERIFY(!panel.flags().testFlag(Qt::WindowStaysOnTopHint));
+            QCOMPARE(GetForegroundWindow(), foreground);
+            QVERIFY(layers.reconcile(strategy, false, true, true));
+            QVERIFY(!(GetWindowLongPtrW(panelHandle, GWL_EXSTYLE) & WS_EX_TOPMOST));
+        }
+        WNDCLASSW probeClass{};
+        probeClass.lpfnWndProc = DefWindowProcW;
+        probeClass.hInstance = GetModuleHandleW(nullptr);
+        probeClass.lpszClassName = L"DanmaXLayerNoActivateProbe";
+        QVERIFY(RegisterClassW(&probeClass) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS);
+        struct NativeOwner {
+            HWND window;
+            ~NativeOwner() { if (IsWindow(window)) DestroyWindow(window); }
+        } dialog{CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, probeClass.lpszClassName, L"Layer owner probe",
+            WS_POPUP | WS_CAPTION, 240, 240, 300, 140, panelHandle, nullptr, probeClass.hInstance, nullptr)};
+        QVERIFY(dialog.window);
+        ShowWindow(dialog.window, SW_SHOWNOACTIVATE);
+        NativeOwner nested{CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, probeClass.lpszClassName, L"Layer nested probe",
+            WS_POPUP | WS_CAPTION, 280, 280, 240, 100, dialog.window, nullptr, probeClass.hInstance, nullptr)};
+        QVERIFY(nested.window);
+        ShowWindow(nested.window, SW_SHOWNOACTIVATE);
+        QVERIFY(layers.reconcile(3, true, true, true));
+        QVERIFY(above(nested.window, dialog.window));
+        QVERIFY(above(dialog.window, panelHandle));
+        QVERIFY(above(panelHandle, overlayHandle));
+        QCOMPARE(GetForegroundWindow(), foreground);
+        QVERIFY(layers.reconcile(3, false, false));
+        QVERIFY(!(GetWindowLongPtrW(panelHandle, GWL_EXSTYLE) & WS_EX_TOPMOST));
+        QVERIFY(!(GetWindowLongPtrW(dialog.window, GWL_EXSTYLE) & WS_EX_TOPMOST));
+        QVERIFY(!(GetWindowLongPtrW(nested.window, GWL_EXSTYLE) & WS_EX_TOPMOST));
+        DestroyWindow(nested.window);
+        DestroyWindow(dialog.window);
+        QVERIFY(layers.reconcile(3, true, true));
+        panel.destroy();
+        panel.create(); panel.show();
+        QVERIFY(layers.reconcile(3, true, true));
+        const auto recreated = reinterpret_cast<HWND>(panel.winId());
+        QVERIFY(GetWindowLongPtrW(recreated, GWL_EXSTYLE) & WS_EX_TOPMOST);
+        QVERIFY(above(recreated, overlayHandle));
+        layers.attach(nullptr, nullptr, nullptr);
+        QVERIFY(!(GetWindowLongPtrW(recreated, GWL_EXSTYLE) & WS_EX_TOPMOST));
+        QCOMPARE(GetForegroundWindow(), foreground);
+#if defined(QT_DEBUG)
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/panel-layer/debug");
+#else
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/panel-layer/release");
+#endif
+        QDir().mkpath(evidence);
+        QFile report(evidence + "/native-order.json");
+        QVERIFY(report.open(QIODevice::WriteOnly));
+        const QJsonObject result{{"strategies", 4}, {"nestedOwners", true}, {"surfaceRecreated", true},
+            {"baselineRestored", true}, {"foregroundPreserved", true}, {"foregroundPolicySimulated", true}};
+        QVERIFY(report.write(QJsonDocument(result).toJson()) > 0);
+#endif
+    }
+
+    void nativeToolbarMousePolicy() {
+#if defined(Q_OS_WIN)
+        QTemporaryDir directory;
+        AppController backend(directory.path(), nullptr, {}, directory.path());
+        QQmlApplicationEngine engine;
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* panel = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+        QVERIFY(panel);
+        auto* overlay = panel->findChild<QQuickWindow*>("danmakuOverlay");
+        auto* toolbar = panel->findChild<QQuickWindow*>("danmakuToolbarWindow");
+        QVERIFY(overlay && toolbar);
+        panel->showMinimized();
+        QQuickWindow player;
+        player.setFlags(Qt::Window | Qt::FramelessWindowHint);
+        player.setGeometry(overlay->geometry());
+        player.setColor(QColor("#303030"));
+        player.show();
+        player.requestActivate();
+        QTest::qWait(200);
+        const auto playerHandle = reinterpret_cast<HWND>(player.winId());
+        if (GetForegroundWindow() != playerHandle)
+            QSKIP("Windows foreground was not granted to the input fixture; no global mouse input was injected.");
+        struct CursorRestore { QPoint point; ~CursorRestore() { QCursor::setPos(point); } } restore{QCursor::pos()};
+        struct PressCounter final : QObject {
+            int presses{};
+            bool eventFilter(QObject*, QEvent* event) override {
+                if (event->type() == QEvent::MouseButtonPress) ++presses;
+                return false;
+            }
+        } counter;
+        player.installEventFilter(&counter);
+        QCursor::setPos(overlay->x() + 10, overlay->y() + 100);
+        backend.beginDemo(50);
+        QTRY_VERIFY(overlay->isExposed());
+        QVERIFY(!toolbar->isVisible());
+        POINT point{};
+        GetCursorPos(&point);
+        if (GetForegroundWindow() != playerHandle || WindowFromPoint(point) != playerHandle)
+            QSKIP("The desktop input fixture is occluded; no global mouse input was injected.");
+        INPUT inputs[2]{};
+        inputs[0].type = inputs[1].type = INPUT_MOUSE;
+        inputs[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+        inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+        QCOMPARE(SendInput(2, inputs, sizeof(INPUT)), UINT(2));
+        QTRY_COMPARE(counter.presses, 1);
+        QCursor::setPos(overlay->x() + overlay->width() / 2, overlay->y() + 2);
+        QTRY_COMPARE(toolbar->property("phase").toString(), QString("shown"));
+        const auto toolbarHandle = reinterpret_cast<HWND>(toolbar->winId());
+        QVERIFY(GetForegroundWindow() != toolbarHandle);
+        auto* button = toolbar->findChild<QQuickItem*>("toolbarOpacityButton");
+        auto* popup = toolbar->findChild<QQuickItem*>("toolbarOpacityPopup");
+        QVERIFY(button && popup);
+        QCursor::setPos(toolbar->mapToGlobal(button->mapToScene(
+            QPointF(button->width() / 2, button->height() / 2)).toPoint()));
+        QTest::qWait(80);
+        GetCursorPos(&point);
+        if (GetForegroundWindow() != playerHandle || WindowFromPoint(point) != toolbarHandle)
+            QSKIP("The toolbar input fixture is occluded; no toolbar mouse input was injected.");
+        QCOMPARE(SendInput(2, inputs, sizeof(INPUT)), UINT(2));
+        QTRY_VERIFY(popup->isVisible());
+        QCOMPARE(GetForegroundWindow(), playerHandle);
+        backend.stop();
+#endif
+    }
+
+    void nativePanelAndDialogPolicy() {
+#if defined(Q_OS_WIN)
+        QTemporaryDir directory;
+        AppController backend(directory.path(), nullptr, {}, directory.path());
+        QQmlApplicationEngine engine;
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* panel = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+        QVERIFY(panel);
+        auto* overlay = panel->findChild<QQuickWindow*>("danmakuOverlay");
+        auto* toolbar = panel->findChild<QQuickWindow*>("danmakuToolbarWindow");
+        QVERIFY(panel && overlay && toolbar);
+        QVERIFY(!overlay->transientParent());
+        QCOMPARE(toolbar->transientParent(), overlay);
+        panel->show();
+        panel->requestActivate();
+        QTRY_VERIFY(panel->isActive());
+        QTest::qWait(200);
+        const auto owner = reinterpret_cast<HWND>(panel->winId());
+        if (GetForegroundWindow() != owner)
+            QSKIP("Windows foreground was not granted to the test panel; native owner policy needs an available desktop.");
+        backend.beginDemo(50);
+        QTRY_VERIFY(overlay->isExposed());
+        QVERIFY(!backend.toolbarPresentationAllowed());
+        QVERIFY(!toolbar->isVisible());
+        const auto nativeOverlay = reinterpret_cast<HWND>(overlay->winId());
+        const auto above = [](HWND upper, HWND lower) {
+            for (auto current = GetWindow(lower, GW_HWNDPREV); current; current = GetWindow(current, GW_HWNDPREV))
+                if (current == upper) return true;
+            return false;
+        };
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
+        for (int strategy = 0; strategy < 4; ++strategy) {
+            QVERIFY(settings->setValue("onTop", strategy));
+            QTest::qWait(1100);
+            QVERIFY(above(owner, nativeOverlay));
+            QCOMPARE(bool(GetWindowLongPtrW(owner, GWL_EXSTYLE) & WS_EX_TOPMOST), strategy > 0);
+            QCOMPARE(bool(GetWindowLongPtrW(nativeOverlay, GWL_EXSTYLE) & WS_EX_TOPMOST), strategy > 0);
+            QVERIFY(!panel->flags().testFlag(Qt::WindowStaysOnTopHint));
+            QCOMPARE(GetForegroundWindow(), owner);
+        }
+
+        WNDCLASSW probeClass{};
+        probeClass.lpfnWndProc = DefWindowProcW;
+        probeClass.hInstance = GetModuleHandleW(nullptr);
+        probeClass.lpszClassName = L"DanmaXToolbarOwnerProbe";
+        QVERIFY(RegisterClassW(&probeClass) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS);
+        struct NativeDialog {
+            HWND handle;
+            ~NativeDialog() { if (handle) DestroyWindow(handle); }
+        } dialog{CreateWindowExW(WS_EX_TOOLWINDOW, probeClass.lpszClassName, L"Toolbar policy native owner probe",
+                               WS_POPUP | WS_CAPTION | WS_VISIBLE, 200, 200, 320, 160, owner, nullptr,
+                               probeClass.hInstance, nullptr)};
+        QVERIFY(dialog.handle);
+        SetForegroundWindow(dialog.handle);
+        QTRY_VERIFY(GetForegroundWindow() == dialog.handle);
+        QVERIFY(MediaMonitor::windowOrOwnerForeground(panel->winId()));
+        QTest::qWait(100);
+        QVERIFY(backend.overlayVisible());
+        QVERIFY(!toolbar->isVisible());
+        QVERIFY(above(dialog.handle, owner));
+        QVERIFY(above(owner, nativeOverlay));
+        NativeDialog nested{CreateWindowExW(WS_EX_TOOLWINDOW, probeClass.lpszClassName, L"Nested owner probe",
+            WS_POPUP | WS_CAPTION | WS_VISIBLE, 240, 240, 280, 120, dialog.handle, nullptr,
+            probeClass.hInstance, nullptr)};
+        QVERIFY(nested.handle);
+        SetForegroundWindow(nested.handle);
+        QTRY_VERIFY(GetForegroundWindow() == nested.handle);
+        QTest::qWait(1100);
+        QVERIFY(MediaMonitor::windowOrOwnerForeground(panel->winId()));
+        QVERIFY(above(nested.handle, dialog.handle));
+        QVERIFY(above(dialog.handle, owner));
+        QVERIFY(above(owner, nativeOverlay));
+        ShowWindow(nested.handle, SW_HIDE);
+        ShowWindow(dialog.handle, SW_HIDE);
+        panel->showMinimized();
+        QTRY_VERIFY(backend.overlayVisible());
+        QTRY_VERIFY(backend.position() > 0);
+        QTRY_VERIFY(!(GetWindowLongPtrW(owner, GWL_EXSTYLE) & WS_EX_TOPMOST));
+        QVERIFY(GetWindowLongPtrW(nativeOverlay, GWL_EXSTYLE) & WS_EX_TRANSPARENT);
+        QVERIFY(GetWindowLongPtrW(nativeOverlay, GWL_EXSTYLE) & WS_EX_NOACTIVATE);
+        QVERIFY(!GetWindow(nativeOverlay, GW_OWNER));
+        panel->showNormal();
+        panel->requestActivate();
+        QTRY_VERIFY(GetForegroundWindow() == owner);
+        QTRY_VERIFY(GetWindowLongPtrW(owner, GWL_EXSTYLE) & WS_EX_TOPMOST);
+#if defined(QT_DEBUG)
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/panel-layer/debug");
+#else
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/panel-layer/release");
+#endif
+        QDir().mkpath(evidence);
+        QVERIFY(panel->grabWindow().save(evidence + "/panel.png"));
+        QVERIFY(overlay->grabWindow().save(evidence + "/overlay.png"));
+        backend.writeReport(evidence + "/context.json");
+        backend.stop();
+        QVERIFY(!(GetWindowLongPtrW(owner, GWL_EXSTYLE) & WS_EX_TOPMOST));
+#endif
+    }
+
+    void toolbarAutoHideWorkflow() {
+        QTemporaryDir directory;
+        // Keep state/animation checks independent of concurrent desktop mouse movement.
+        // nativeToolbarMousePolicy separately exercises QCursor and Windows hit testing.
+        QPoint sensedCursor;
+        bool panelOperating = false;
+        AppController backend(directory.path(), nullptr, {}, directory.path(),
+                              [&](QWindow*) { return panelOperating; }, [&] { return sensedCursor; });
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
+        QVERIFY(settings->setValue("onTop", 1));
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        QQmlComponent overlayComponent(&engine, QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/OverlayWindow.qml")));
+        QVERIFY2(overlayComponent.isReady(), qPrintable(overlayComponent.errorString()));
+        std::unique_ptr<QObject> overlayObject(overlayComponent.createWithInitialProperties(
+            {{"backend", QVariant::fromValue(&backend)}}));
+        auto* overlayWindow = qobject_cast<QQuickWindow*>(overlayObject.get());
+        QVERIFY(overlayWindow);
+        auto& overlay = *overlayWindow;
+        auto* canvas = qobject_cast<DanmakuItem*>(overlay.property("renderer").value<QObject*>());
+        QVERIFY(canvas);
+        auto& renderer = *canvas;
+        QQmlComponent component(&engine, QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/ToolbarWindow.qml")));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        std::unique_ptr<QObject> object(component.createWithInitialProperties(
+            {{"backend", QVariant::fromValue(&backend)}, {"overlayWindow", QVariant::fromValue(overlayObject.get())}}));
+        auto* window = qobject_cast<QQuickWindow*>(object.get());
+        QVERIFY(window);
+        auto* bar = window->findChild<QQuickItem*>("danmakuToolbar");
+        auto* opacityButton = window->findChild<QQuickItem*>("toolbarOpacityButton");
+        auto* pinButton = window->findChild<QQuickItem*>("toolbarPinButton");
+        auto* pinTooltip = window->findChild<QObject*>("toolbarPinTooltip");
+        auto* popup = window->findChild<QQuickItem*>("toolbarOpacityPopup");
+        auto* slider = window->findChild<QQuickItem*>("toolbarOpacitySlider");
+        QVERIFY(bar && opacityButton && pinButton && pinTooltip && popup && slider);
+        QCOMPARE(window->transientParent(), &overlay);
+        QWindow panel;
+        panel.setGeometry(200, 150, 500, 400);
+        panel.show();
+        backend.attach(&renderer, &overlay, window, &panel);
+        connect(&backend, &AppController::stateChanged, &overlay,
+                [&] { overlay.setVisible(backend.overlayVisible()); });
+        QQuickWindow player;
+        player.setFlags(Qt::Window | Qt::FramelessWindowHint);
+        player.setGeometry(overlay.geometry());
+        player.setColor(QColor("#303030"));
+        player.show();
+        player.requestActivate();
+        QTRY_VERIFY(player.isActive());
+        const auto originalCursor = QCursor::pos();
+        struct CursorRestore { QPoint point; ~CursorRestore() { QCursor::setPos(point); } } restore{originalCursor};
+        auto outside = [&] { sensedCursor = overlay.geometry().center() + QPoint(0, 150); };
+        auto enter = [&] { sensedCursor = QPoint(overlay.x() + overlay.width() / 2, overlay.y() + 2); };
+        auto click = [&](QQuickItem* item) {
+            QSignalSpy clicked(item, SIGNAL(clicked()));
+            const auto point = item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint();
+            sensedCursor = window->mapToGlobal(point);
+            QCursor::setPos(sensedCursor);
+            QTest::mouseMove(window, point);
+            QTest::qWait(80);
+            QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, point);
+            QTRY_VERIFY(item->property("pressed").toBool());
+            QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, point);
+            QTRY_COMPARE(clicked.count(), 1);
+        };
+        outside();
+        backend.beginDemo(50);
+        QTRY_VERIFY(overlay.isVisible());
+        QTRY_VERIFY(backend.toolbarPointer()->property("enabled").toBool());
+        QVERIFY(!window->isVisible());
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            enter();
+            QTRY_VERIFY(backend.toolbarPointer()->property("hovered").toBool());
+            QVERIFY(bar->property("presentationAllowed").toBool());
+            QTRY_COMPARE(window->property("phase").toString(), QString("shown"));
+            QVERIFY(window->isVisible());
+            const auto size = window->size();
+            QVERIFY(size.width() > 80 && size.height() > 10);
+            outside();
+            QTRY_COMPARE(window->property("phase").toString(), QString("closing"));
+            QCOMPARE(window->size(), size);
+            QVERIFY(window->isVisible());
+            if (cycle == 0) {
+                enter();
+                QTRY_COMPARE(window->property("phase").toString(), QString("shown"));
+                outside();
+            } else if (cycle == 1) {
+                panelOperating = true;
+                QTRY_VERIFY(!backend.toolbarPresentationAllowed());
+                QCOMPARE(window->property("phase").toString(), QString("hidden"));
+                QVERIFY(!window->isVisible());
+                panelOperating = false;
+                QTRY_VERIFY(backend.toolbarPresentationAllowed());
+            }
+            QTRY_VERIFY(!window->isVisible());
+            QCOMPARE(window->property("phase").toString(), QString("hidden"));
+        }
+        enter();
+        QTRY_COMPARE(window->property("phase").toString(), QString("shown"));
+        const auto pinPoint = pinButton->mapToScene(QPointF(pinButton->width() / 2, pinButton->height() / 2)).toPoint();
+        QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, pinPoint);
+        QVERIFY(bar->property("interactionHeld").toBool());
+        outside();
+        QTest::mouseMove(window, QPoint(-100, 200));
+        QTest::qWait(1200);
+        QVERIFY(window->isVisible());
+        panelOperating = true;
+        QTRY_VERIFY(!window->isVisible());
+        QVERIFY(!backend.toolbarPresentationAllowed());
+        QVERIFY(overlay.isVisible());
+        QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, QPoint(-100, 200));
+        panelOperating = false;
+        QTRY_VERIFY(backend.toolbarPresentationAllowed());
+        QTRY_VERIFY(!window->isVisible());
+        QVERIFY(!bar->property("pinned").toBool());
+        enter();
+        QTRY_COMPARE(window->property("phase").toString(), QString("shown"));
+        click(opacityButton);
+        QVERIFY(popup->isVisible());
+        // The transparent gap between card and popover must also retain the toolbar.
+        sensedCursor = QPoint(window->x() + window->width() / 2, window->y() + 48);
+        QTest::qWait(1200);
+        QVERIFY(popup->isVisible());
+        auto* handle = qobject_cast<QQuickItem*>(slider->property("handle").value<QObject*>());
+        QVERIFY(handle);
+        const auto thumb = handle->mapToScene(QPointF(handle->width() / 2, handle->height() / 2)).toPoint();
+        QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, thumb);
+        QTRY_VERIFY(slider->property("pressed").toBool());
+        panelOperating = true;
+        QTRY_VERIFY(!backend.toolbarPresentationAllowed());
+        QVERIFY(overlay.isVisible());
+        QVERIFY(!window->isVisible());
+        QCOMPARE(window->property("phase").toString(), QString("hidden"));
+        QVERIFY(!popup->isVisible());
+        QVERIFY(!backend.toolbarPointer()->property("enabled").toBool());
+        QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, thumb);
+        panelOperating = false;
+        outside();
+        QTRY_VERIFY(backend.toolbarPresentationAllowed());
+        QVERIFY(!window->isVisible());
+        enter();
+        QTRY_COMPARE(window->property("phase").toString(), QString("shown"));
+        click(opacityButton);
+        QVERIFY(popup->isVisible());
+        QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, thumb);
+        QTRY_VERIFY(slider->property("pressed").toBool());
+        outside();
+        QTest::mouseMove(window, QPoint(-100, 200));
+        QTest::qWait(1200);
+        QVERIFY(popup->isVisible());
+        QVERIFY(window->isVisible());
+        QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, QPoint(-100, 200));
+        QTRY_VERIFY(!popup->isVisible());
+        QTRY_VERIFY(!window->isVisible());
+
+        enter();
+        QTRY_COMPARE(window->property("phase").toString(), QString("shown"));
+        click(pinButton);
+        QVERIFY(bar->property("pinned").toBool());
+        for (int strategy = 0; strategy < 4; ++strategy) {
+            QVERIFY(settings->setValue("onTop", strategy));
+            QTest::qWait(1100);
+            QCOMPARE(overlay.flags().testFlag(Qt::WindowStaysOnTopHint), strategy > 0);
+            QCOMPARE(window->flags().testFlag(Qt::WindowStaysOnTopHint), strategy > 0);
+#if defined(Q_OS_WIN)
+            const auto nativeToolbar = reinterpret_cast<HWND>(window->winId());
+            const auto nativeOverlay = reinterpret_cast<HWND>(overlay.winId());
+            QVERIFY(GetWindowLongPtrW(nativeToolbar, GWL_EXSTYLE) & WS_EX_NOACTIVATE);
+            QCOMPARE(bool(GetWindowLongPtrW(nativeToolbar, GWL_EXSTYLE) & WS_EX_TOPMOST), strategy > 0);
+            QCOMPARE(bool(GetWindowLongPtrW(nativeOverlay, GWL_EXSTYLE) & WS_EX_TOPMOST), strategy > 0);
+            QVERIFY(GetWindow(nativeToolbar, GW_OWNER) == reinterpret_cast<HWND>(overlay.winId()));
+#endif
+        }
+#if defined(QT_DEBUG)
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/toolbar/debug");
+#else
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/toolbar/release");
+#endif
+        const auto scaledEvidence = evidence + QStringLiteral("-dpr%1").arg(overlay.devicePixelRatio());
+        QDir().mkpath(scaledEvidence);
+        QVERIFY(window->grabWindow().save(scaledEvidence + "/pinned.png"));
+        backend.writeReport(scaledEvidence + "/context.json");
+        click(opacityButton);
+        QVERIFY(popup->isVisible());
+        const auto scheme = QGuiApplication::styleHints()->colorScheme();
+        for (auto theme : {Qt::ColorScheme::Light, Qt::ColorScheme::Dark}) {
+            QGuiApplication::styleHints()->setColorScheme(theme);
+            QTest::qWait(100);
+            QVERIFY(window->grabWindow().save(scaledEvidence +
+                (theme == Qt::ColorScheme::Light ? "/popover-light.png" : "/popover-dark.png")));
+        }
+        QGuiApplication::styleHints()->setColorScheme(scheme);
+        outside();
+        QTRY_VERIFY(!popup->isVisible());
+        QVERIFY(window->isVisible());
+        QVERIFY(bar->property("expanded").toBool());
+        auto hoverPinTooltip = [&] {
+            const auto point = pinButton->mapToScene(QPointF(pinButton->width() / 2, pinButton->height() / 2)).toPoint();
+            sensedCursor = window->mapToGlobal(point);
+            QCursor::setPos(sensedCursor);
+            QTest::mouseMove(window, point);
+            QTRY_VERIFY(pinTooltip->property("opened").toBool());
+            auto* content = qobject_cast<QQuickItem*>(pinTooltip->property("contentItem").value<QObject*>());
+            QVERIFY(content && content->window() && content->window() != window);
+            QCOMPARE(content->window()->type(), Qt::ToolTip);
+            QVERIFY(!content->window()->isActive());
+            const QRect buttonRect(sensedCursor - QPoint(qRound(pinButton->width() / 2), qRound(pinButton->height() / 2)),
+                                   QSize(qRound(pinButton->width()), qRound(pinButton->height())));
+            QVERIFY(!content->window()->geometry().intersects(buttonRect));
+            QVERIFY(content->window()->grabWindow().save(scaledEvidence + "/pin-tooltip.png"));
+        };
+        hoverPinTooltip();
+        panelOperating = true;
+        QTRY_VERIFY(!window->isVisible());
+        QTRY_VERIFY(!pinTooltip->property("visible").toBool());
+        QVERIFY(bar->property("pinned").toBool());
+        enter();
+        QTest::qWait(1100);
+        QVERIFY(!window->isVisible());
+        QVERIFY(overlay.isVisible());
+        QVERIFY(!backend.toolbarPointer()->property("enabled").toBool());
+        outside();
+        panelOperating = false;
+        QTRY_COMPARE(window->property("phase").toString(), QString("shown"));
+        click(opacityButton);
+        QVERIFY(popup->isVisible());
+        backend.stop();
+        QTRY_VERIFY(!window->isVisible());
+        QCOMPARE(window->property("phase").toString(), QString("hidden"));
+        QVERIFY(!popup->isVisible());
+        QVERIFY(!bar->property("autoExpanded").toBool());
+        QVERIFY(bar->property("pinned").toBool());
+        outside();
+        backend.beginDemo(50);
+        QTRY_COMPARE(window->property("phase").toString(), QString("shown"));
+        hoverPinTooltip();
+        click(pinButton);
+        QVERIFY(!bar->property("pinned").toBool());
+        outside();
+        QTRY_VERIFY(!window->isVisible());
+        backend.stop();
+        QCOMPARE(warnings.count(), 0);
+    }
+
     void backdropPolicyAndPersistence() {
         using Backdrop = WindowBackdropController;
         QVERIFY(Backdrop::fallback(true, true, true, false, true, false).isEmpty());

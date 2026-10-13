@@ -6,69 +6,66 @@ import "../i18n"
 
 Item {
     id: root
+    objectName: "danmakuToolbar"
     required property QtObject backend
+    property bool presentationAllowed: false
+    // Disable input together with presentation, including held controls.
+    enabled: presentationAllowed
     property bool pinned: false
     property bool autoExpanded: false
     readonly property bool popoverOpen: opacityPopup.visible
-    readonly property bool isHovered: handleArea.containsMouse || barArea.containsMouse
-    readonly property bool expanded: pinned || autoExpanded || isHovered || popoverOpen
+    readonly property bool isHovered: backend.toolbarPointer.hovered
+    readonly property bool interactionHeld: opacitySlider.pressed || toggleDanmakuBtn.pressed
+        || stepDecBtn.pressed || offsetResetBtn.pressed || stepIncBtn.pressed || opacityBtn.pressed
+        || fontDecBtn.pressed || fontIncBtn.pressed || clearBtn.pressed || debugBtn.pressed
+        || settingsBtn.pressed || pinBtn.pressed
+    readonly property bool expanded: presentationAllowed && (pinned || autoExpanded || isHovered || interactionHeld)
+    readonly property bool transitionRunning: slideAnimation.running || fadeAnimation.running
 
     // 暴露所需的实际内容尺寸给宿主微型窗口
-    readonly property int targetWidth: expanded ? (barCard.width + 12) : 80
-    readonly property int targetHeight: expanded ? (barCard.y + barCard.height + (popoverOpen ? opacityPopup.height + 8 : 4)) : 10
+    readonly property int targetWidth: barCard.width + 12
+    readonly property int targetHeight: 4 + barCard.height + (popoverOpen ? opacityPopup.height + 8 : 4)
 
     anchors.fill: parent
 
-    // 监听悬停状态变化，驱动自动展开与延迟收起
-    onIsHoveredChanged: {
-        if (isHovered) {
-            collapseTimer.stop()
-            autoExpanded = true
-        } else {
-            if (!pinned && !popoverOpen) {
-                collapseTimer.restart()
-            }
-        }
+    // An item popup is clamped into this short HWND and can cover its button.
+    // Keep the official ToolTip style in a non-activating native tooltip window.
+    component ToolbarTip: ToolTip {
+        required property bool trigger
+        popupType: Popup.Window
+        visible: root.expanded && trigger && !root.popoverOpen
+        delay: 400
+        y: parent.height + 4 - topInset
     }
+
+    // All interaction changes use one exit policy, including pinned popovers.
+    function updateCollapse() {
+        collapseTimer.stop()
+        if (!presentationAllowed) {
+            autoExpanded = false
+            opacityPopup.visible = false
+            return
+        }
+        if (isHovered) autoExpanded = true
+        if (isHovered || interactionHeld) return
+        if (popoverOpen || (!pinned && autoExpanded)) collapseTimer.start()
+    }
+    onPresentationAllowedChanged: updateCollapse()
+    onIsHoveredChanged: updateCollapse()
+    onInteractionHeldChanged: updateCollapse()
+    onPinnedChanged: updateCollapse()
+    onPopoverOpenChanged: updateCollapse()
+    onAutoExpandedChanged: updateCollapse()
 
     Timer {
         id: collapseTimer
         interval: 1000 // 鼠标离开后 1 秒平滑自动收起
         repeat: false
         onTriggered: {
-            if (!root.pinned && !root.popoverOpen && !root.isHovered) {
-                root.autoExpanded = false
-            }
-        }
-    }
-
-    // 顶部收起时的微型把手（感应区）
-    Item {
-        id: handleContainer
-        anchors.top: parent.top
-        anchors.horizontalCenter: parent.horizontalCenter
-        width: 80
-        height: 10
-        visible: !root.expanded
-
-        Rectangle {
-            id: handlePill
-            anchors.centerIn: parent
-            width: 72
-            height: 4
-            radius: 2
-            color: Ui.dark ? Qt.rgba(1, 1, 1, 0.45) : Qt.rgba(0, 0, 0, 0.35)
-        }
-
-        MouseArea {
-            id: handleArea
-            anchors.fill: parent
-            hoverEnabled: true
-            Accessible.role: Accessible.Button
-            Accessible.name: I18n.toolbar.handleTooltip
-            ToolTip.visible: containsMouse
-            ToolTip.text: I18n.toolbar.handleTooltip
-            ToolTip.delay: 300
+            if (!root.presentationAllowed || root.isHovered || root.interactionHeld) return
+            opacityPopup.visible = false
+            if (!root.pinned) root.autoExpanded = false
+            root.updateCollapse()
         }
     }
 
@@ -89,17 +86,10 @@ Item {
         border.color: Ui.cardBorder
 
         Behavior on anchors.topMargin {
-            NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+            NumberAnimation { id: slideAnimation; duration: 180; easing.type: Easing.OutCubic }
         }
         Behavior on opacity {
-            NumberAnimation { duration: 160 }
-        }
-
-        MouseArea {
-            id: barArea
-            anchors.fill: parent
-            hoverEnabled: true
-            acceptedButtons: Qt.NoButton
+            NumberAnimation { id: fadeAnimation; duration: 160 }
         }
 
         RowLayout {
@@ -121,9 +111,10 @@ Item {
                 icon.height: 18
                 display: AbstractButton.IconOnly
                 Accessible.name: I18n.toolbar.toggleDanmaku
-                ToolTip.visible: hovered
-                ToolTip.text: checked ? I18n.toolbar.danmakuShown : I18n.toolbar.danmakuHidden
-                ToolTip.delay: 400
+                ToolbarTip {
+                    trigger: parent.hovered
+                    text: parent.checked ? I18n.toolbar.danmakuShown : I18n.toolbar.danmakuHidden
+                }
                 onClicked: if (root.backend) root.backend.danmakuVisible = !root.backend.danmakuVisible
             }
 
@@ -148,9 +139,10 @@ Item {
                     icon.height: 16
                     display: AbstractButton.IconOnly
                     Accessible.name: I18n.toolbar.offsetDec
-                    ToolTip.visible: hovered
-                    ToolTip.text: I18n.toolbar.offsetDec
-                    ToolTip.delay: 400
+                    ToolbarTip {
+                        trigger: parent.hovered
+                        text: I18n.toolbar.offsetDec
+                    }
                     onClicked: if (root.backend) root.backend.stepTimeOffset(-0.5)
                 }
 
@@ -166,9 +158,10 @@ Item {
                     text: (offsetVal >= 0 ? "+" : "") + offsetVal.toFixed(1) + "s"
                     display: AbstractButton.TextBesideIcon
                     Accessible.name: I18n.toolbar.offsetReset
-                    ToolTip.visible: hovered
-                    ToolTip.text: I18n.toolbar.offsetReset
-                    ToolTip.delay: 400
+                    ToolbarTip {
+                        trigger: parent.hovered
+                        text: I18n.toolbar.offsetReset
+                    }
                     onClicked: if (root.backend) root.backend.settings.setValue("timeOffset", 0.0)
                 }
 
@@ -183,9 +176,10 @@ Item {
                     icon.height: 16
                     display: AbstractButton.IconOnly
                     Accessible.name: I18n.toolbar.offsetInc
-                    ToolTip.visible: hovered
-                    ToolTip.text: I18n.toolbar.offsetInc
-                    ToolTip.delay: 400
+                    ToolbarTip {
+                        trigger: parent.hovered
+                        text: I18n.toolbar.offsetInc
+                    }
                     onClicked: if (root.backend) root.backend.stepTimeOffset(0.5)
                 }
             }
@@ -199,6 +193,7 @@ Item {
             // 3. 不透明度调节（官方 Fluent appearance 图标 + 百分比数值）
             Button {
                 id: opacityBtn
+                objectName: "toolbarOpacityButton"
                 flat: true
                 leftPadding: 6; rightPadding: 6; topPadding: 2; bottomPadding: 2
                 Layout.preferredHeight: 34
@@ -208,9 +203,10 @@ Item {
                 text: Math.round((root.backend && root.backend.settings.values.opacity ? root.backend.settings.values.opacity : 0.85) * 100) + "%"
                 display: AbstractButton.TextBesideIcon
                 Accessible.name: I18n.toolbar.opacityTitle
-                ToolTip.visible: hovered && !opacityPopup.visible
-                ToolTip.text: I18n.toolbar.opacityTitle
-                ToolTip.delay: 400
+                ToolbarTip {
+                    trigger: parent.hovered
+                    text: I18n.toolbar.opacityTitle
+                }
                 onClicked: opacityPopup.visible = !opacityPopup.visible
             }
 
@@ -225,6 +221,7 @@ Item {
                 spacing: 1
 
                 Button {
+                    id: fontDecBtn
                     flat: true
                     leftPadding: 2; rightPadding: 2; topPadding: 2; bottomPadding: 2
                     Layout.preferredWidth: 26
@@ -233,9 +230,10 @@ Item {
                     font.pixelSize: 12
                     font.bold: true
                     Accessible.name: I18n.toolbar.fontSizeDec
-                    ToolTip.visible: hovered
-                    ToolTip.text: I18n.toolbar.fontSizeDec
-                    ToolTip.delay: 400
+                    ToolbarTip {
+                        trigger: parent.hovered
+                        text: I18n.toolbar.fontSizeDec
+                    }
                     onClicked: if (root.backend) root.backend.stepFontSize(-2)
                 }
 
@@ -247,9 +245,10 @@ Item {
                     Layout.alignment: Qt.AlignVCenter
                     Layout.preferredWidth: 20
                     horizontalAlignment: Text.AlignHCenter
-                    ToolTip.visible: fontMouse.containsMouse
-                    ToolTip.text: I18n.toolbar.fontSizeTitle
-                    ToolTip.delay: 400
+                    ToolbarTip {
+                        trigger: fontMouse.containsMouse
+                        text: I18n.toolbar.fontSizeTitle
+                    }
                     MouseArea {
                         id: fontMouse
                         anchors.fill: parent
@@ -258,6 +257,7 @@ Item {
                 }
 
                 Button {
+                    id: fontIncBtn
                     flat: true
                     leftPadding: 2; rightPadding: 2; topPadding: 2; bottomPadding: 2
                     Layout.preferredWidth: 26
@@ -266,9 +266,10 @@ Item {
                     font.pixelSize: 12
                     font.bold: true
                     Accessible.name: I18n.toolbar.fontSizeInc
-                    ToolTip.visible: hovered
-                    ToolTip.text: I18n.toolbar.fontSizeInc
-                    ToolTip.delay: 400
+                    ToolbarTip {
+                        trigger: parent.hovered
+                        text: I18n.toolbar.fontSizeInc
+                    }
                     onClicked: if (root.backend) root.backend.stepFontSize(2)
                 }
             }
@@ -291,9 +292,10 @@ Item {
                 icon.height: 18
                 display: AbstractButton.IconOnly
                 Accessible.name: I18n.toolbar.clearActive
-                ToolTip.visible: hovered
-                ToolTip.text: I18n.toolbar.clearActive
-                ToolTip.delay: 400
+                ToolbarTip {
+                    trigger: parent.hovered
+                    text: I18n.toolbar.clearActive
+                }
                 onClicked: if (root.backend) root.backend.clearActiveDanmaku()
             }
 
@@ -311,9 +313,10 @@ Item {
                 icon.height: 18
                 display: AbstractButton.IconOnly
                 Accessible.name: I18n.toolbar.toggleDebug
-                ToolTip.visible: hovered
-                ToolTip.text: I18n.toolbar.toggleDebug
-                ToolTip.delay: 400
+                ToolbarTip {
+                    trigger: parent.hovered
+                    text: I18n.toolbar.toggleDebug
+                }
                 onClicked: {
                     if (root.backend) {
                         var next = !root.backend.settings.values.debug
@@ -334,9 +337,10 @@ Item {
                 icon.height: 18
                 display: AbstractButton.IconOnly
                 Accessible.name: I18n.toolbar.openMainWindow
-                ToolTip.visible: hovered
-                ToolTip.text: I18n.toolbar.openMainWindow
-                ToolTip.delay: 400
+                ToolbarTip {
+                    trigger: parent.hovered
+                    text: I18n.toolbar.openMainWindow
+                }
                 onClicked: if (root.backend) root.backend.showMainWindow()
             }
 
@@ -349,6 +353,7 @@ Item {
             // 8. 图钉固定常驻（官方 Fluent pin / pin-off 图标）
             Button {
                 id: pinBtn
+                objectName: "toolbarPinButton"
                 flat: true
                 leftPadding: 4; rightPadding: 4; topPadding: 4; bottomPadding: 4
                 Layout.preferredWidth: 34
@@ -360,9 +365,11 @@ Item {
                 icon.height: 18
                 display: AbstractButton.IconOnly
                 Accessible.name: root.pinned ? I18n.toolbar.unpinToolbar : I18n.toolbar.pinToolbar
-                ToolTip.visible: hovered
-                ToolTip.text: root.pinned ? I18n.toolbar.unpinToolbar : I18n.toolbar.pinToolbar
-                ToolTip.delay: 400
+                ToolbarTip {
+                    objectName: "toolbarPinTooltip"
+                    trigger: parent.hovered
+                    text: root.pinned ? I18n.toolbar.unpinToolbar : I18n.toolbar.pinToolbar
+                }
                 onClicked: root.pinned = !root.pinned
             }
         }
@@ -371,6 +378,7 @@ Item {
     // 不透明度微调浮层 Popover（实体不透明面板色）
     Rectangle {
         id: opacityPopup
+        objectName: "toolbarOpacityPopup"
         visible: false
         anchors.top: barCard.bottom
         anchors.topMargin: 4
@@ -397,6 +405,7 @@ Item {
 
             Slider {
                 id: opacitySlider
+                objectName: "toolbarOpacitySlider"
                 Layout.fillWidth: true
                 from: 0.05
                 to: 1.0
