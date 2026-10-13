@@ -5,6 +5,7 @@
 #include <QQmlComponent>
 #include <QQuickWindow>
 #include <QQuickItem>
+#include <QQuickItemGrabResult>
 #include <QTest>
 #include <QDir>
 #include <QSignalSpy>
@@ -32,6 +33,121 @@
 class UiWorkflowTests : public QObject {
     Q_OBJECT
 private slots:
+    void debugHudLongTitleLayout() {
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        QQmlComponent fixture(&engine);
+        fixture.setData(R"(
+            import QtQml
+            QtObject {
+                property QtObject settings: QtObject {
+                    property var values: ({ debug: true, debugPosition: "top_left" })
+                }
+                property bool danmakuVisible: true
+                property string status: "播放器已暂停"
+                property string mediaTitle: ""
+                property real position: 12345.6
+                property var metrics: ({ active: 5000, dropped: 12345, presentedPerSecond: 165,
+                    updatesPerSecond: 165, p95Ms: 123.4, memoryMiB: 2048.5,
+                    textureEstimatedBytes: 536870912, textureBudgetBytes: 1073741824,
+                    textFallbackNodes: 5000, textureFallbackReasons: { capacity: 12345 } })
+            }
+        )", QUrl());
+        QVERIFY2(fixture.isReady(), qPrintable(fixture.errorString()));
+        std::unique_ptr<QObject> backend(fixture.create());
+        QVERIFY(backend);
+        QQmlComponent component(&engine, QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/OverlayWindow.qml")));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        std::unique_ptr<QObject> object(component.createWithInitialProperties({{"backend", QVariant::fromValue(backend.get())}}));
+        auto* window = qobject_cast<QQuickWindow*>(object.get());
+        QVERIFY(window);
+        auto* panel = window->findChild<QQuickItem*>("overlayDebugPanel");
+        auto* title = window->findChild<QQuickItem*>("overlayDebugTitle");
+        auto* status = window->findChild<QQuickItem*>("overlayDebugStatus");
+        auto* metrics = window->findChild<QQuickItem*>("overlayDebugMetrics");
+        QVERIFY(panel && title && status && metrics);
+        window->resize(1024, 720);
+        window->show();
+        QTRY_VERIFY(window->isExposed());
+        QTRY_COMPARE(panel->width(), 320.0);
+        QCOMPARE(status->property("lineCount").toInt(), 1);
+        QCOMPARE(metrics->property("lineCount").toInt(), 7);
+        const auto completeMetrics = metrics->property("text").toString();
+        QVERIFY(completeMetrics.contains("12345.6 s"));
+        QVERIFY(completeMetrics.contains("512.0"));
+        QVERIFY(completeMetrics.contains("1024"));
+        QVERIFY(!metrics->property("truncated").toBool());
+        const auto emptyHeight = panel->height();
+        QVERIFY(!title->isVisible());
+        for (const auto& value : {QStringLiteral("短标题"), QStringLiteral("长媒体标题，继续显示而不撑开调试面板。").repeated(50),
+                QStringLiteral("https://example.test/") + QString(1000, 'W'),
+                QString::fromUtf8("播放视频😀🎵测试").repeated(100)}) {
+            QVERIFY(backend->setProperty("mediaTitle", value));
+            QTRY_VERIFY(title->isVisible());
+            QTRY_COMPARE(title->property("text").toString(), value);
+            QCOMPARE(panel->width(), 320.0);
+            QVERIFY(title->property("lineCount").toInt() <= 2);
+            QCOMPARE(title->property("truncated").toBool(), value.size() > 100);
+            QCOMPARE(metrics->property("text").toString(), completeMetrics);
+            QCOMPARE(metrics->property("lineCount").toInt(), 7);
+            QCOMPARE(backend->property("mediaTitle").toString(), value);
+        }
+        const auto literalTitle = QStringLiteral("<b>媒体标题</b>\r\n第二行\t片段\u2028尾部");
+        QVERIFY(backend->setProperty("mediaTitle", literalTitle));
+        QTRY_COMPARE(title->property("text").toString(), QStringLiteral("<b>媒体标题</b> 第二行 片段 尾部"));
+        QCOMPARE(title->property("textFormat").toInt(), 0); // Text.PlainText
+        QCOMPARE(backend->property("mediaTitle").toString(), literalTitle);
+        QVERIFY(backend->setProperty("mediaTitle", "\r\n\t "));
+        QTRY_VERIFY(!title->isVisible());
+        QTRY_COMPARE(panel->height(), emptyHeight);
+
+        auto* settings = backend->property("settings").value<QObject*>();
+        QVERIFY(settings);
+        QVERIFY(backend->setProperty("mediaTitle", QStringLiteral("超长标题").repeated(200)));
+        for (const auto width : {1024, 240, 160}) {
+            window->resize(width, 720);
+            QTRY_COMPARE(panel->width(), double(std::min(320, width - 32)));
+            QCOMPARE(metrics->property("text").toString(), completeMetrics);
+            QVERIFY(!metrics->property("truncated").toBool());
+            QVERIFY(title->property("lineCount").toInt() <= 2);
+            for (const auto position : {"top_left", "top_right", "bottom_left", "bottom_right"}) {
+                QVERIFY(settings->setProperty("values", QVariantMap{{"debug", true}, {"debugPosition", position}}));
+                const QString corner = QString::fromLatin1(position);
+                QTRY_COMPARE(panel->x(), corner.endsWith("right") ? window->width() - panel->width() - 16 : 16.0);
+                QTRY_COMPARE(panel->y(), corner.startsWith("bottom") ? window->height() - panel->height() - 16 : 16.0);
+                QVERIFY(panel->x() >= 0 && panel->y() >= 0);
+                QVERIFY(panel->x() + panel->width() <= window->width());
+                QVERIFY(panel->y() + panel->height() <= window->height());
+            }
+        }
+        window->resize(1024, 720);
+        QVERIFY(panel->setProperty("textPixelSize", 24.0));
+        QTRY_VERIFY(qAbs(panel->width() - 320.0 * 24 / 14) < 0.01);
+        QVERIFY(title->property("lineCount").toInt() <= 2);
+        QCOMPARE(metrics->property("lineCount").toInt(), 7);
+        QVERIFY(!metrics->property("truncated").toBool());
+        QVERIFY(panel->setProperty("textPixelSize", 14.0));
+        QTRY_COMPARE(panel->width(), 320.0);
+#if defined(QT_DEBUG)
+        const auto buildName = QStringLiteral("debug");
+#else
+        const auto buildName = QStringLiteral("release");
+#endif
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/debug-hud/") + buildName +
+                              QStringLiteral("-dpr%1").arg(window->devicePixelRatio());
+        QDir().mkpath(evidence);
+        QVERIFY(window->grabWindow().save(evidence + "/long-title.png"));
+        const auto hudGrab = panel->grabToImage();
+        QTRY_VERIFY(hudGrab && !hudGrab->image().isNull());
+        QVERIFY(hudGrab->saveToFile(evidence + "/panel.png"));
+        window->resize(240, 720);
+        QTRY_COMPARE(panel->width(), 208.0);
+        QVERIFY(window->grabWindow().save(evidence + "/narrow.png"));
+        QVERIFY(window->flags().testFlag(Qt::WindowTransparentForInput));
+        QVERIFY(window->flags().testFlag(Qt::WindowDoesNotAcceptFocus));
+        QCOMPARE(warnings.count(), 0);
+    }
+
     void nativeLayerOrderingWithoutActivation() {
 #if defined(Q_OS_WIN)
         QQuickWindow panel, overlay, toolbar;

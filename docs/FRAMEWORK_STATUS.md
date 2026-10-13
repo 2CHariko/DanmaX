@@ -553,3 +553,11 @@ Windows 10/早期 Windows 11、系统透明开关与节能切换、高对比度�
 - Debug 在 `QT_SCALE_FACTOR=2`、13.5pt 应用字体下，层级和工具栏补测为 **4 passed、0 failed、0 skipped**（包含初始化与清理），日志为 `out/validation/panel-layer/scaled-ui.txt`。新增气泡原生窗口类型、不激活、不覆盖按钮、面板操作关闭气泡及重启后气泡显示时点击的断言；浅深工具栏与气泡截图位于 `out/validation/toolbar/{debug,release}-dpr*/`。UI Qt Test 使用 software 后端，缩放模拟不等同于混合 DPI 实机验收。
 - Release 编译后程序的浅色长下拉、200% 深色长下拉及联合弹幕截图 smoke 退出码均为 0，无 QML 警告；已检查 `out/validation/panel-layer/cli/{light-opaque,dark-opaque-scaled}/` 截图。此视觉检查只在独立测试数据目录关闭 Mica，以获得完整纯色画面；原生 Mica 属于桌面合成内容，`grabWindow()` 不包含其背景，保留的 Mica 开启截图不能用于判断最终材质效果。
 - 真实前台与原生鼠标用例仅在 Windows 实际授予测试窗口前台、命中测试 HWND 后继续，否则明确跳过，不将跳过计为通过。真实播放器全屏、Alt+Tab、实际跨屏与混合 DPI、Mica/Snap 联合交互仍需人工验收。本次未新增依赖、用户配置或执行正式发布打包。
+
+## 调试面板长媒体标题布局（2026-10-14）
+
+- 修复调试背景宽度由整块文本 `implicitWidth` 决定，长媒体会话标题将其撑满屏幕的问题。状态、标题和指标拆开，默认面板宽度 320 逻辑单位，受屏幕宽度与边距约束；内部字号变化时按比例计算。保留四角位置、背景、默认字号和原生穿透/不激活属性。
+- 媒体标题按纯文本显示，换行与制表符仅在显示时整理为空格，最多两行，末尾省略；空标题不占行。指标不省略，在窄屏换行，高度由内容计算。后端标题、媒体标识与 JSON 报告保留原值；未改媒体同步、渲染架构、归档或新增用户配置与依赖。
+- Qt Test `debugHudLongTitleLayout` 纳入现有 UI 入口，覆盖长中文、连续英文/网址、emoji、HTML 样式字符、换行、空标题、较大指标、160/240/1024 宽度、四角定位和内部放大字号，检查两行限制、宽度稳定、指标完整与标题原值保留。Debug 200% 缩放、13.5pt 应用字体补测为 3 passed、0 failed、0 skipped（含初始化与清理）；截图与日志在 `out/validation/debug-hud/`。
+- 最终常规 Debug、Release 均完成构建，全量 CTest 各为 **14/14 通过**（101.84 秒、48.44 秒）。本轮各自 `ui_workflow` 为 **9 passed、0 failed、2 skipped**；跳过的原生鼠标和所属对话框用例未获得 Windows 前台，不计为本轮实机通过。长标题 HUD 用例两种构建均实际执行通过。完整日志保存为 `out/validation/debug-hud/{debug,release}-ctest.log` 和对应 `*-ui-tests.txt`。
+- Release 编译后程序对 Chrome 真实暂停 SMTC 会话进行 4 秒只读同步 smoke，退出码 0，无 QML 警告；媒体位置约 50 秒，原始长标题完整保存在 `real-smtc/context.json`。已检查覆盖层截图，标题两行省略、指标未截断；原生透明输入与不激活属性为 true。`real-smtc/panel.png` 是从完整截图裁出的 HUD 区域。此检查不代表真实播放、全屏、多屏混合 DPI 或光学性能验收；Qt Test 截图使用 software 后端，不作为性能成绩。
