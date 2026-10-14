@@ -111,6 +111,7 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/AnimeMetadataService.cpp src/infrastructure/AnimeMetadataService.h
         src/infrastructure/AppPaths.cpp src/infrastructure/AppPaths.h
         src/platform/windows/MediaMonitor.cpp src/platform/windows/MediaMonitor.h
+        src/platform/windows/SmtcReader.cpp src/platform/windows/SmtcReader.h
         src/platform/windows/WindowBackdropController.cpp src/platform/windows/WindowBackdropController.h
         src/platform/windows/ToolbarInputFilter.cpp src/platform/windows/ToolbarInputFilter.h
         src/platform/windows/ToolbarPointerMonitor.cpp src/platform/windows/ToolbarPointerMonitor.h
@@ -175,6 +176,11 @@ if(DANMAKU_BUILD_APP)
         danmaku_compile_options(anime_metadata_tests)
         add_test(NAME anime_metadata COMMAND anime_metadata_tests -o "${CMAKE_BINARY_DIR}/anime-metadata-tests.txt,txt")
         set_tests_properties(anime_metadata PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
+        add_executable(smtc_reader_tests tests/runtime/SmtcReaderTests.cpp)
+        target_link_libraries(smtc_reader_tests PRIVATE danmaku_runtime Qt6::Test)
+        danmaku_compile_options(smtc_reader_tests)
+        add_test(NAME smtc_reader COMMAND smtc_reader_tests -o "${CMAKE_BINARY_DIR}/smtc-reader-tests.txt,txt")
+        set_tests_properties(smtc_reader PROPERTIES TIMEOUT 30)
         add_executable(xml_loader_tests tests/runtime/XmlLoaderTests.cpp
             src/infrastructure/XmlLoader.cpp src/infrastructure/ChineseConverter.cpp)
         target_include_directories(xml_loader_tests PRIVATE src)

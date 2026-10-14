@@ -63,7 +63,9 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     connect(&monitor_, &MediaMonitor::sampleReceived, this, &AppController::onSample);
     connect(&monitor_, &MediaMonitor::errorOccurred, this,
             [this](const QString& message) {
-                if (!manual_) fail(QStringLiteral("媒体接口：") + message);
+                // Poll failures are recoverable. onSample enters WaitingForPlayer;
+                // do not leave a fatal error banner after the next healthy sample.
+                if (!manual_) logs_.append("WARNING", QStringLiteral("媒体接口（自动重试）：") + message);
             });
     connect(qGuiApp, &QGuiApplication::screenAdded, this, [this] {
         emit screensChanged();

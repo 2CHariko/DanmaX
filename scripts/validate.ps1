@@ -34,6 +34,11 @@ Invoke-ProjectEnvironment {
         $env:DANMAKU_TEST_MEDIA_REPORT = Join-Path $output 'session-lifecycle.json'
         $sessionTestLog = (Join-Path $output 'session-tests.txt') + ',txt'
         Invoke-Checked $sessionTests @('realMediaSessionReadOnlyLifecycle','-o',$sessionTestLog)
+        $sessionUiTests = Get-ProjectPath 'out/build/windows-release/bin/ui_workflow_tests.exe'
+        if (-not (Test-Path -LiteralPath $sessionUiTests)) { throw 'Build Release UI tests before validating media opacity.' }
+        $env:DANMAKU_TEST_OPACITY_REPORT = Join-Path $output 'session-opacity.json'
+        $opacityTestLog = (Join-Path $output 'session-opacity-tests.txt') + ',txt'
+        Invoke-Checked $sessionUiTests @('realMediaSessionOpacityDrag','-o',$opacityTestLog)
         Invoke-Checked $exe @('--benchmark','50','--seconds','5','--media-session',$SessionId,'--file',(Get-ProjectPath 'tests/fixtures/sample.xml'),
             '--data-dir',(Join-Path $output 'session-data'),'--cache-dir',$env:QML_DISK_CACHE_PATH,'--report',(Join-Path $output 'session.json'))
     }

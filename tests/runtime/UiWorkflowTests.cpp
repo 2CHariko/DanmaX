@@ -19,6 +19,10 @@
 #include <QTcpSocket>
 #include <QWheelEvent>
 #include <QStyleHints>
+#include <QElapsedTimer>
+#include <QSaveFile>
+#include <QScopeGuard>
+#include <cmath>
 #include <memory>
 #if defined(Q_OS_WIN)
 #ifndef NOMINMAX
@@ -35,7 +39,147 @@
 
 class UiWorkflowTests : public QObject {
     Q_OBJECT
+private:
+    void opacityDrag(bool realSession) {
+        QTemporaryDir directory;
+        AppController backend(directory.path(), nullptr, [](const QString&) { return true; }, directory.path(),
+                              [](QWindow*) { return false; });
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
+        QVERIFY(settings->setValue("micaEnabled", false));
+        QVERIFY(settings->setValue("foregroundOnly", false));
+        // Deterministic GUI integration: production reader null-return paths are
+        // exercised by smtc_reader; inject their disconnected sample here.
+        auto* monitor = backend.findChild<MediaMonitor*>();
+        QVERIFY(monitor);
+        if (!realSession) QObject::disconnect(monitor, &MediaMonitor::sampleReceived, &backend, nullptr);
+        const auto session = realSession ? qEnvironmentVariable("DANMAKU_TEST_MEDIA_SESSION") : QStringLiteral("Regression.Player");
+        MediaSample latest;
+        QJsonArray observations, moves;
+        QSignalSpy mediaErrors(monitor, &MediaMonitor::errorOccurred);
+        connect(monitor, &MediaMonitor::sampleReceived, &backend, [&](const MediaSample& value) {
+            if (!realSession || value.id != session || value.generation != monitor->generation()) return;
+            latest = value;
+            observations.append(QJsonObject{{"found", value.found}, {"position", value.position},
+                {"duration", value.duration}, {"observedAt", value.observedAt},
+                {"playback", static_cast<int>(value.playback)}, {"title", value.title}});
+        });
+        const auto saveReport = qScopeGuard([&] {
+            const auto path = qEnvironmentVariable("DANMAKU_TEST_OPACITY_REPORT");
+            if (!realSession || path.isEmpty()) return;
+            QSaveFile report(path);
+            if (report.open(QIODevice::WriteOnly)) {
+                report.write(QJsonDocument(QJsonObject{{"session", session}, {"readOnly", true},
+                    {"samples", observations}, {"moves", moves}, {"mediaErrors", mediaErrors.count()}}).toJson());
+                report.commit();
+            }
+        });
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* panel = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+        auto* toolbar = panel->findChild<QQuickWindow*>("danmakuToolbarWindow");
+        auto* bar = toolbar ? toolbar->findChild<QQuickItem*>("danmakuToolbar") : nullptr;
+        auto* popup = toolbar ? toolbar->findChild<QQuickItem*>("toolbarOpacityPopup") : nullptr;
+        auto* slider = toolbar ? toolbar->findChild<QQuickItem*>("toolbarOpacitySlider") : nullptr;
+        auto* overlay = panel->findChild<QQuickWindow*>("danmakuOverlayWindow");
+        QVERIFY(panel && toolbar && bar && popup && slider);
+        // Use the public renderer property on the overlay, independent of object name.
+        if (!overlay) for (auto* window : panel->findChildren<QQuickWindow*>())
+            if (window->property("renderer").isValid()) { overlay = window; break; }
+        QVERIFY(overlay);
+        auto* renderer = qobject_cast<DanmakuItem*>(overlay->property("renderer").value<QObject*>());
+        QVERIFY(renderer);
+        backend.beginDemo(50);
+        backend.stop();
+        backend.selectSession(session);
+        backend.start(false);
+        auto sample = [&](bool found) {
+            MediaSample value;
+            value.id = QStringLiteral("Regression.Player");
+            value.generation = monitor->generation();
+            value.observedAt = MediaMonitor::monotonicSeconds();
+            value.found = found;
+            if (found) {
+                value.title = QStringLiteral("Paused test player");
+                value.identity = value.title;
+                value.position = 12;
+                value.duration = 120;
+                value.playback = MediaSample::Playback::Paused;
+            }
+            QVERIFY(QMetaObject::invokeMethod(&backend, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, value)));
+        };
+        if (realSession) {
+            QTRY_VERIFY_WITH_TIMEOUT(observations.size() >= 3 && latest.found && !backend.mediaTitle().isEmpty(), 10000);
+            QVERIFY(!backend.manualMode());
+            QVERIFY(latest.duration > 0);
+        } else {
+            sample(true);
+            QCOMPARE(backend.playbackState(), AppController::Paused);
+        }
+        bar->setProperty("pinned", true);
+        QTRY_VERIFY(toolbar->isVisible());
+        QTRY_COMPARE(toolbar->property("phase").toString(), QString("shown"));
+        popup->setVisible(true);
+        QTest::qWait(80);
+        auto point = [&](double fraction) {
+            const auto left = slider->property("leftPadding").toDouble();
+            const auto right = slider->property("rightPadding").toDouble();
+            return slider->mapToScene(QPointF(left + (slider->width() - left - right) * fraction, slider->height() / 2)).toPoint();
+        };
+        QTest::mousePress(toolbar, Qt::LeftButton, Qt::NoModifier, point(0.5));
+        QTRY_VERIFY(slider->property("pressed").toBool());
+        const int total = backend.total();
+        if (!realSession) QVERIFY(QMetaObject::invokeMethod(monitor, "errorOccurred", Qt::DirectConnection,
+            Q_ARG(QString, QStringLiteral("SMTC returned null timeline properties"))));
+        QVERIFY(backend.error().isEmpty());
+        QElapsedTimer elapsed;
+        elapsed.start();
+        const int samplesBeforeDrag = observations.size();
+        for (int i = 0; i < (realSession ? 120 : 12); ++i) {
+            if (!realSession) {
+                sample(i % 2 != 0);
+                QCOMPARE(backend.playbackState(), i % 2 ? AppController::Paused : AppController::WaitingForPlayer);
+            }
+            QTest::mouseMove(toolbar, point(i % 2 ? 0.8 : 0.2), 15);
+            QTest::qWait(realSession ? 250 : 30);
+            const double expected = settings->values()["opacity"].toDouble();
+            QVERIFY(expected >= 0.05 && expected <= 1.0);
+            QVERIFY(i % 2 ? expected > 0.6 : expected < 0.4);
+            QTRY_COMPARE(renderer->opacity(), expected);
+            if (realSession) {
+                QVERIFY(MediaMonitor::monotonicSeconds() - latest.observedAt < 2.5);
+                if (latest.found) QVERIFY(std::abs(backend.position() - latest.position) < 0.5);
+                moves.append(QJsonObject{{"elapsedMs", elapsed.elapsed()}, {"opacity", expected},
+                    {"renderOpacity", renderer->opacity()}, {"position", backend.position()},
+                    {"state", static_cast<int>(backend.playbackState())}});
+            } else QCOMPARE(backend.position(), 12.0);
+            QCOMPARE(backend.total(), total);
+            QVERIFY(backend.running());
+            QVERIFY(backend.error().isEmpty());
+        }
+        QTest::mouseRelease(toolbar, Qt::LeftButton, Qt::NoModifier, point(0.8));
+        QVERIFY(settings->values()["opacity"].toDouble() > 0.6);
+        QTRY_VERIFY(!slider->property("pressed").toBool());
+        QVERIFY(settings->retrySave());
+        SettingsStore restored(directory.path());
+        QCOMPARE(restored.values()["opacity"], settings->values()["opacity"]);
+        if (realSession) {
+            QVERIFY(observations.size() >= samplesBeforeDrag + 20);
+            QVERIFY(latest.found);
+            QVERIFY(backend.playbackState() != AppController::WaitingForPlayer);
+        }
+        backend.stop();
+        QCOMPARE(warnings.count(), 0);
+    }
 private slots:
+    void opacityDragDuringMediaLossAndRecovery() { opacityDrag(false); }
+    void realMediaSessionOpacityDrag() {
+        if (qEnvironmentVariable("DANMAKU_TEST_MEDIA_SESSION").isEmpty())
+            QSKIP("Opt in with DANMAKU_TEST_MEDIA_SESSION; never creates or controls a player session.");
+        opacityDrag(true);
+    }
     void homePageWorkflow() {
         QTemporaryDir directory;
         const auto cache = directory.filePath("cache");
