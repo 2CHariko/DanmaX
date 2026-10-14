@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icon.png" alt="DanmaX Logo" width="128" height="128" style="border-radius: 20%;" />
+  <img src="assets/icon-rounded.png" alt="DanmaX Logo" width="128" height="128" />
 </p>
 
 <h1 align="center">DanmaX</h1>
