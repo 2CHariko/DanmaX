@@ -109,6 +109,24 @@ int main(int argc, char** argv) {
                   annotated.contains("[Meta]\r\n") && annotated.contains("formatVersion=1"),
               "First launch writes readable UTF-8 Chinese instructions");
         check(settings.setValue("speed", 300), "Save valid setting");
+        check(settings.values()["frameRateLimit"].toInt() == 60 &&
+              settings.values()["targetFrameRate"].toInt() == 60 &&
+              !settings.values()["adaptiveFrameRateEnabled"].toBool(), "Frame defaults are sixty FPS with adaptation disabled");
+        check(settings.setValue("frameRateLimit", 0) && settings.setValue("frameRateLimit", 15) &&
+              settings.setValue("frameRateLimit", 1000) && settings.setValue("targetFrameRate", 120) &&
+              settings.setValue("adaptiveFrameRateEnabled", true), "Save valid frame settings including follow-display and endpoints");
+        check(!settings.setValue("frameRateLimit", 14) && !settings.setValue("frameRateLimit", -1) &&
+              !settings.setValue("frameRateLimit", 1001) && !settings.setValue("frameRateLimit", 60.5) &&
+              !settings.setValue("targetFrameRate", 14) && !settings.setValue("targetFrameRate", 1001) &&
+              !settings.setValue("adaptiveFrameRateEnabled", "true"), "Reject invalid frame settings");
+        settings.flushPending();
+        SettingsStore restoredFrames(dir.path());
+        check(restoredFrames.values()["frameRateLimit"].toInt() == 1000 &&
+              restoredFrames.values()["targetFrameRate"].toInt() == 120 &&
+              restoredFrames.values()["adaptiveFrameRateEnabled"].toBool(), "Frame settings persist without runtime quota fields");
+        settings.setValue("frameRateLimit", 60);
+        settings.setValue("targetFrameRate", 60);
+        settings.setValue("adaptiveFrameRateEnabled", false);
         check(settings.values()["textureBudgetAuto"].toBool() &&
                   settings.values()["textureBudgetMiB"].toInt() == 512,
               "Existing INI gets safe defaults for missing texture budget settings");

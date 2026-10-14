@@ -502,6 +502,68 @@ PageFrame {
     }
 
     SettingsSection {
+        objectName: "frameRateGroup"
+        title: I18n.settings.frameRateSection
+        Layout.fillWidth: true
+        SettingsRow {
+            title: I18n.settings.frameRateModeTitle
+            AppComboBox {
+                objectName: "frameRateModeCombo"
+                model: I18n.settings.frameRateModes
+                currentIndex: page.values.frameRateLimit === 0 ? 0 : 1
+                implicitWidth: 180
+                Accessible.name: I18n.settings.frameRateModeTitle
+                onActivated: page.put("frameRateLimit", currentIndex === 0 ? 0 : 60)
+            }
+        }
+        SettingsRow {
+            title: I18n.settings.frameRateLimitTitle
+            description: I18n.settings.frameRateLimitDesc
+            SpinBox {
+                objectName: "frameRateLimitInput"
+                from: 15; to: 1000; editable: true
+                value: page.values.frameRateLimit || 60
+                enabled: page.values.frameRateLimit !== 0
+                Accessible.name: I18n.settings.frameRateLimitTitle
+                onValueModified: page.put("frameRateLimit", value)
+            }
+        }
+        SettingsRow {
+            title: I18n.settings.adaptiveFrameRateTitle
+            description: I18n.settings.adaptiveFrameRateDesc
+            Switch {
+                objectName: "adaptiveFrameRateSwitch"
+                checked: page.values.adaptiveFrameRateEnabled
+                Accessible.name: I18n.settings.adaptiveFrameRateTitle
+                onToggled: page.put("adaptiveFrameRateEnabled", checked)
+            }
+        }
+        SettingsRow {
+            title: I18n.settings.targetFrameRateTitle
+            description: I18n.settings.targetFrameRateDesc
+            SpinBox {
+                objectName: "targetFrameRateInput"
+                from: 15; to: 1000; editable: true
+                value: page.values.targetFrameRate
+                enabled: page.values.adaptiveFrameRateEnabled
+                Accessible.name: I18n.settings.targetFrameRateTitle
+                onValueModified: page.put("targetFrameRate", value)
+            }
+        }
+        SettingsRow {
+            title: I18n.settings.frameRateStatusTitle
+            description: I18n.format(I18n.settings.frameRateStatusFormat,
+                page.backend.metrics.effectiveFrameRateLimit > 0 ? Number(page.backend.metrics.effectiveFrameRateLimit).toFixed(1) : I18n.settings.frameRateFollow,
+                Number(page.backend.metrics.effectiveTargetFrameRate || page.values.targetFrameRate).toFixed(1),
+                I18n.settings.frameRateReasons[page.backend.metrics.targetFrameRateReason || "none"],
+                page.backend.metrics.admissionLimit || page.values.maxActive,
+                Number(page.backend.metrics.presentedPerSecond || 0).toFixed(1),
+                Number(page.backend.metrics.presentedP95Ms || 0).toFixed(1),
+                I18n.settings.adaptiveStates[page.backend.metrics.adaptiveFrameRateState || "disabled"])
+        }
+    }
+
+    SettingsSection {
         objectName: "cacheGroup"
         title: I18n.settings.cacheSection; Layout.fillWidth: true
         SettingsRow {

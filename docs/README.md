@@ -42,6 +42,9 @@ docs/
 
 - **[开发与构建脚本手册 (SCRIPTS.md)](SCRIPTS.md)**：包含全量 24 个 PowerShell 脚本参数详解、环境准备、静态编译、一键发布与基准测试端到端工作流。
 ### 2.4 测试基准与交付验证
+
+- **[弹幕帧率控制 (FRAME_RATE_CONTROL.md)](FRAME_RATE_CONTROL.md)**：帧率上限、独立目标、自适应入场额度、诊断指标及离线实机验证脚本。
+- **[帧率控制优化复测 (FRAME_RATE_OPTIMIZATION_20261014.md)](FRAME_RATE_OPTIMIZATION_20261014.md)**：165 Hz / Debug 限帧、CPU 前后对照、文字回退边界及排除的性能回归方案。
 - **[重构交付状态 (FRAMEWORK_STATUS.md)](FRAMEWORK_STATUS.md)**：记录从基线至今所有特性的演进、测试用例覆盖（CTest 13/13）、真机测试数据与待人工验收边界。
 - **[自适应文字预算性能报告 (TEXTURE_BUDGET_PERFORMANCE_20261008.md)](TEXTURE_BUDGET_PERFORMANCE_20261008.md)**：对比固定 64 MiB 与自适应 512 MiB 预算在 165Hz/2K/4K 高 DPI 下的性能表现。
 - **[文字渲染优化记录 (RENDERER_PERFORMANCE_20261007.md)](RENDERER_PERFORMANCE_20261007.md)**：QSGTextNode 矢量渲染与文字纹理图集渲染的实测帧率与 CPU 占用对照。

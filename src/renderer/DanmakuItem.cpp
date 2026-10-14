@@ -22,6 +22,8 @@ struct Entry {
     std::shared_ptr<TextTextureCache::Resource> texture;
     TextTextureCache::Description description;
     QRgb color{};
+    double x{}, y{};
+    bool positioned{};
     TextTextureCache::Reason reason{TextTextureCache::Reason::None};
 };
 class Root final : public QSGNode {
@@ -125,14 +127,14 @@ DanmakuItem::DanmakuItem(QQuickItem* parent) : QQuickItem(parent) {
         }
     });
 }
-void DanmakuItem::clearContent() {
+void DanmakuItem::clearContent(bool requestUpdate) {
     std::vector<Visual>().swap(visuals_);
     std::vector<Visual>().swap(slotVisuals_);
     std::vector<std::size_t>().swap(previousSlots_);
     layouts_.clear();
     hits_ = misses_ = 0;
     ++generation_;
-    update();
+    if (requestUpdate) update();
 }
 bool DanmakuItem::configure(const QVariantMap& s) {
     QFont font(s["fontFamily"].toString());
@@ -188,7 +190,7 @@ danmaku::Engine::Extent DanmakuItem::measure(const danmaku::Item& item) {
 double DanmakuItem::trackHeight() const {
     return QFontMetricsF(font_).height() * (1 + spacing_) + stroke_ * 2;
 }
-void DanmakuItem::present(const danmaku::Engine& engine) {
+void DanmakuItem::present(const danmaku::Engine& engine, bool requestUpdate) {
     const auto& active = engine.activeSlots();
     // Retire references before reusing slots; only live slots enter the scene snapshot.
     for (auto slot : previousSlots_)
@@ -196,8 +198,8 @@ void DanmakuItem::present(const danmaku::Engine& engine) {
             slotVisuals_[slot] = {};
     slotVisuals_.resize(active.size());
     previousSlots_ = engine.activeIndices();
-    visuals_.clear();
     visuals_.reserve(engine.activeCount());
+    std::size_t count = 0;
     for (const auto i : engine.activeIndices()) {
         const auto& a = active[i];
         auto& visual = slotVisuals_[i];
@@ -212,11 +214,26 @@ void DanmakuItem::present(const danmaku::Engine& engine) {
             visual.x = a.x;
             visual.y = a.y;
         }
-        visuals_.push_back(visual);
+        if (count >= visuals_.size()) visuals_.push_back(visual);
+        else {
+            auto& snapshot = visuals_[count];
+            if (snapshot.id == visual.id && snapshot.layout == visual.layout && snapshot.color == visual.color) {
+                snapshot.x = visual.x;
+                snapshot.y = visual.y;
+            } else snapshot = visual;
+        }
+        ++count;
     }
-    update();
+    visuals_.resize(count);
+    if (requestUpdate) update();
 }
 QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
+    QElapsedTimer work;
+    work.start();
+    const auto account = qScopeGuard([this, &work] {
+        sceneUpdateNs_.fetch_add(static_cast<quint64>(work.nsecsElapsed()));
+        sceneUpdates_.fetch_add(1);
+    });
     auto* root = static_cast<Root*>(old);
     if (visuals_.empty()) {
         delete root;
@@ -301,7 +318,12 @@ QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
         }
         root->textures.retireUnused();
     }
-    root->textures.beginFrame();
+    root->textures.beginFrame(root->budgetTime.nsecsElapsed(), preparationPeriodNs_);
+    // Keep the established transform updates while text nodes are being
+    // converted or retained as fallbacks. Their batching cost can rise sharply
+    // when conversions invalidate a large, otherwise static text batch.
+    const bool stableImages = imageBackend_ && std::all_of(root->entries.begin(), root->entries.end(),
+        [](const auto& pair) { return static_cast<bool>(pair.second.texture); });
     int images = 0, capacity = 0, preparation = 0, size = 0, allocation = 0;
     for (const auto& visual : visuals_) {
         if (!visual.id) continue;
@@ -314,9 +336,16 @@ QSGNode* DanmakuItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
         }
         if (!entry.node->firstChild()) addText(entry, window(), stroke_);
         entry.frame = root->frame;
-        QMatrix4x4 matrix;
-        matrix.translate(static_cast<float>(visual.x), static_cast<float>(visual.y));
-        entry.node->setMatrix(matrix);
+        // Fixed comments need no transform uploads on steady frames. Qt marks
+        // a node dirty even when setMatrix receives its existing matrix.
+        if (!stableImages || !entry.positioned || entry.x != visual.x || entry.y != visual.y) {
+            QMatrix4x4 matrix;
+            matrix.translate(static_cast<float>(visual.x), static_cast<float>(visual.y));
+            entry.node->setMatrix(matrix);
+            entry.x = visual.x;
+            entry.y = visual.y;
+            entry.positioned = true;
+        }
         if (entry.texture) ++images;
         else if (imageBackend_) {
             switch (entry.reason) {

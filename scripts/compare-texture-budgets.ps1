@@ -34,6 +34,7 @@ Invoke-ProjectEnvironment {
                 New-Item -ItemType Directory -Force $data | Out-Null
                 $settings=Get-Content (Get-ProjectPath 'docs/settings.example.ini') -Raw -Encoding utf8
                 $settings=$settings.Replace('debug=false','debug=true').Replace('logToFile=true','logToFile=false').
+                    Replace('frameRateLimit=60','frameRateLimit=0').
                     Replace('speed=180','speed=30').
                     Replace('fixedSeconds=5','fixedSeconds=30').Replace('maxTracks=18','maxTracks=60').
                     Replace('overlap=false','overlap=true').Replace('maxActive=500',"maxActive=$Count")

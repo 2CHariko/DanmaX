@@ -9,6 +9,7 @@
 #include <cmath>
 #include <memory>
 #include "renderer/TextureBudget.h"
+#include "renderer/TexturePreparationBudget.h"
 
 // Render-thread-only resources. Callers destroy borrowing scene nodes before this cache.
 class TextTextureCache {
@@ -45,23 +46,20 @@ class TextTextureCache {
         return result;
     }
     void setBudget(qint64 bytes) { budget_ = bytes; }
-    void beginFrame() {
-        uploaded_ = 0;
-        preparationNs_ = 0;
-    }
+    void beginFrame(qint64 now, double periodNs) { preparationBudget_.beginFrame(now, periodNs); }
     Result acquire(QQuickWindow* window, const QTextLayout& layout, const Description& description,
                    QRgb color, int stroke, qreal dpr) {
         if (auto found = entries_.value(description.key)) return {found};
         if (description.ineligible != Reason::None) return {{}, description.ineligible};
         const auto bytes = description.bytes;
         if (bytes > budget_ - bytes_) return {{}, Reason::Capacity};
-        if (bytes > maxUploadBytes - uploaded_ || preparationNs_ >= 2 * 1000 * 1000)
+        if (!preparationBudget_.permits(bytes))
             return {{}, Reason::Preparation};
         // Charge only raster/texture preparation. Counting unrelated scene updates
         // here would starve later comments on slower renderers or Debug builds.
         QElapsedTimer preparation;
         preparation.start();
-        const auto account = qScopeGuard([&] { preparationNs_ += preparation.nsecsElapsed(); });
+        const auto account = qScopeGuard([&] { preparationBudget_.chargeTime(preparation.nsecsElapsed()); });
         QImage image(description.pixels, QImage::Format_ARGB32_Premultiplied);
         if (image.isNull()) return {{}, Reason::Allocation};
         image.setDevicePixelRatio(dpr);
@@ -98,7 +96,7 @@ class TextTextureCache {
         result->bytes = bytes;
         entries_.insert(description.key, result);
         bytes_ += bytes;
-        uploaded_ += bytes;
+        preparationBudget_.chargeUpload(bytes);
         return {result};
     }
     void retireUnused() {
@@ -112,7 +110,7 @@ class TextTextureCache {
     qint64 bytes() const { return bytes_; }
   private:
     QHash<QString, std::shared_ptr<Resource>> entries_;
-    qint64 bytes_{}, uploaded_{};
+    qint64 bytes_{};
     qint64 budget_{64 * TextureBudget::MiB};
-    qint64 preparationNs_{};
+    TexturePreparationBudget preparationBudget_;
 };

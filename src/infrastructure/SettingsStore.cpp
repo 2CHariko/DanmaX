@@ -48,6 +48,12 @@ const QList<Setting>& schema() {
          "轨道额外行距比例，范围：0～2，默认：0.2（20%）。\n该值是比例，不是像素数；值越大，同样高度内的可用轨道越少。"},
         {"Danmaku", "overlap", false,
          "轨道已满时是否允许重叠：true=允许，false=禁止，默认：false。\n无论是否开启都优先使用安全轨道；禁止重叠且无可用位置时丢弃新弹幕。"},
+        {"Rendering", "frameRateLimit", 60,
+         "弹幕连续动画帧率上限：0=跟随显示器，或整数 15～1000。默认：60。\n必要的单次刷新不受此上限阻挡；实际呈现受显示器、系统调度和负载限制。"},
+        {"Rendering", "adaptiveFrameRateEnabled", false,
+         "自适应目标帧率：默认 false。开启后性能不足时只减少新弹幕入场，保持文字清晰度。\n已在屏弹幕自然退场；临时入场额度最低为最大在屏数量的 25%，不保存到配置。"},
+        {"Rendering", "targetFrameRate", 60,
+         "自适应目标帧率，整数 15～1000，默认：60。\n实际目标受上限和显示器能力约束，保留本字段原值；不保证所有硬件和场景达标。"},
         {"Rendering", "textureBudgetAuto", true,
          "文字图片预算模式：true=按当前活动弹幕需求自动调整，false=手动固定预算。默认：true。\n自动从最多 64 MiB 起步，预留 25% 余量并分档增长，持续低需求 10 秒后收缩；不查询系统可用显存。"},
         {"Rendering", "textureBudgetMiB", 512,
@@ -91,6 +97,7 @@ QVariant checked(const QString& key, const QVariant& value, const QVariant& fall
         return servers;
     }
     static const QMap<QString, QPair<double, double>> ranges{
+        {"frameRateLimit", {0, 1000}}, {"targetFrameRate", {15, 1000}},
         {"fontSize", {10, 72}},   {"strokeWidth", {0, 6}},   {"opacity", {0.05, 1}},
         {"speed", {30, 1500}},    {"fixedSeconds", {1, 30}}, {"maxActive", {50, 5000}},
         {"maxTracks", {1, 60}},   {"lineSpacing", {0, 2}},   {"timeOffset", {-120, 120}},
@@ -101,6 +108,7 @@ QVariant checked(const QString& key, const QVariant& value, const QVariant& fall
         const auto r = ranges[key];
         if (!ok || !std::isfinite(n) || n < r.first || n > r.second)
             return {};
+        if (key == "frameRateLimit" && n != 0 && n < 15) return {};
         if (fallback.metaType().id() == QMetaType::Int)
             return std::floor(n) == n ? QVariant(static_cast<int>(n)) : QVariant{};
         return n;

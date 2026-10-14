@@ -1,7 +1,9 @@
 #pragma once
 #include "core/DanmakuEngine.h"
 #include "core/MediaClock.h"
+#include "core/FramePolicy.h"
 #include "application/DanmakuLibrary.h"
+#include "application/FrameFeedback.h"
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
 #include "platform/windows/MediaMonitor.h"
@@ -12,6 +14,7 @@
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QTimer>
+#include <QChronoTimer>
 #include <QWindow>
 #include <thread>
 #include <functional>
@@ -159,7 +162,14 @@ class AppController final : public QObject {
     void onSample(const MediaSample& sample);
 
   private:
-    void tick();
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    void tick(bool frameDriven = false);
+    void requestFrame(bool immediate = false);
+    void updateFrameActivity();
+    void configureFramePolicy();
+    void observeFrame();
+    void publishFramePolicy();
+    void resetFrameFeedback(bool restore = false);
     void configure();
     void applyRendererSettings();
     void discardLoad();
@@ -191,6 +201,26 @@ class AppController final : public QObject {
     ToolbarPointerMonitor toolbarPointer_;
     WindowLayerController windowLayers_;
     QTimer timer_, metricsTimer_;
+    QChronoTimer frameRequestTimer_;
+    danmaku::FramePacer framePacer_;
+    danmaku::AdaptiveFramePolicy adaptiveFrames_;
+    QMetaObject::Connection refreshRateConnection_;
+    bool continuousFrames_{}, framePending_{};
+    bool adaptiveFramesEnabled_{}, nativeFrameRequests_{}, frameIssueQueued_{};
+    quint64 frameRequestGeneration_{}, lastFeedbackLost_{};
+    int softwareFrameLimit_{};
+    qint64 frameRequestedAt_{}, frameWaitStarted_{}, lastPresentedAt_{};
+    qint64 frameRequestLeadNs_{};
+    double feedbackObservedAt_{};
+    double frameWaitMs_{}, effectiveLimit_{}, effectiveTarget_{60};
+    qreal framePolicyDpr_{};
+    QString targetLimitReason_{"none"};
+    std::vector<double> presentedIntervals_;
+    std::shared_ptr<FrameFeedback> frameFeedback_;
+    std::vector<FrameFeedback::Sample> feedbackSamples_;
+    quint64 frameCountBase_{};
+    QVariantList frameRateSamples_;
+    quint64 lastSceneUpdateNs_{}, lastSceneUpdates_{};
     QElapsedTimer frameTime_, sampleTime_, foregroundTime_, metricsTime_;
     std::jthread loader_;
     std::shared_ptr<XmlResult> pendingLoad_;

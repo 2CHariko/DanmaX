@@ -1,11 +1,13 @@
 #include "application/AppController.h"
 #include "infrastructure/XmlLoader.h"
 #include <QDir>
+#include <QEvent>
 #include <QFontDatabase>
 #include <QGuiApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QQuickWindow>
+#include <QSGRendererInterface>
 #include <QSaveFile>
 #include <QScreen>
 #include <QScopedValueRollback>
@@ -35,8 +37,8 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     connect(&windowLayers_, &WindowLayerController::invalidated, this, [this] { updatePresentationVisibility(true); });
     connect(&windowLayers_, &WindowLayerController::operationFailed, this,
             [this](const QString& message) { logs_.append("WARN", message); });
-    file_ = settings_.values()["lastFile"].toString();
-    library_.setServers(settings_.values()["danmakuServers"].toStringList());
+    file_ = settings_.values().value("lastFile").toString();
+    library_.setServers(settings_.values().value("danmakuServers").toStringList());
     connect(&library_, &DanmakuLibrary::sourceLoadStarted, this, [this] {
         discardLoad();
         onlineLoadGeneration_ = loadGeneration_;
@@ -77,19 +79,27 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     });
     timer_.setTimerType(Qt::PreciseTimer);
     monotonicTime_.start();
+    frameRequestTimer_.setSingleShot(true);
+    frameRequestTimer_.setTimerType(Qt::PreciseTimer);
+    feedbackSamples_.reserve(FrameFeedback::capacity);
+    presentedIntervals_.reserve(FrameFeedback::capacity);
+    connect(&frameRequestTimer_, &QChronoTimer::timeout, this, [this] { requestFrame(); });
     timer_.setInterval(33);
     // Hidden/paused windows have no continuous frame callbacks. Keep media and
     // foreground tracking alive without driving a second visible animation loop.
     connect(&timer_, &QTimer::timeout, this, [this] {
         updatePresentationVisibility();
-        if (!overlay_ || !overlay_->isVisible() || !overlay_->isExposed() || !visible_ || !playing_) {
+        updateFrameActivity();
+        observeFrame();
+        if (!continuousFrames_) {
             ++maintenanceTicks_;
             tick();
         } else if (frameTime_.isValid() && frameTime_.elapsed() > 100) {
             // Recovery after exposure/device scheduling changes: request a frame,
             // never advance a second animation clock from this timer.
-            if (auto* quick = qobject_cast<QQuickWindow*>(overlay_.data()))
-                quick->update();
+            if (framePending_ && monotonicTime_.nsecsElapsed() - frameRequestedAt_ > 250000000)
+                framePending_ = false;
+            requestFrame();
         }
     });
     metricsTimer_.setInterval(1000);
@@ -109,6 +119,192 @@ AppController::~AppController() {
 QString AppController::localPath(const QString& path) {
     const QUrl url(path);
     return url.isLocalFile() ? url.toLocalFile() : path;
+}
+void AppController::requestFrame(bool immediate) {
+    auto* quick = qobject_cast<QQuickWindow*>(overlay_.data());
+    if (!quick || !quick->isVisible() || frameIssueQueued_ ||
+        (!immediate && (!continuousFrames_ || framePending_))) return;
+    const auto now = monotonicTime_.nsecsElapsed();
+    const auto wait = immediate ? 0 : framePacer_.requestWait(now, frameRequestLeadNs_);
+    if (wait > 0) {
+        if (!frameRequestTimer_.isActive()) {
+            if (!frameWaitStarted_) frameWaitStarted_ = now;
+            frameRequestTimer_.setInterval(std::chrono::nanoseconds(wait));
+            frameRequestTimer_.start();
+        }
+        return;
+    }
+    frameRequestTimer_.stop();
+    if (frameWaitStarted_) frameWaitMs_ += (now - frameWaitStarted_) * 1e-6;
+    frameWaitStarted_ = 0;
+    const auto issue = [this, generation = frameRequestGeneration_, immediate] {
+        if (generation != frameRequestGeneration_) return;
+        frameIssueQueued_ = false;
+        auto* window = qobject_cast<QQuickWindow*>(overlay_.data());
+        if (!window || !window->isVisible() || (!immediate && !continuousFrames_)) return;
+        framePending_ = true;
+        frameRequestedAt_ = monotonicTime_.nsecsElapsed();
+        if (renderer_) renderer_->update();
+        window->update();
+    };
+    if (nativeFrameRequests_) {
+        // Leave the current platform UpdateRequest before requesting another.
+        // Qt's initial timer-to-DXGI handover must finish consuming this event.
+        frameIssueQueued_ = true;
+        QMetaObject::invokeMethod(this, issue, Qt::QueuedConnection);
+    } else issue();
+}
+bool AppController::eventFilter(QObject* watched, QEvent* event) {
+    const bool requested = framePending_;
+    if (watched == overlay_ && event->type() == QEvent::UpdateRequest) {
+        const auto now = monotonicTime_.nsecsElapsed();
+        if (nativeFrameRequests_ && framePending_ && frameRequestedAt_ > 0) {
+            // Measured request delivery latency, rather than screen refresh rate
+            // as a timer clock. Bound the prediction after exposure or a stall.
+            const auto delivery = std::clamp<qint64>(now - frameRequestedAt_, 0, 20000000);
+            frameRequestLeadNs_ = (frameRequestLeadNs_ * 3 + delivery) / 4;
+        }
+        // Pending means a platform request, not a frame awaiting presentation.
+        // In particular, rejecting an early event must not strand the scheduler.
+        framePending_ = false;
+    }
+    if (watched == overlay_ && event->type() == QEvent::UpdateRequest && running_ && visible_ &&
+        overlay_->isVisible() && overlay_->isExposed() && !snapshotDirty_) {
+        // Qt's shared animation driver can request this window because another
+        // window is animating. Gate those public update events as well as ours.
+        if (!requested && (!playing_ || nativeFrameRequests_)) {
+            requestFrame();
+            return true;
+        }
+        if (playing_ && !framePacer_.due(monotonicTime_.nsecsElapsed())) {
+            requestFrame();
+            return true;
+        }
+        if (!nativeFrameRequests_ && renderer_) renderer_->update();
+    }
+    if (watched == overlay_ && event->type() == QEvent::UpdateRequest && frameWaitStarted_) {
+        frameWaitMs_ += (monotonicTime_.nsecsElapsed() - frameWaitStarted_) * 1e-6;
+        frameWaitStarted_ = 0;
+    }
+    return QObject::eventFilter(watched, event);
+}
+void AppController::updateFrameActivity() {
+    const bool active = running_ && playing_ && visible_ && overlay_ &&
+                        overlay_->isVisible() && overlay_->isExposed();
+    if (active == continuousFrames_) return;
+    continuousFrames_ = active;
+    frameRequestTimer_.stop();
+    const auto now = monotonicTime_.nsecsElapsed();
+    if (frameWaitStarted_) frameWaitMs_ += (now - frameWaitStarted_) * 1e-6;
+    frameWaitStarted_ = 0;
+    framePending_ = false;
+    frameIssueQueued_ = false;
+    ++frameRequestGeneration_;
+    framePacer_.reset(now, softwareFrameLimit_);
+    resetFrameFeedback();
+    if (active) requestFrame();
+}
+void AppController::configureFramePolicy() {
+    const auto s = settings_.values();
+    const int cap = s["frameRateLimit"].toInt();
+    framePolicyDpr_ = overlay_ ? overlay_->devicePixelRatio() : 0;
+    const double refresh = overlay_ && overlay_->screen() ? overlay_->screen()->refreshRate() : 0;
+    const bool known = std::isfinite(refresh) && refresh > 0;
+    nativeFrameRequests_ = overlay_ && qGuiApp->platformName() == QStringLiteral("windows") &&
+        QQuickWindow::graphicsApi() != QSGRendererInterface::Software;
+    // Do not software-throttle a cadence already constrained by native vsync.
+    softwareFrameLimit_ = nativeFrameRequests_ && known && cap >= refresh ? 0 : cap;
+    adaptiveFramesEnabled_ = s.value("adaptiveFrameRateEnabled").toBool();
+    effectiveLimit_ = cap > 0 ? (known ? std::min<double>(cap, refresh) : cap) : (known ? refresh : 0);
+    if (renderer_) renderer_->setFrameRateReference(effectiveLimit_);
+    effectiveTarget_ = s["targetFrameRate"].toDouble();
+    targetLimitReason_ = known ? "none" : "unknown";
+    if (effectiveLimit_ > 0 && effectiveTarget_ > effectiveLimit_) {
+        effectiveTarget_ = effectiveLimit_;
+        targetLimitReason_ = known && (!cap || refresh <= cap) ? "screen" : "cap";
+    }
+    const auto now = monotonicTime_.nsecsElapsed();
+    adaptiveFrames_.configure(s.value("maxActive").toInt(), effectiveTarget_, adaptiveFramesEnabled_, now * 1e-9);
+    engine_.setAdmissionLimit(adaptiveFramesEnabled_ ? adaptiveFrames_.limit() : 5000);
+    frameRequestTimer_.stop();
+    if (frameWaitStarted_) frameWaitMs_ += (now - frameWaitStarted_) * 1e-6;
+    frameWaitStarted_ = 0;
+    frameRequestLeadNs_ = 0;
+    framePending_ = frameIssueQueued_ = false;
+    ++frameRequestGeneration_;
+    framePacer_.reset(now, softwareFrameLimit_);
+    if (frameFeedback_) {
+        lastFeedbackLost_ = frameFeedback_->lost();
+        frameFeedback_->setActivity(continuousFrames_, continuousFrames_ && danmakuVisible_ && engine_.activeCount() > 0);
+        frameFeedback_->discard();
+    }
+    feedbackObservedAt_ = now * 1e-9;
+    presentedIntervals_.clear();
+    lastPresentedAt_ = 0;
+    observeFrame();
+    publishFramePolicy();
+    requestFrame(running_ && !playing_);
+}
+void AppController::resetFrameFeedback(bool restore) {
+    feedbackObservedAt_ = monotonicTime_.nsecsElapsed() * 1e-9;
+    adaptiveFrames_.reset(feedbackObservedAt_, restore);
+    engine_.setAdmissionLimit(adaptiveFramesEnabled_ ? adaptiveFrames_.limit() : 5000);
+    if (frameFeedback_) {
+        lastFeedbackLost_ = frameFeedback_->lost();
+        frameFeedback_->setActivity(continuousFrames_, continuousFrames_ && danmakuVisible_ && engine_.activeCount() > 0);
+        frameFeedback_->discard();
+    }
+    presentedIntervals_.clear();
+    lastPresentedAt_ = 0;
+}
+void AppController::observeFrame() {
+    if (overlay_ && overlay_->devicePixelRatio() != framePolicyDpr_) {
+        configureFramePolicy();
+        return;
+    }
+    const auto oldState = adaptiveFrames_.state();
+    const int oldLimit = adaptiveFrames_.limit();
+    const bool eligible = continuousFrames_ && danmakuVisible_ && engine_.activeCount() > 0;
+    if (frameFeedback_) {
+        if (lastFeedbackLost_ != frameFeedback_->lost()) {
+            // A blocked GUI lost samples. Restart feedback instead of treating
+            // an incomplete presentation window as evidence for reduction.
+            resetFrameFeedback();
+        }
+        frameFeedback_->take(feedbackSamples_);
+        for (const auto& sample : feedbackSamples_) {
+            if ((sample.flags & 1u) && continuousFrames_) {
+                if (lastPresentedAt_ > 0 && presentedIntervals_.size() < FrameFeedback::capacity)
+                    presentedIntervals_.push_back((sample.at - lastPresentedAt_) * 1e-6);
+                lastPresentedAt_ = sample.at;
+            } else lastPresentedAt_ = 0;
+            if (adaptiveFramesEnabled_) {
+                feedbackObservedAt_ = std::max(feedbackObservedAt_, sample.at * 1e-9);
+                adaptiveFrames_.observe(feedbackObservedAt_, eligible && (sample.flags & 2u),
+                                        engine_.activeCount(), true);
+            }
+        }
+        frameFeedback_->setActivity(continuousFrames_, eligible);
+    }
+    if (adaptiveFramesEnabled_) {
+        feedbackObservedAt_ = monotonicTime_.nsecsElapsed() * 1e-9;
+        adaptiveFrames_.observe(feedbackObservedAt_, eligible, engine_.activeCount());
+        if (oldLimit != adaptiveFrames_.limit()) engine_.setAdmissionLimit(adaptiveFrames_.limit());
+    }
+    if (oldState != adaptiveFrames_.state() || oldLimit != adaptiveFrames_.limit()) {
+        publishFramePolicy();
+        emit metricsChanged();
+    }
+}
+void AppController::publishFramePolicy() {
+    static const char* states[]{"disabled", "inactive", "warming", "monitoring", "draining", "reduced", "unmet"};
+    metrics_["effectiveFrameRateLimit"] = effectiveLimit_;
+    metrics_["effectiveTargetFrameRate"] = effectiveTarget_;
+    metrics_["targetFrameRateReason"] = targetLimitReason_;
+    metrics_["admissionLimit"] = adaptiveFrames_.limit();
+    metrics_["admissionFloor"] = adaptiveFrames_.floor();
+    metrics_["adaptiveWindowHz"] = adaptiveFrames_.frequency();
+    metrics_["adaptiveFrameRateState"] = QString::fromLatin1(states[static_cast<int>(adaptiveFrames_.state())]);
 }
 QStringList AppController::screens() const {
     QStringList names;
@@ -137,6 +333,15 @@ void AppController::refreshFontFamilies(bool notify) {
     if (notify) emit fontFamiliesChanged();
 }
 void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar, QObject* mainWindow) {
+    if (overlay_) overlay_->removeEventFilter(this);
+    if (overlay_) disconnect(overlay_, nullptr, this, nullptr);
+    disconnect(refreshRateConnection_);
+    frameRequestTimer_.stop();
+    framePending_ = continuousFrames_ = false;
+    frameIssueQueued_ = false;
+    ++frameRequestGeneration_;
+    if (frameFeedback_) frameCountBase_ += frameFeedback_->total();
+    frameFeedback_ = std::make_shared<FrameFeedback>();
     if (mainWindow_) disconnect(mainWindow_, nullptr, this, nullptr);
     renderer_ = qobject_cast<DanmakuItem*>(renderer);
     overlay_ = qobject_cast<QWindow*>(overlay);
@@ -146,6 +351,7 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
         fail(QStringLiteral("弹幕窗口初始化失败"));
         return;
     }
+    overlay_->installEventFilter(this);
     toolbarInputFilter_.attach(toolbarWindow_);
     toolbarPointer_.attach(overlay_, toolbarWindow_);
     windowLayers_.attach(mainWindow_, overlay_, toolbarWindow_);
@@ -157,8 +363,17 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
     }
     connect(overlay_, &QWindow::widthChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::heightChanged, this, [this] { configure(); });
+    const auto screenChanged = [this](QScreen* screen) {
+        disconnect(refreshRateConnection_);
+        if (screen) refreshRateConnection_ = connect(screen, &QScreen::refreshRateChanged, this,
+            [this] { configureFramePolicy(); });
+        configureFramePolicy();
+    };
+    connect(overlay_, &QWindow::screenChanged, this, screenChanged);
+    screenChanged(overlay_->screen());
+    connect(overlay_, &QWindow::visibleChanged, this, [this] { updateFrameActivity(); });
     connect(overlay_, &QWindow::visibleChanged, this, [this](bool shown) {
-        windowLayers_.reconcile(settings_.values()["onTop"].toInt(), panelForeground_, desiredOverlayAllowed_);
+        windowLayers_.reconcile(settings_.values().value("onTop").toInt(), panelForeground_, desiredOverlayAllowed_);
         toolbarPointer_.setEnabled(toolbarAllowed_ && shown);
         snapshotDirty_ = true;
         if (shown && running_ && visible_ && renderer_) {
@@ -169,19 +384,26 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
     if (auto* quick = qobject_cast<QQuickWindow*>(overlay)) {
         connect(quick, &QQuickWindow::afterAnimating, this, [this, quick] {
             ++animationCallbacks_;
-            if (running_ && visible_ && quick->isVisible() && quick->isExposed() && (playing_ || snapshotDirty_)) {
+            updateFrameActivity();
+            const auto now = monotonicTime_.nsecsElapsed();
+            if (running_ && visible_ && quick->isVisible() && quick->isExposed() &&
+                ((playing_ && framePacer_.due(now)) || snapshotDirty_)) {
+                framePending_ = false;
+                framePacer_.started(now);
                 if (playing_) ++frameTicks_;
-                tick();
+                tick(true);
+                updateFrameActivity();
+                observeFrame();
+                // Prime the next request while the current frame is preparing.
+                // A queued presentation callback is never on the pacing path.
+                requestFrame();
             }
         });
+        const auto feedback = frameFeedback_;
+        const auto clock = monotonicTime_;
         connect(
-            quick, &QQuickWindow::frameSwapped, this, [this, quick] {
-                ++renderedFrames_;
-                // Item::update during afterAnimating can be consumed by the current
-                // sync. Request the NEXT frame after presentation, on the GUI thread.
-                if (running_ && playing_ && visible_ && quick->isExposed())
-                    quick->update();
-            }, Qt::QueuedConnection);
+            quick, &QQuickWindow::frameSwapped, this,
+            [feedback, clock] { feedback->record(clock.nsecsElapsed()); }, Qt::DirectConnection);
     }
     configure();
 }
@@ -196,6 +418,11 @@ void AppController::clearError() {
 }
 void AppController::configure() {
     const auto s = settings_.values();
+    if (lastSettings_.isEmpty() || lastSettings_.value("frameRateLimit") != s["frameRateLimit"] ||
+        lastSettings_.value("adaptiveFrameRateEnabled") != s["adaptiveFrameRateEnabled"] ||
+        lastSettings_.value("targetFrameRate") != s["targetFrameRate"] ||
+        lastSettings_.value("maxActive") != s["maxActive"])
+        configureFramePolicy();
     library_.setServers(s["danmakuServers"].toStringList());
     logs_.configure(s["logToFile"].toBool(), s["logLevel"].toString());
     if (lastSettings_.value("targetSession") != s["targetSession"]) {
@@ -241,10 +468,13 @@ void AppController::configure() {
             });
         }
     }
+    const bool hudChanged = lastSettings_.value("debug") != s.value("debug") ||
+                            lastSettings_.value("debugPosition") != s.value("debugPosition");
     lastSettings_ = s;
     updateWindow();
     updatePresentationVisibility(true, false);
     emit stateChanged();
+    if (hudChanged) requestFrame(true);
 }
 bool AppController::updatePresentationVisibility(bool forceForeground, bool notify) {
     if (presentationUpdating_) return false;
@@ -255,14 +485,14 @@ bool AppController::updatePresentationVisibility(bool forceForeground, bool noti
     // Leaving the panel must not reuse its preceding player foreground sample.
     forceForeground = forceForeground || (panelForeground_ && !panelForeground);
     panelForeground_ = panelForeground;
-    const bool checkForeground = !manual_ && settings_.values()["foregroundOnly"].toBool();
+    const bool checkForeground = !manual_ && settings_.values().value("foregroundOnly").toBool();
     if (running_ && checkForeground &&
         (forceForeground || !foregroundTime_.isValid() || foregroundTime_.elapsed() >= 250)) {
-        foreground_ = foregroundQuery_(settings_.values()["targetSession"].toString());
+        foreground_ = foregroundQuery_(settings_.values().value("targetSession").toString());
         foregroundTime_.start();
     }
     desiredOverlayAllowed_ = running_ && (!checkForeground || foreground_ || panelForeground_);
-    const bool layerReady = windowLayers_.reconcile(settings_.values()["onTop"].toInt(),
+    const bool layerReady = windowLayers_.reconcile(settings_.values().value("onTop").toInt(),
                                                    panelForeground_, desiredOverlayAllowed_);
     const bool show = desiredOverlayAllowed_ && (!panelForeground_ || layerReady);
     const bool toolbarAllowed = show;
@@ -270,6 +500,7 @@ bool AppController::updatePresentationVisibility(bool forceForeground, bool noti
     visible_ = show;
     toolbarAllowed_ = toolbarAllowed;
     if (changed) snapshotDirty_ = true;
+    updateFrameActivity();
     toolbarPointer_.setEnabled(toolbarAllowed_ && overlay_ && overlay_->isVisible());
     if (changed && notify) emit stateChanged();
     return changed;
@@ -277,6 +508,7 @@ bool AppController::updatePresentationVisibility(bool forceForeground, bool noti
 void AppController::applyRendererSettings() {
     rendererSettingsPending_ = false;
     if (!renderer_) return;
+    configureFramePolicy();
     const auto s = settings_.values();
     const bool measure = renderer_->configure(s);
     const danmaku::Options o{s["speed"].toDouble(), s["fixedSeconds"].toDouble(), renderer_->trackHeight(),
@@ -293,6 +525,8 @@ void AppController::applyRendererSettings() {
                                     : danmaku::Engine::Measure{});
     // Present even while paused; appearance edits must not depend on playback resuming.
     renderer_->present(engine_);
+    snapshotDirty_ = true;
+    if (!playing_) requestFrame(true);
     appliedRendererSettings_ = s;
     if (overlay_) {
         appliedRendererSettings_["width"] = overlay_->width();
@@ -417,7 +651,7 @@ void AppController::start(bool manual) {
     mediaClock_ = {};
     syncConnected_ = false;
     lastSampleObservedAt_ = 0;
-    mediaGeneration_ = monitor_.select(settings_.values()["targetSession"].toString(), true);
+    mediaGeneration_ = monitor_.select(settings_.values().value("targetSession").toString(), true);
     awaitingInitialExposure_ = manual && overlay_ && !overlay_->isExposed();
     if (auto* quick = qobject_cast<QQuickWindow*>(overlay_.data())) {
         quick->setPersistentSceneGraph(true);
@@ -434,6 +668,8 @@ void AppController::start(bool manual) {
     updatePresentationVisibility(true, false);
     setPlaybackState(manual ? Playing : WaitingForPlayer);
     frameTime_.start();
+    resetFrameFeedback(true);
+    updateFrameActivity();
     timer_.start();
     emit stateChanged();
     emit metricsChanged();
@@ -467,8 +703,11 @@ void AppController::commitItems(std::vector<danmaku::Item> items, const QString&
 void AppController::resetPlayback(bool unloadSource) {
     timer_.stop();
     running_ = playing_ = visible_ = demo_ = false;
+    updateFrameActivity();
+    resetFrameFeedback(true);
+    frameRateSamples_.clear();
     toolbarAllowed_ = desiredOverlayAllowed_ = false;
-    windowLayers_.reconcile(settings_.values()["onTop"].toInt(), false, false);
+    windowLayers_.reconcile(settings_.values().value("onTop").toInt(), false, false);
     toolbarPointer_.setEnabled(false);
     awaitingInitialExposure_ = false;
     snapshotDirty_ = true;
@@ -489,7 +728,7 @@ void AppController::resetPlayback(bool unloadSource) {
     mediaClock_ = {};
     syncConnected_ = false;
     lastSampleObservedAt_ = 0;
-    mediaGeneration_ = monitor_.select(settings_.values()["targetSession"].toString(), true);
+    mediaGeneration_ = monitor_.select(settings_.values().value("targetSession").toString(), true);
     mediaIdentity_.clear();
     mediaTitle_.clear();
     position_ = samplePosition_ = 0;
@@ -515,7 +754,8 @@ void AppController::togglePause() {
         resetDanmakuTimeline();
     }
     playing_ = !playing_;
-    if (playing_ && renderer_) renderer_->update();
+    updateFrameActivity();
+    requestFrame(true);
     frameTime_.restart();
     setPlaybackState(playing_ ? Playing : Paused);
     emit stateChanged();
@@ -550,9 +790,10 @@ void AppController::setPlaybackState(PlaybackState state) {
     }
 }
 double AppController::danmakuPosition() const {
-    return manual_ ? position_ : std::max(0.0, position_ + settings_.values()["timeOffset"].toDouble());
+    return manual_ ? position_ : std::max(0.0, position_ + settings_.values().value("timeOffset").toDouble());
 }
 void AppController::resetDanmakuTimeline() {
+    resetFrameFeedback(true);
     engine_.seek(danmakuPosition());
     mediaClock_.takeMotion();
     snapshotDirty_ = true;
@@ -568,7 +809,7 @@ void AppController::exportLogs(const QString& path) {
 }
 void AppController::onSample(const MediaSample& s) {
     if (!running_ || manual_ || s.generation != mediaGeneration_ ||
-        s.id != settings_.values()["targetSession"].toString() ||
+        s.id != settings_.values().value("targetSession").toString() ||
         !std::isfinite(s.observedAt) || s.observedAt <= lastSampleObservedAt_)
         return;
     const double age = MediaMonitor::monotonicSeconds() - s.observedAt;
@@ -614,13 +855,14 @@ void AppController::onSample(const MediaSample& s) {
     playing_ = samplePlaying;
     syncConnected_ = true;
     if (reset) resetDanmakuTimeline();
-    if (playing_ && renderer_) renderer_->update();
+    updateFrameActivity();
+    if (playing_) requestFrame();
     sampleTime_.start();
     setPlaybackState(stopped ? PlayerStopped : playing_ ? Playing : Paused);
     emit stateChanged();
     emit metricsChanged();
 }
-void AppController::tick() {
+void AppController::tick(bool frameDriven) {
     if (!running_ || !renderer_)
         return;
     const bool visibilityChanged = updatePresentationVisibility();
@@ -670,11 +912,12 @@ void AppController::tick() {
     stage.restart();
     if (renderable && (playing_ || visibilityChanged || snapshotDirty_)) {
         if (danmakuVisible_) {
-            renderer_->present(engine_);
+            renderer_->present(engine_, !frameDriven);
         } else {
-            renderer_->clearContent();
+            renderer_->clearContent(!frameDriven);
         }
         snapshotDirty_ = false;
+        if (!frameDriven) requestFrame(true);
     } else if (!renderable) snapshotDirty_ = true;
     snapshotMs_ += stage.nsecsElapsed() * 1e-6;
     if (manual_ && !demo_ && playing_) {
@@ -691,16 +934,30 @@ void AppController::tick() {
     ++frames_;
 }
 void AppController::updateMetrics() {
-    metrics_ = MediaMonitor::processMetrics();
+    metrics_.insert(MediaMonitor::processMetrics());
+    updateFrameActivity();
+    observeFrame();
+    publishFramePolicy();
+    renderedFrames_ = frameCountBase_ + (frameFeedback_ ? frameFeedback_->total() : 0);
+    metrics_["presentationSamplesLost"] = static_cast<qulonglong>(frameFeedback_ ? frameFeedback_->lost() : 0);
     metrics_["active"] = static_cast<int>(engine_.activeCount());
     metrics_["dropped"] = static_cast<qulonglong>(engine_.dropped());
     metrics_["retiredBySettings"] = static_cast<qulonglong>(engine_.retiredBySettings());
     metrics_["suppressedWhileHidden"] = static_cast<qulonglong>(engine_.suppressedWhileHidden());
+    metrics_["adaptiveSkipped"] = static_cast<qulonglong>(engine_.adaptiveSkipped());
     const double interval = metricsTime_.nsecsElapsed() * 1e-9;
     metricsTime_.restart();
     metrics_["updatesPerSecond"] = interval > 0 ? frames_ / interval : 0;
     metrics_["presentedPerSecond"] = interval > 0 ? (renderedFrames_ - lastMetricsRenderedFrames_) / interval : 0;
     lastMetricsRenderedFrames_ = renderedFrames_;
+    std::sort(presentedIntervals_.begin(), presentedIntervals_.end());
+    metrics_["presentedP95Ms"] = presentedIntervals_.empty() ? 0 :
+        presentedIntervals_[static_cast<std::size_t>((presentedIntervals_.size() - 1) * .95)];
+    presentedIntervals_.clear();
+    const auto now = monotonicTime_.nsecsElapsed();
+    if (frameWaitStarted_) { frameWaitMs_ += (now - frameWaitStarted_) * 1e-6; frameWaitStarted_ = now; }
+    metrics_["frameLimitWaitMs"] = frameWaitMs_;
+    frameWaitMs_ = 0;
     metrics_["presentedFrames"] = static_cast<qulonglong>(renderedFrames_);
     metrics_["animationCallbacks"] = static_cast<qulonglong>(animationCallbacks_);
     metrics_["mediaSamples"] = static_cast<qulonglong>(mediaSamples_);
@@ -715,6 +972,12 @@ void AppController::updateMetrics() {
     engineMs_ = snapshotMs_ = 0;
     frames_ = 0;
     if (renderer_) {
+        const auto sceneNs = renderer_->sceneUpdateNs();
+        const auto sceneCount = renderer_->sceneUpdates();
+        metrics_["sceneGraphUpdateMeanMs"] = sceneCount > lastSceneUpdates_ ?
+            (sceneNs - lastSceneUpdateNs_) * 1e-6 / (sceneCount - lastSceneUpdates_) : 0;
+        lastSceneUpdateNs_ = sceneNs;
+        lastSceneUpdates_ = sceneCount;
         metrics_["cacheEntries"] = renderer_->cacheEntries();
         metrics_["cacheHits"] = static_cast<qulonglong>(renderer_->cacheHits());
         metrics_["cacheMisses"] = static_cast<qulonglong>(renderer_->cacheMisses());
@@ -739,7 +1002,18 @@ void AppController::updateMetrics() {
         metrics_["height"] = overlay_->height();
         metrics_["dpr"] = overlay_->devicePixelRatio();
     }
-    windowLayers_.reconcile(settings_.values()["onTop"].toInt(), panelForeground_, desiredOverlayAllowed_, true);
+    if (continuousFrames_ && interval >= .75) {
+        QVariantMap sample;
+        for (const auto& key : {"active", "adaptiveSkipped", "admissionLimit", "adaptiveFrameRateState",
+                               "presentedPerSecond", "presentedP95Ms", "updatesPerSecond", "engineMeanMs",
+                               "snapshotMeanMs", "sceneGraphUpdateMeanMs", "frameLimitWaitMs", "cpuPercent"})
+            sample[key] = metrics_.value(key);
+        sample["position"] = position_;
+        sample["intervalSeconds"] = interval;
+        frameRateSamples_.push_back(sample);
+        if (frameRateSamples_.size() > 360) frameRateSamples_.removeFirst();
+    }
+    windowLayers_.reconcile(settings_.values().value("onTop").toInt(), panelForeground_, desiredOverlayAllowed_, true);
     updatePresentationVisibility();
     emit metricsChanged();
 }
@@ -775,8 +1049,9 @@ void AppController::writeReport(const QString& path) {
     metrics_["status"] = status_;
     metrics_["qtVersion"] = qVersion();
     metrics_["requestedCount"] = total();
+    metrics_["frameRateSamples"] = frameRateSamples_;
     metrics_["metricNote"] =
-        "p95/p99 are GUI tick intervals; presentedPerSecond counts overlay frameSwapped, not optical FPS; CPU normalized across logical processors";
+        "p95/p99 are GUI tick intervals; presentedPerSecond/presentedP95Ms use overlay frameSwapped timestamps recorded on the emitting thread, not optical FPS or GPU time; frameLimitWaitMs is passive pacing wait, sceneGraphUpdateMeanMs measures updatePaintNode CPU work only; CPU normalized across logical processors";
     if (overlay_) {
         metrics_["refreshRate"] = overlay_->screen()->refreshRate();
         metrics_.insert(MediaMonitor::windowMetrics(overlay_->winId()));
@@ -791,6 +1066,7 @@ void AppController::setDanmakuVisible(bool visible) {
     if (danmakuVisible_ == visible)
         return;
     danmakuVisible_ = visible;
+    resetFrameFeedback();
     snapshotDirty_ = true;
     if (!danmakuVisible_ && renderer_) {
         renderer_->clearContent();

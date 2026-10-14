@@ -147,7 +147,7 @@ private slots:
         QTRY_VERIFY(window->isExposed());
         QTRY_COMPARE(panel->width(), 320.0);
         QCOMPARE(status->property("lineCount").toInt(), 1);
-        QCOMPARE(metrics->property("lineCount").toInt(), 7);
+        QCOMPARE(metrics->property("lineCount").toInt(), 10);
         const auto completeMetrics = metrics->property("text").toString();
         QVERIFY(completeMetrics.contains("12345.6 s"));
         QVERIFY(completeMetrics.contains("512.0"));
@@ -165,7 +165,7 @@ private slots:
             QVERIFY(title->property("lineCount").toInt() <= 2);
             QCOMPARE(title->property("truncated").toBool(), value.size() > 100);
             QCOMPARE(metrics->property("text").toString(), completeMetrics);
-            QCOMPARE(metrics->property("lineCount").toInt(), 7);
+            QCOMPARE(metrics->property("lineCount").toInt(), 10);
             QCOMPARE(backend->property("mediaTitle").toString(), value);
         }
         const auto literalTitle = QStringLiteral("<b>媒体标题</b>\r\n第二行\t片段\u2028尾部");
@@ -200,7 +200,7 @@ private slots:
         QVERIFY(panel->setProperty("textPixelSize", 24.0));
         QTRY_VERIFY(qAbs(panel->width() - 320.0 * 24 / 14) < 0.01);
         QVERIFY(title->property("lineCount").toInt() <= 2);
-        QCOMPARE(metrics->property("lineCount").toInt(), 7);
+        QCOMPARE(metrics->property("lineCount").toInt(), 10);
         QVERIFY(!metrics->property("truncated").toBool());
         QVERIFY(panel->setProperty("textPixelSize", 14.0));
         QTRY_COMPARE(panel->width(), 320.0);
@@ -1183,6 +1183,89 @@ ApplicationWindow {
         QTest::keyClick(window, Qt::Key_Escape);
         QTest::keyClick(window, Qt::Key_Tab);
         QVERIFY(!combo->hasActiveFocus());
+        QCOMPARE(warnings.count(), 0);
+    }
+    void frameRateSettingsWorkflow() {
+        QTemporaryDir directory;
+        AppController backend(directory.path(), nullptr, {}, directory.path());
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}, {"selectedPage", 2}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* page = window->findChild<QQuickItem*>("settingsPage");
+        auto* mode = window->findChild<QQuickItem*>("frameRateModeCombo");
+        auto* cap = window->findChild<QQuickItem*>("frameRateLimitInput");
+        auto* adaptive = window->findChild<QQuickItem*>("adaptiveFrameRateSwitch");
+        auto* target = window->findChild<QQuickItem*>("targetFrameRateInput");
+        QVERIFY(page && mode && cap && adaptive && target);
+        const auto reveal = [&](QQuickItem* item) {
+            QVERIFY(QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(item))));
+            QTest::qWait(60);
+            item->forceActiveFocus();
+        };
+        QVERIFY(!target->isEnabled());
+        reveal(mode);
+        QTest::keyClick(window, Qt::Key_Space);
+        auto* popup = mode->property("popup").value<QObject*>();
+        QVERIFY(popup);
+        QTRY_VERIFY(popup->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_Home);
+        QTest::keyClick(window, Qt::Key_Return);
+        QTRY_COMPARE(settings->values()["frameRateLimit"].toInt(), 0);
+        QVERIFY(!cap->isEnabled());
+        QTest::keyClick(window, Qt::Key_Space);
+        QTRY_VERIFY(popup->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_End);
+        QTest::keyClick(window, Qt::Key_Return);
+        QTRY_COMPARE(settings->values()["frameRateLimit"].toInt(), 60);
+        reveal(cap);
+        QTest::keyClick(window, Qt::Key_Up);
+        QTRY_COMPARE(settings->values()["frameRateLimit"].toInt(), 61);
+        reveal(adaptive);
+        QTest::keyClick(window, Qt::Key_Space);
+        QTRY_VERIFY(settings->values()["adaptiveFrameRateEnabled"].toBool());
+        QVERIFY(target->isEnabled());
+        reveal(target);
+        QTest::keyClick(window, Qt::Key_Up);
+        QTRY_COMPARE(settings->values()["targetFrameRate"].toInt(), 61);
+        QVERIFY(settings->setValue("frameRateLimit", 30));
+        QVERIFY(settings->setValue("targetFrameRate", 90));
+        QCOMPARE(backend.metrics()["effectiveTargetFrameRate"].toDouble(), 30.0);
+        QCOMPARE(backend.metrics()["targetFrameRateReason"].toString(), QString("cap"));
+        QCOMPARE(settings->values()["targetFrameRate"].toInt(), 90);
+        const QString output = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/frame-rate-ui") +
+            qEnvironmentVariable("DANMAKU_UI_CAPTURE_SUFFIX");
+        QDir().mkpath(output);
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            QVERIFY(settings->setValue("theme", theme));
+            for (const int width : {520, 800}) {
+                window->resize(width, 640);
+                QTest::qWait(100);
+                reveal(target);
+                auto* bar = page->property("verticalBar").value<QObject*>();
+                QVERIFY(bar && bar->property("position").toReal() > 0);
+                const auto point = target->mapToScene(QPointF());
+                QVERIFY2(point.y() >= 0 && point.y() < window->height(), qPrintable(QString("Target y=%1, window=%2").arg(point.y()).arg(window->height())));
+                QVERIFY(window->grabWindow().save(output + QString("/status-%1-%2.png").arg(theme).arg(width)));
+                reveal(mode);
+                QTest::keyClick(window, Qt::Key_Space);
+                QTRY_VERIFY(popup->property("opened").toBool());
+                QVERIFY(window->grabWindow().save(output + QString("/popup-%1-%2.png").arg(theme).arg(width)));
+                QTest::keyClick(window, Qt::Key_Escape);
+                QTest::keyClick(window, Qt::Key_Tab);
+                QVERIFY(!mode->hasActiveFocus());
+            }
+        }
+        settings->flushPending();
+        SettingsStore restored(directory.path());
+        QCOMPARE(restored.values()["frameRateLimit"].toInt(), 30);
+        QCOMPARE(restored.values()["targetFrameRate"].toInt(), 90);
         QCOMPARE(warnings.count(), 0);
     }
     void workflow() {

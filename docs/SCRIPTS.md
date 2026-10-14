@@ -23,7 +23,9 @@
 
 ## 2. 脚本全量速查索引
 
-项目共包含 **24 个脚本**，按生命周期与职责分类如下：
+主要脚本按生命周期与职责分类如下：
+
+帧率专项验证使用 `validate-frame-rates.ps1`：`-Preset windows-debug/windows-release/windows-static-release`、`-Limits @(30,60,120,47,0)`、`-Seconds 15`、`-StressCount 2000`、`-StressSeconds 45`、`-StressBackend image/text`、`-ScaleFactor 1`、`-SkipStress`。从离线合成 XML 收集预热后至少 10 秒逐秒指标，并检查原生进程正常退出；参数及指标边界见 [弹幕帧率控制](FRAME_RATE_CONTROL.md)。
 
 | 类别 | 脚本文件 | 核心参数摘要 | 功能简述 |
 | :--- | :--- | :--- | :--- |

@@ -38,6 +38,7 @@ void Engine::load(std::vector<Item> items) {
     dropped_ = 0;
     retiredBySettings_ = 0;
     suppressedWhileHidden_ = 0;
+    adaptiveSkipped_ = 0;
     seek(0);
     if (!items_.empty()) reconfigure(options_, width_, height_);
 }
@@ -148,6 +149,7 @@ void Engine::unload() {
     initialized_ = false;
     cursor_ = activeCount_ = overlapTrack_ = 0;
     dropped_ = retiredBySettings_ = suppressedWhileHidden_ = 0;
+    adaptiveSkipped_ = 0;
 }
 void Engine::seek(double position) {
     clear();
@@ -193,7 +195,10 @@ void Engine::tick(double position, double elapsed, bool playing, const Measure& 
         if (!emitNew)
             ++suppressedWhileHidden_;
         else if (items_[cursor_].time >= position - 0.4) {
-            if (!spawn(cursor_, measure(items_[cursor_])))
+            if (admissionLimit_ < options_.maxActive &&
+                activeCount_ >= static_cast<std::size_t>(std::max(1, admissionLimit_)))
+                ++adaptiveSkipped_;
+            else if (!spawn(cursor_, measure(items_[cursor_])))
                 ++dropped_;
         } else
             ++dropped_;

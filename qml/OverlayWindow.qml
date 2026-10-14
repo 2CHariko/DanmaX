@@ -55,6 +55,12 @@ Window {
                 text: overlay.backend.position.toFixed(1) + " s"
                 + "\n" + I18n.format(I18n.overlay.activeDanmakuFormat, overlay.backend.metrics.active || 0, overlay.backend.metrics.dropped || 0)
                 + "\n" + I18n.format(I18n.overlay.frequencyFormat, Number(overlay.backend.metrics.presentedPerSecond || 0).toFixed(1), Number(overlay.backend.metrics.updatesPerSecond || 0).toFixed(1))
+                + "\n" + I18n.format(I18n.overlay.framePolicyFormat,
+                    Number(overlay.backend.metrics.effectiveFrameRateLimit || 0).toFixed(1),
+                    Number(overlay.backend.metrics.effectiveTargetFrameRate || 0).toFixed(1),
+                    overlay.backend.metrics.admissionLimit || 0, overlay.backend.metrics.adaptiveSkipped || 0)
+                + "\n" + I18n.settings.adaptiveStates[overlay.backend.metrics.adaptiveFrameRateState || "disabled"]
+                + "\n" + I18n.format(I18n.overlay.presentedIntervalFormat, Number(overlay.backend.metrics.presentedP95Ms || 0).toFixed(1))
                 + "\n" + I18n.format(I18n.overlay.intervalFormat, Number(overlay.backend.metrics.p95Ms || 0).toFixed(1))
                 + "\n" + I18n.format(I18n.overlay.memoryFormat, Number(overlay.backend.metrics.memoryMiB || 0).toFixed(1))
                 + "\n" + I18n.format(I18n.overlay.textureBudgetFormat, Number((overlay.backend.metrics.textureEstimatedBytes || 0) / 1048576).toFixed(1), Number((overlay.backend.metrics.textureBudgetBytes || 0) / 1048576).toFixed(0))

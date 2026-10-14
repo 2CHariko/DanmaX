@@ -11,8 +11,9 @@ class DanmakuItem : public QQuickItem {
   public:
     explicit DanmakuItem(QQuickItem* parent = nullptr);
     bool configure(const QVariantMap& settings); // Whether live geometry needs remeasurement.
-    void present(const danmaku::Engine& engine);
-    void clearContent(); // GUI state only; the window releases scene-graph resources.
+    // Frame-driven callers dirty the item before requesting the window frame.
+    void present(const danmaku::Engine& engine, bool requestUpdate = true);
+    void clearContent(bool requestUpdate = true); // GUI state only; the window releases scene-graph resources.
     danmaku::Engine::Extent measure(const danmaku::Item& item);
     double trackHeight() const;
     int snapshotCount() const { return static_cast<int>(visuals_.size()); }
@@ -20,6 +21,9 @@ class DanmakuItem : public QQuickItem {
     double firstSnapshotX() const { return visuals_.empty() ? 0 : visuals_.front().x; }
     double firstSnapshotFontSize() const { return visuals_.empty() ? 0 : visuals_.front().layout->font().pixelSize(); }
     bool imageBackend() const { return imageBackend_; }
+    void setFrameRateReference(double rate) { preparationPeriodNs_ = rate > 0 ? 1e9 / rate : 0; }
+    quint64 sceneUpdateNs() const { return sceneUpdateNs_.load(); }
+    quint64 sceneUpdates() const { return sceneUpdates_.load(); }
     int imageNodeCount() const { return imageNodes_.load(); }
     qint64 textureBytes() const { return textureBytes_.load(); }
     int sceneEntries() const { return sceneEntries_.load(); }
@@ -54,10 +58,12 @@ class DanmakuItem : public QQuickItem {
     int stroke_{1};
     bool textureBudgetAuto_{true};
     int textureBudgetLimitMiB_{512};
+    double preparationPeriodNs_{1e9 / 60};
     // Cached whole-comment textures avoid separate outline/fill glyph batches.
     // Keep the public Qt text path available for comparison and budget fallbacks.
     const bool imageBackend_{qEnvironmentVariable("DANMAKU_RENDER_BACKEND") != "text"};
     std::atomic<int> imageNodes_{};
+    std::atomic<quint64> sceneUpdateNs_{}, sceneUpdates_{};
     std::atomic<qint64> textureBytes_{};
     std::atomic<int> sceneEntries_{};
     std::atomic<qint64> textureBudgetBytes_{}, textureDemandBytes_{};

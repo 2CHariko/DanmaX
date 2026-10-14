@@ -41,6 +41,9 @@ class Engine {
     void clear();
     // Unload the file and release all pool/occupancy storage; keep playback options.
     void unload();
+    // Admission only: retain live objects, pool storage and the source cursor.
+    void setAdmissionLimit(int limit) { admissionLimit_ = limit; }
+    [[nodiscard]] std::uint64_t adaptiveSkipped() const { return adaptiveSkipped_; }
     void tick(double position, double elapsed, bool playing, const Measure& measure, bool emitNew = true);
     [[nodiscard]] const std::vector<Item>& items() const {
         return items_;
@@ -81,5 +84,7 @@ class Engine {
     bool initialized_{};
     std::size_t cursor_{}, activeCount_{}, overlapTrack_{};
     std::uint64_t sequence_{}, dropped_{}, retiredBySettings_{}, suppressedWhileHidden_{};
+    int admissionLimit_{5000};
+    std::uint64_t adaptiveSkipped_{};
 };
 } // namespace danmaku

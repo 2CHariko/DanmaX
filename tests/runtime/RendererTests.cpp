@@ -6,6 +6,49 @@
 class RendererTests : public QObject {
     Q_OBJECT
   private slots:
+    void preparationUsesElapsedTime() {
+        constexpr auto MiB = TexturePreparationBudget::MiB;
+        TexturePreparationBudget budget;
+        budget.beginFrame(0);
+        QVERIFY(budget.permits(4 * MiB));
+        budget.chargeUpload(4 * MiB);
+        budget.chargeTime(2000000);
+        budget.beginFrame(0);
+        QVERIFY(!budget.permits(1));
+        budget.beginFrame(33333334, 33333334);
+        QVERIFY(budget.permits(8 * MiB));
+        budget.chargeUpload(8 * MiB);
+        budget.chargeTime(4000001);
+        QVERIFY(!budget.permits(1));
+        // A single expensive raster is paid back before admitting another.
+        budget.chargeTime(10000000);
+        budget.beginFrame(50000000);
+        QVERIFY(!budget.permits(1));
+        budget.beginFrame(10000000000LL);
+        QVERIFY(budget.permits(4 * MiB));
+        QVERIFY(!budget.permits(4 * MiB + 1));
+        budget.chargeTime(8000000);
+        QVERIFY(!budget.permits(1));
+        // No credit is created by extra callbacks or a backwards timestamp.
+        budget.beginFrame(10000000000LL);
+        QVERIFY(!budget.permits(1));
+        budget.beginFrame(9999999999LL);
+        QVERIFY(!budget.permits(1));
+        TexturePreparationBudget overloaded;
+        overloaded.beginFrame(0, 33333334);
+        overloaded.chargeTime(2000000);
+        overloaded.beginFrame(100000000, 33333334);
+        QVERIFY(overloaded.permits(4 * MiB));
+        QVERIFY(!overloaded.permits(4 * MiB + 1));
+        overloaded.chargeTime(2000000);
+        QVERIFY(!overloaded.permits(1));
+        TexturePreparationBudget highRefresh;
+        highRefresh.beginFrame(0, 1e9 / 165);
+        highRefresh.chargeTime(2000000);
+        highRefresh.chargeUpload(4 * MiB);
+        highRefresh.beginFrame(6060607, 1e9 / 165);
+        QVERIFY(highRefresh.permits(4 * MiB));
+    }
     void budgetGrowthAndHysteresis() {
         constexpr auto MiB = TextureBudget::MiB;
         TextureBudget policy;
