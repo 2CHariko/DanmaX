@@ -12,7 +12,7 @@ set_source_files_properties(theme/Ui.qml i18n/I18n.qml PROPERTIES QT_QML_SINGLET
 qt_add_qml_module(danmaku_app URI DanmaX VERSION 1.0
     QML_FILES Main.qml OverlayWindow.qml ToolbarWindow.qml theme/Ui.qml i18n/I18n.qml
     components/PageFrame.qml components/Disclosure.qml
-    components/AppComboBox.qml
+    components/AppComboBox.qml components/AnimeSearchPane.qml
     components/SettingsSection.qml components/SettingsRow.qml components/NavigationPane.qml components/FontSelector.qml
     components/ActionCard.qml components/WindowCaptionButtons.qml components/DanmakuToolbar.qml
     components/OnlineDanmakuPane.qml components/CachedDanmakuPane.qml

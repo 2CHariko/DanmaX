@@ -28,6 +28,9 @@ class AnimeMetadataService final : public QObject {
     Q_PROPERTY(QString detailError READ detailError NOTIFY detailChanged)
     Q_PROPERTY(bool searching READ searching NOTIFY searchChanged)
     Q_PROPERTY(QVariantList searchResults READ searchResults NOTIFY searchChanged)
+    Q_PROPERTY(QString searchKeyword READ searchKeyword NOTIFY searchChanged)
+    Q_PROPERTY(QString searchError READ searchError NOTIFY searchChanged)
+    Q_PROPERTY(int searchTotal READ searchTotal NOTIFY searchChanged)
 
 public:
     explicit AnimeMetadataService(QString cacheRoot, QObject* parent = nullptr, int timeoutMs = 15000);
@@ -47,6 +50,9 @@ public:
 
     bool searching() const { return searching_; }
     QVariantList searchResults() const { return searchResults_; }
+    QString searchKeyword() const { return searchKeyword_; }
+    QString searchError() const { return searchError_; }
+    int searchTotal() const { return searchTotal_; }
 
     // Custom base URL for testing / mock servers (defaults to https://api.bgm.tv)
     void setBaseUrl(const QString& url);
@@ -55,6 +61,7 @@ public:
     Q_INVOKABLE void refreshCalendar(bool force = false);
     Q_INVOKABLE void fetchDetail(qint64 subjectId);
     Q_INVOKABLE void searchBangumi(const QString& keyword);
+    Q_INVOKABLE void clearSearch();
     Q_INVOKABLE void clearDetail();
 
 signals:
@@ -105,6 +112,10 @@ private:
     QVariantMap heroAnime_;
     QVariantMap currentDetail_;
     QVariantList searchResults_;
+    QString searchKeyword_, searchError_;
+    int searchTotal_{};
+    quint64 searchGeneration_{};
+    std::stop_source searchStop_;
 
     QThreadPool worker_;
     std::stop_source workerStop_;

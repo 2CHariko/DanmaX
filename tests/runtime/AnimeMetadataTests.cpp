@@ -100,6 +100,9 @@ public:
     int status{200};
     int detailDelay{}, episodeDelay{}, episodeStatus{200}, episodeCount{4};
     int calendarRequests{}, subjectRequests{}, episodeRequests{};
+    int searchRequests{}, searchDelay{}, searchStatus{200};
+    QJsonObject searchPayload;
+    QByteArray searchTarget, searchMethod, searchBody;
     QByteArray calendarBody;
     explicit MockBangumiServer() {
         connect(this, &QTcpServer::newConnection, this, [this] {
@@ -110,6 +113,10 @@ public:
                 connect(socket, &QTcpSocket::readyRead, this, [this, socket, request] {
                     request->append(socket->readAll());
                     if (!request->contains("\r\n\r\n")) return;
+                    const auto headerEnd = request->indexOf("\r\n\r\n") + 4;
+                    const auto length = QRegularExpression("(?im)^Content-Length:\\s*(\\d+)")
+                        .match(QString::fromLatin1(request->left(headerEnd))).captured(1).toLongLong();
+                    if (request->size() < headerEnd + length) return;
                     disconnect(socket, &QTcpSocket::readyRead, this, nullptr);
                     const auto target = request->split(' ').value(1);
 
@@ -118,6 +125,16 @@ public:
                     int delay = 0;
                     if (status != 200) {
                         body = "Internal Server Error";
+                    } else if (target.startsWith("/v0/search/subjects")) {
+                        ++searchRequests;
+                        searchMethod = request->split(' ').value(0);
+                        searchTarget = target;
+                        searchPayload = QJsonDocument::fromJson(request->mid(headerEnd)).object();
+                        auto item = QJsonDocument::fromJson(mockSubjectJson(searchPayload.value("keyword").toString() == "new" ? 202 : 101)).object();
+                        item["type"] = 2;
+                        body = searchBody.isEmpty() ? QJsonDocument(QJsonObject{{"total", 45}, {"data", QJsonArray{item}}}).toJson() : searchBody;
+                        delay = searchDelay;
+                        responseStatus = searchStatus;
                     } else if (target.startsWith("/calendar")) {
                         ++calendarRequests;
                         body = calendarBody.isEmpty() ? mockCalendarJson() : calendarBody;
@@ -156,6 +173,126 @@ public:
 class AnimeMetadataTests : public QObject {
     Q_OBJECT
 private slots:
+    void searchRequestAndFields() {
+        MockBangumiServer server;
+        QTemporaryDir dir;
+        AnimeMetadataService service(dir.path());
+        service.setBaseUrl(server.url());
+        service.searchBangumi(QStringLiteral("  中文 / ?#  "));
+        QVERIFY(service.searching());
+        QTRY_VERIFY(!service.searching());
+        QVERIFY2(service.searchError().isEmpty(), qPrintable(service.searchError()));
+        QCOMPARE(server.searchMethod, QByteArray("POST"));
+        QCOMPARE(server.searchPayload.value("keyword").toString(), QStringLiteral("中文 / ?#"));
+        QCOMPARE(server.searchPayload.value("sort").toString(), QString("match"));
+        QCOMPARE(server.searchPayload.value("filter").toObject().value("type").toArray(), QJsonArray{2});
+        QVERIFY(!server.searchPayload.value("filter").toObject().value("nsfw").toBool(true));
+        const QUrlQuery query(QUrl(server.url() + QString::fromUtf8(server.searchTarget)));
+        QCOMPARE(query.queryItemValue("limit"), QString("20"));
+        QCOMPARE(query.queryItemValue("offset"), QString("0"));
+        QCOMPARE(service.searchTotal(), 45);
+        QCOMPARE(service.searchResults().size(), 1);
+        const auto item = service.searchResults().first().toMap();
+        QCOMPARE(item.value("id").toLongLong(), 101);
+        QCOMPARE(item.value("title").toString(), QStringLiteral("测试番剧详情"));
+        QCOMPARE(item.value("originalTitle").toString(), QString("Original Subject"));
+        QCOMPARE(item.value("score").toString(), QString("8.8"));
+        QCOMPARE(item.value("airDate").toString(), QString("2026-10-01"));
+    }
+    void searchReplacementClearAndInputLimits() {
+        MockBangumiServer server;
+        QTemporaryDir dir;
+        AnimeMetadataService service(dir.path());
+        service.setBaseUrl(server.url());
+        server.searchDelay = 150;
+        service.searchBangumi("old");
+        QTRY_COMPARE(server.searchRequests, 1);
+        server.searchDelay = 0;
+        service.searchBangumi("new");
+        QTRY_VERIFY(!service.searching());
+        QCOMPARE(service.searchResults().first().toMap().value("id").toLongLong(), 202);
+        QTest::qWait(180);
+        QCOMPARE(service.searchKeyword(), QString("new"));
+        QCOMPARE(service.searchResults().first().toMap().value("id").toLongLong(), 202);
+        server.searchDelay = 150;
+        service.searchBangumi("cancel");
+        QTRY_COMPARE(server.searchRequests, 3);
+        service.clearSearch();
+        QTest::qWait(180);
+        QVERIFY(!service.searching());
+        QVERIFY(service.searchKeyword().isEmpty());
+        QVERIFY(service.searchResults().isEmpty());
+        QVERIFY(service.searchError().isEmpty());
+        QCOMPARE(service.searchTotal(), 0);
+        service.searchBangumi(" \n ");
+        service.searchBangumi(QString(513, QLatin1Char('a')));
+        QVERIFY(!service.searchError().isEmpty());
+        QVERIFY(!service.searching());
+        QCOMPARE(server.searchRequests, 3);
+        service.clearSearch();
+        QVERIFY(service.searchError().isEmpty());
+    }
+    void searchErrorsAndEmptyResults_data() {
+        QTest::addColumn<QByteArray>("body");
+        QTest::addColumn<int>("status");
+        QTest::addColumn<bool>("error");
+        QTest::newRow("http-error") << QByteArray("{}") << 503 << true;
+        QTest::newRow("invalid-json") << QByteArray("broken") << 200 << true;
+        QTest::newRow("invalid-shape") << QByteArray("{}") << 200 << true;
+        QTest::newRow("invalid-total") << QByteArray(R"({"data":[],"total":0.5})") << 200 << true;
+        QTest::newRow("invalid-item") << QByteArray(R"({"data":[{"id":0}],"total":1})") << 200 << true;
+        QTest::newRow("empty") << QByteArray(R"({"data":[],"total":0})") << 200 << false;
+        QJsonArray items;
+        for (int i = 0; i < 21; ++i) items.append(QJsonObject{{"id", i + 1}, {"name", "test"}, {"type", 2}});
+        QTest::newRow("over-item-limit") << QJsonDocument(QJsonObject{{"data", items}, {"total", 21}}).toJson() << 200 << true;
+        QTest::newRow("over-response-limit") << QByteArray(16 * 1024 * 1024 + 1, ' ') << 200 << true;
+    }
+    void searchErrorsAndEmptyResults() {
+        QFETCH(QByteArray, body);
+        QFETCH(int, status);
+        QFETCH(bool, error);
+        MockBangumiServer server;
+        server.searchBody = body;
+        server.searchStatus = status;
+        QTemporaryDir dir;
+        AnimeMetadataService service(dir.path());
+        service.setBaseUrl(server.url());
+        service.searchBangumi("test");
+        QTRY_VERIFY_WITH_TIMEOUT(!service.searching(), 5000);
+        QCOMPARE(!service.searchError().isEmpty(), error);
+        QVERIFY(service.searchResults().isEmpty());
+        server.searchBody = R"({"data":[],"total":0})";
+        server.searchStatus = 200;
+        service.searchBangumi(service.searchKeyword());
+        QTRY_VERIFY(!service.searching());
+        QVERIFY(service.searchError().isEmpty());
+    }
+    void searchFilteringAndTimeout() {
+        MockBangumiServer server;
+        server.searchBody = R"({"total":5,"data":[{"id":1,"name":"original","type":2},
+            {"id":1,"name":"duplicate","type":2},{"id":2,"name":"book","type":1},
+            {"id":3,"name":"restricted","type":2,"nsfw":true},{"id":4,"type":2}]})";
+        QTemporaryDir dir;
+        AnimeMetadataService service(dir.path(), nullptr, 60);
+        service.setBaseUrl(server.url());
+        service.searchBangumi("test");
+        QTRY_VERIFY(!service.searching());
+        QCOMPARE(service.searchResults().size(), 1);
+        QCOMPARE(service.searchResults().first().toMap().value("title").toString(), QString("original"));
+        server.searchDelay = 250;
+        service.searchBangumi("timeout");
+        QTRY_VERIFY(!service.searching());
+        QVERIFY(!service.searchError().isEmpty());
+        QTest::qWait(280);
+        QVERIFY(service.searchResults().isEmpty());
+        // Destroying the service must cancel pending requests and queued parsing.
+        auto pending = std::make_unique<AnimeMetadataService>(dir.path());
+        pending->setBaseUrl(server.url());
+        pending->searchBangumi("pending");
+        QTRY_COMPARE(server.searchRequests, 3);
+        pending.reset();
+        QTest::qWait(280);
+    }
     void detailCancellationAndReplacement() {
         MockBangumiServer server;
         QTemporaryDir dir;

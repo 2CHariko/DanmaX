@@ -12,6 +12,8 @@
 #include <QSaveFile>
 #include <QSet>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace {
 constexpr qint64 kMaxResponseBytes = 16LL * 1024 * 1024;
@@ -65,6 +67,7 @@ AnimeMetadataService::AnimeMetadataService(QString cacheRoot, QObject* parent, i
 
 AnimeMetadataService::~AnimeMetadataService() {
     ++generation_;
+    searchStop_.request_stop();
     deadline_.stop();
     if (calendarReply_) {
         auto* r = calendarReply_.data();
@@ -508,7 +511,9 @@ void AnimeMetadataService::clearDetail() {
     loadingDetail_ = false;
     emit detailChanged();
 }
-void AnimeMetadataService::searchBangumi(const QString& keyword) {
+void AnimeMetadataService::clearSearch() {
+    ++searchGeneration_;
+    searchStop_.request_stop();
     if (searchReply_) {
         auto* reply = searchReply_.data();
         searchReply_ = nullptr;
@@ -516,48 +521,79 @@ void AnimeMetadataService::searchBangumi(const QString& keyword) {
         reply->abort();
         reply->deleteLater();
     }
+    searching_ = false;
+    searchResults_.clear();
+    searchKeyword_.clear();
+    searchError_.clear();
+    searchTotal_ = 0;
+    emit searchChanged();
+}
+
+void AnimeMetadataService::searchBangumi(const QString& keyword) {
+    clearSearch();
     const auto trimmed = keyword.trimmed();
-    if (trimmed.isEmpty()) {
-        searchResults_.clear();
-        searching_ = false;
+    if (trimmed.isEmpty()) return;
+    searchKeyword_ = trimmed;
+    if (trimmed.size() > 512) {
+        searchError_ = QStringLiteral("搜索词不能超过 512 个字符");
         emit searchChanged();
         return;
     }
-
     searching_ = true;
-    searchResults_.clear();
+    searchStop_ = std::stop_source{};
+    const auto generation = searchGeneration_;
     emit searchChanged();
-
-    QUrl url(baseUrl_ + QStringLiteral("/search/subject/") + QUrl::toPercentEncoding(trimmed));
-    QUrlQuery query;
-    query.addQueryItem(QStringLiteral("type"), QStringLiteral("2")); // Anime
-    url.setQuery(query);
-
-    QNetworkRequest req(url);
+    // Bounded first page. A broad match asks the user to refine the keyword.
+    QNetworkRequest req(QUrl(baseUrl_ + QStringLiteral("/v0/search/subjects?limit=20&offset=0")));
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("DanmaX/0.2.4 (https://github.com/DanmaX)"));
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setRawHeader("Accept", "application/json");
     req.setTransferTimeout(timeoutMs_);
-
-    auto* reply = network_.get(req);
+    const auto payload = QJsonDocument(QJsonObject{{"keyword", trimmed}, {"sort", "match"},
+        {"filter", QJsonObject{{"type", QJsonArray{2}}, {"nsfw", false}}}}).toJson(QJsonDocument::Compact);
+    auto* reply = network_.post(req, payload);
     searchReply_ = reply;
     boundReply(reply, timeoutMs_);
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, generation] {
+        if (generation != searchGeneration_) { reply->deleteLater(); return; }
         searchReply_ = nullptr;
-        searching_ = false;
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const auto body = reply->isOpen() ? reply->readAll() : QByteArray{};
+        const bool ok = reply->error() == QNetworkReply::NoError && status == 200 && body.size() <= kMaxResponseBytes;
         reply->deleteLater();
-
-        if (reply->error() == QNetworkReply::NoError && status == 200 && body.size() <= kMaxResponseBytes && !body.isEmpty()) {
+        if (!ok) {
+            searching_ = false;
+            searchError_ = status > 0 ? QStringLiteral("搜索失败（HTTP %1），请重试").arg(status)
+                : QStringLiteral("搜索请求失败或超时，请检查网络后重试");
+            emit searchChanged();
+            return;
+        }
+        worker_.start([this, body, generation, stop = searchStop_.get_token()] {
+            if (stop.stop_requested()) return;
+            QVariantList results;
+            QString error;
+            int total = 0;
             const auto doc = QJsonDocument::fromJson(body);
-            if (doc.isObject()) {
-                for (const auto& val : doc.object().value(QStringLiteral("list")).toArray()) {
+            const auto data = doc.object().value("data");
+            const auto count = doc.object().value("total");
+            if (!doc.isObject() || !data.isArray() || data.toArray().size() > 20 || !count.isDouble()
+                || count.toDouble() < data.toArray().size() || count.toDouble() != std::floor(count.toDouble())
+                || count.toDouble() > std::numeric_limits<int>::max()) {
+                error = QStringLiteral("搜索服务返回的数据无效，请重试");
+            } else {
+                total = count.toInt();
+                QSet<qint64> seen;
+                for (const auto& val : data.toArray()) {
+                    if (stop.stop_requested()) return;
                     const auto obj = val.toObject();
                     const qint64 id = obj.value(QStringLiteral("id")).toInteger();
-                    if (id <= 0) continue;
-                    QString title = obj.value(QStringLiteral("name_cn")).toString();
-                    if (title.trimmed().isEmpty()) title = obj.value(QStringLiteral("name")).toString();
+                    if (id <= 0 || seen.contains(id) || obj.value("type").toInt() != 2 || obj.value("nsfw").toBool()) continue;
+                    const auto name = obj.value("name").toString().trimmed();
+                    auto title = obj.value("name_cn").toString().trimmed();
+                    if (title.isEmpty()) title = name;
+                    if (title.isEmpty()) continue;
+                    seen.insert(id);
 
                     const auto imgObj = obj.value(QStringLiteral("images")).toObject();
                     QString cover = imgObj.value(QStringLiteral("large")).toString();
@@ -568,12 +604,24 @@ void AnimeMetadataService::searchBangumi(const QString& keyword) {
                     m[QStringLiteral("id")] = id;
                     m[QStringLiteral("title")] = title;
                     m[QStringLiteral("cover")] = cover;
-                    m[QStringLiteral("airDate")] = obj.value(QStringLiteral("air_date")).toString();
-                    searchResults_.append(m);
+                    m[QStringLiteral("originalTitle")] = name;
+                    m[QStringLiteral("airDate")] = obj.value(QStringLiteral("date")).toString();
+                    const double score = obj.value("rating").toObject().value("score").toDouble();
+                    m[QStringLiteral("score")] = score > 0 && std::isfinite(score) ? QString::number(score, 'f', 1) : QString();
+                    results.append(m);
                 }
+                if (!data.toArray().isEmpty() && results.isEmpty()) error = QStringLiteral("搜索结果没有可用的番剧信息，请调整搜索词");
             }
-        }
-        emit searchChanged();
+            if (stop.stop_requested()) return;
+            QMetaObject::invokeMethod(this, [this, generation, results = std::move(results), error, total] {
+                if (generation != searchGeneration_) return;
+                searchResults_ = results;
+                searchTotal_ = total;
+                searchError_ = error;
+                searching_ = false;
+                emit searchChanged();
+            }, Qt::QueuedConnection);
+        });
     });
 }
 void AnimeMetadataService::fetchHeroDetails() {

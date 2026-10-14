@@ -19,6 +19,7 @@
 #include <QTcpSocket>
 #include <QWheelEvent>
 #include <QStyleHints>
+#include <QInputMethodEvent>
 #include <QElapsedTimer>
 #include <QSaveFile>
 #include <QScopeGuard>
@@ -174,6 +175,203 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void homeAnimeSearchWorkflow() {
+        const bool live = qEnvironmentVariableIsSet("DANMAKU_TEST_METADATA_LIVE");
+        QTemporaryDir directory;
+        const auto coverPath = directory.filePath("cover.png");
+        QImage coverImage(48, 64, QImage::Format_RGB32);
+        coverImage.fill(QColor("#4488aa"));
+        QVERIFY(coverImage.save(coverPath));
+        const auto cover = QUrl::fromLocalFile(coverPath).toString();
+        QTcpServer server;
+        int requests = 0, failures = 0;
+        QJsonArray items;
+        for (int i = 0; i < 20; ++i) items.append(QJsonObject{{"id", 101 + i}, {"type", 2},
+            {"name_cn", QStringLiteral("测试番剧 %1：很长的中文名称用于检查窄屏换行").arg(i + 1)},
+            {"name", QStringLiteral("Original title %1 with a long name for wrapping").arg(i + 1)},
+            {"date", "2026-10-15"}, {"rating", QJsonObject{{"score", 8.4}}}, {"images", QJsonObject{{"large", cover}}}});
+        connect(&server, &QTcpServer::newConnection, &server, [&] {
+            while (server.hasPendingConnections()) {
+                auto* socket = server.nextPendingConnection();
+                auto bytes = std::make_shared<QByteArray>();
+                connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+                connect(socket, &QTcpSocket::readyRead, &server, [&, socket, bytes] {
+                    bytes->append(socket->readAll());
+                    const auto headerEnd = bytes->indexOf("\r\n\r\n") + 4;
+                    if (headerEnd < 4) return;
+                    const auto length = QRegularExpression("(?im)^Content-Length:\\s*(\\d+)")
+                        .match(QString::fromLatin1(bytes->left(headerEnd))).captured(1).toLongLong();
+                    if (bytes->size() < headerEnd + length) return;
+                    disconnect(socket, &QTcpSocket::readyRead, &server, nullptr);
+                    const auto target = bytes->split(' ').value(1);
+                    QByteArray body;
+                    int status = 200, delay = 0;
+                    if (target.startsWith("/v0/search/subjects")) {
+                        ++requests;
+                        const auto keyword = QJsonDocument::fromJson(bytes->mid(headerEnd)).object().value("keyword").toString();
+                        if (keyword == "error" && failures++ == 0) status = 503;
+                        if (keyword == "slow") delay = 220;
+                        body = QJsonDocument(QJsonObject{{"total", keyword == "empty" ? 0 : 80},
+                            {"data", keyword == "empty" ? QJsonArray{} : items}}).toJson();
+                    } else if (target.startsWith("/v0/subjects/")) {
+                        body = QJsonDocument(QJsonObject{{"id", target.mid(13).toInt()},
+                            {"name_cn", QStringLiteral("搜索结果详情")}, {"summary", QStringLiteral("简介与分集复用现有详情流程。")}}).toJson();
+                    } else if (target.startsWith("/v0/episodes")) body = R"({"data":[],"total":0})";
+                    else body = R"([{"weekday":{"id":1},"items":[]}])";
+                    QTimer::singleShot(delay, &server, [guard = QPointer<QTcpSocket>(socket), body, status] {
+                        if (!guard || guard->state() != QAbstractSocket::ConnectedState) return;
+                        guard->write("HTTP/1.1 " + QByteArray::number(status) + " OK\r\nContent-Length: " +
+                            QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                        guard->disconnectFromHost();
+                    });
+                });
+            }
+        });
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        AppController backend(directory.filePath("data"), nullptr, {}, directory.filePath("cache"));
+        auto* metadata = qobject_cast<AnimeMetadataService*>(backend.metadata());
+        if (!live) metadata->setBaseUrl(QString("http://127.0.0.1:%1").arg(server.serverPort()));
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
+        QVERIFY(settings->setValue("micaEnabled", false));
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QStringList loadErrors;
+        for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) loadErrors << error.toString();
+        QVERIFY2(!engine.rootObjects().isEmpty(), qPrintable(loadErrors.join('\n')));
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* home = window->findChild<QQuickItem*>("homePage");
+        auto* field = home->findChild<QQuickItem*>("homeAnimeSearch");
+        QVERIFY(field);
+        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
+            if (parent->objectName() == name) return parent;
+            for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
+            return nullptr;
+        };
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, field->mapToScene(QPointF(24, field->height() / 2)).toPoint());
+        auto* editor = field->property("contentItem").value<QQuickItem*>();
+        QVERIFY(editor);
+        const auto indicatorItem = [&](const char* name) -> QQuickItem* {
+            const auto* indicator = field->property(name).value<QObject*>();
+            return indicator ? indicator->property("indicator").value<QQuickItem*>() : nullptr;
+        };
+        auto* searchIcon = indicatorItem("searchIndicator");
+        auto* clearIcon = indicatorItem("clearIndicator");
+        QVERIFY(searchIcon && clearIcon);
+        editor->forceActiveFocus();
+        if (live) for (char letter : QByteArray("CLANNAD")) QTest::keyClick(window, letter);
+        else {
+            QInputMethodEvent preedit(QStringLiteral("ceshi"), {});
+            QCoreApplication::sendEvent(editor, &preedit);
+            QCOMPARE(requests, 0);
+            QInputMethodEvent commit;
+            commit.setCommitString(QStringLiteral("测试番剧"));
+            QCoreApplication::sendEvent(editor, &commit);
+            QCOMPARE(field->property("text").toString(), QStringLiteral("测试番剧"));
+        }
+        QVERIFY(!metadata->searching());
+        QTest::keyClick(window, Qt::Key_Return);
+        QTRY_VERIFY_WITH_TIMEOUT(!metadata->searching() && !metadata->searchResults().isEmpty(), 20000);
+        QVERIFY2(metadata->searchError().isEmpty(), qPrintable(metadata->searchError()));
+        auto* first = find(home, "animeSearchResult0");
+        QVERIFY(first && first->isVisible());
+        if (!live) QCOMPARE(metadata->searchResults().size(), 20);
+        QTest::keyClick(window, Qt::Key_Down);
+        QTRY_VERIFY(first->hasActiveFocus());
+        QTest::keyClick(window, Qt::Key_Space);
+        auto* dialog = home->findChild<QObject*>("animeDetailDialog");
+        QTRY_VERIFY_WITH_TIMEOUT(dialog->property("opened").toBool() && !metadata->loadingDetail(), 20000);
+        QCOMPARE(metadata->currentDetail().value("id"), metadata->searchResults().first().toMap().value("id"));
+        QTest::keyClick(window, Qt::Key_Escape);
+        QTRY_VERIFY(!dialog->property("visible").toBool());
+#if defined(QT_DEBUG)
+        const auto build = QStringLiteral("debug");
+#else
+        const auto build = QStringLiteral("release");
+#endif
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/home-search/") +
+            (live ? "live-" : "") + build + (qEnvironmentVariable("QT_QUICK_BACKEND") == "software" ? "-software" : "-native") +
+            (qEnvironmentVariableIsSet("DANMAKU_UI_LARGE_TEXT") ? "-scaled" : "");
+        QVERIFY(QDir().mkpath(evidence));
+        auto* flick = home->property("contentItem").value<QQuickItem*>();
+        QVERIFY(flick);
+        for (auto theme : {"light", "dark"}) {
+            QVERIFY(settings->setValue("theme", theme));
+            for (int width : {1080, 800, 520}) {
+                window->resize(width, width == 520 ? 480 : 760);
+                flick->setProperty("contentY", 0);
+                QTest::qWait(100);
+                QVERIFY(field->width() <= field->parentItem()->width());
+                QVERIFY(std::abs(field->x() + field->width() / 2 - field->parentItem()->width() / 2) < 1);
+                const auto right = first->mapToItem(home, QPointF(first->width(), 0)).x();
+                QVERIFY(right <= home->width());
+                QVERIFY(window->grabWindow().save(evidence + QString("/%1-%2.png").arg(theme).arg(width)));
+            }
+        }
+        flick->setProperty("contentY", 0);
+        const auto point = home->mapToScene(QPointF(home->width() / 2, home->height() / 2));
+        QWheelEvent wheel(point, window->mapToGlobal(point.toPoint()), {}, QPoint(0, -120),
+            Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(window, &wheel);
+        QTRY_VERIFY(flick->property("contentY").toDouble() > 0);
+        flick->setProperty("contentY", std::max(0.0, flick->property("contentHeight").toDouble() - home->height()));
+        QTest::qWait(50);
+        QVERIFY(window->grabWindow().save(evidence + "/bottom.png"));
+        auto* searchShortcut = home->findChild<QObject*>("homeAnimeSearchShortcut");
+        QVERIFY(searchShortcut);
+        QVERIFY(QMetaObject::invokeMethod(searchShortcut, "activated"));
+        QTRY_VERIFY(editor->hasActiveFocus());
+        const auto fieldTop = field->mapToItem(home, QPointF()).y();
+        QVERIFY(fieldTop >= -0.5);
+        QVERIFY(fieldTop + field->height() <= home->height());
+        if (!live) {
+            const auto submit = [&](const QString& text) {
+                flick->setProperty("contentY", 0);
+                field->setProperty("text", text);
+                editor->forceActiveFocus();
+                if (text == "error") QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                    searchIcon->mapToScene(QPointF(searchIcon->width() / 2, searchIcon->height() / 2)).toPoint());
+                else QTest::keyClick(window, Qt::Key_Return);
+            };
+            submit("error");
+            QTRY_VERIFY(!metadata->searchError().isEmpty());
+            auto* retry = find(home, "retryAnimeSearch");
+            QVERIFY(retry && retry->isVisible());
+            QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, retry->mapToScene(QPointF(retry->width() / 2, retry->height() / 2)).toPoint());
+            QTRY_VERIFY(!metadata->searching() && metadata->searchError().isEmpty() && !metadata->searchResults().isEmpty());
+            submit("empty");
+            QTRY_VERIFY(!metadata->searching());
+            QVERIFY(metadata->searchResults().isEmpty());
+            QVERIFY(metadata->searchError().isEmpty());
+            QVERIFY(find(home, "homeSearchStatus")->property("text").toString().contains(QStringLiteral("没有找到")));
+            submit("slow");
+            QTRY_VERIFY(metadata->searching());
+            QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 1)));
+            QTest::qWait(260);
+            QVERIFY(!metadata->searching());
+            QVERIFY(metadata->searchKeyword().isEmpty());
+            QVERIFY(metadata->searchResults().isEmpty());
+            QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 0)));
+            QVERIFY(field->property("text").toString().isEmpty());
+        }
+        editor->forceActiveFocus();
+        field->setProperty("text", "clear me");
+        QTest::keyClick(window, Qt::Key_Escape);
+        QTRY_VERIFY(field->property("text").toString().isEmpty());
+        QVERIFY(metadata->searchKeyword().isEmpty());
+        flick->setProperty("contentY", 0);
+        field->setProperty("text", "clear button");
+        QTest::qWait(20);
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+            clearIcon->mapToScene(QPointF(clearIcon->width() / 2, clearIcon->height() / 2)).toPoint());
+        QTRY_VERIFY(field->property("text").toString().isEmpty());
+        for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) loadErrors << error.toString();
+        QVERIFY2(warnings.isEmpty(), qPrintable(loadErrors.join('\n')));
+    }
     void opacityDragDuringMediaLossAndRecovery() { opacityDrag(false); }
     void realMediaSessionOpacityDrag() {
         if (qEnvironmentVariable("DANMAKU_TEST_MEDIA_SESSION").isEmpty())

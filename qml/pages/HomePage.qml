@@ -65,7 +65,25 @@ PageFrame {
         return list
     }
 
+    AnimeSearchPane {
+        id: searchPane
+        metadata: page.backend.metadata
+        ownerVisible: page.visible
+        onDetailsRequested: anime => page.showDetails(anime)
+        onRevealRequested: item => page.reveal(item)
+    }
+    Shortcut {
+        objectName: "homeAnimeSearchShortcut"
+        sequences: [StandardKey.Find]
+        enabled: page.visible
+        onActivated: {
+            page.reveal(searchPane.searchField)
+            searchPane.searchField.contentItem.forceActiveFocus(Qt.ShortcutFocusReason)
+        }
+    }
+
     RowLayout {
+        visible: !searchPane.showingResults
         Layout.fillWidth: true
         Label {
             Layout.fillWidth: true
@@ -86,6 +104,7 @@ PageFrame {
     // 1. 顶部 Hero Banner 流媒体焦点推荐
     HeroBanner {
         id: heroBanner
+        visible: !searchPane.showingResults
         anime: page.backend.metadata.heroAnime
         onWatchNowClicked: title => page.openDanmakuForAnime(title, "", 0)
         onDetailsClicked: anime => page.showDetails(anime)
@@ -93,7 +112,7 @@ PageFrame {
 
     // 2. 轨道一：继续追番 / 本地缓存历史（有历史记录时展示）
     AnimeRail {
-        visible: Boolean(page.recentWatchedList && page.recentWatchedList.length > 0)
+        visible: !searchPane.showingResults && Boolean(page.recentWatchedList && page.recentWatchedList.length > 0)
         title: I18n.home.continueWatching
         model: page.recentWatchedList
         onCardClicked: anime => {
@@ -109,6 +128,7 @@ PageFrame {
     // 3. 轨道二：今日新番 / 追番周历（支持周一至周日 7 天 Tab 快速切换）
     AnimeRail {
         id: weeklyRail
+        visible: !searchPane.showingResults
         title: I18n.home.weeklyCalendar
         weekdayTabs: I18n.home.weekdays
         selectedWeekday: page.activeWeekday
@@ -124,6 +144,7 @@ PageFrame {
     // 4. 轨道三：季度热门 / 评分榜单
     AnimeRail {
         id: topRatedRail
+        visible: !searchPane.showingResults
         title: I18n.home.topRated
         model: page.backend.metadata.topRated
         onCardClicked: anime => {
