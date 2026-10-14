@@ -134,6 +134,13 @@ void DanmakuItem::clearContent() {
     ++generation_;
     update();
 }
+void DanmakuItem::invalidateLayoutCache() {
+    layouts_.clear();
+    slotVisuals_.clear();
+    previousSlots_.clear();
+    ++generation_;
+    update();
+}
 bool DanmakuItem::configure(const QVariantMap& s) {
     QFont font(s["fontFamily"].toString());
     font.setPixelSize(s["fontSize"].toInt());

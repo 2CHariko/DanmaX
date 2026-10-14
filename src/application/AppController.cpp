@@ -224,6 +224,9 @@ void AppController::configure() {
         resetDanmakuTimeline();
         emit metricsChanged();
     }
+    if (lastSettings_.value("chineseConversion") != s["chineseConversion"]) {
+        applyChineseConversion();
+    }
     const QStringList rendererKeys{"fontFamily", "fontSize", "strokeWidth", "speed", "fixedSeconds",
                                    "maxActive", "maxTracks", "lineSpacing", "overlap", "opacity",
                                    "textureBudgetAuto", "textureBudgetMiB"};
@@ -455,14 +458,36 @@ void AppController::setManualMode(bool manual) {
 }
 void AppController::commitItems(std::vector<danmaku::Item> items, const QString& title) {
     resetPlayback(true);
-    engine_.load(std::move(items));
+    rawItems_ = items;
+    auto convertedItems = std::move(items);
+    const auto mode = danmax::parseChineseConversion(settings_.values()["chineseConversion"].toString());
+    if (mode != danmax::ChineseConversion::Off) {
+        for (auto& item : convertedItems) {
+            item.text = danmax::convertChinese(item.text, mode);
+        }
+    }
+    engine_.load(std::move(convertedItems));
     sourceTitle_ = title;
-    loadedDuration_ = duration_ = engine_.items().back().time + 15;
+    loadedDuration_ = duration_ = engine_.items().empty() ? 0 : engine_.items().back().time + 15;
     playbackState_ = Ready;
     status_ = QStringLiteral("已载入 %1 条，选择播放方式后开始播放").arg(total());
     error_.clear();
     logs_.append("INFO", status_);
     emit stateChanged();
+}
+void AppController::applyChineseConversion() {
+    if (rawItems_.empty()) return;
+    const auto mode = danmax::parseChineseConversion(settings_.values()["chineseConversion"].toString());
+    std::vector<std::string> convertedTexts;
+    convertedTexts.reserve(rawItems_.size());
+    for (const auto& item : rawItems_) {
+        convertedTexts.push_back(danmax::convertChinese(item.text, mode));
+    }
+    engine_.updateItemTexts(convertedTexts);
+    if (renderer_) {
+        renderer_->invalidateLayoutCache();
+        applyRendererSettings();
+    }
 }
 void AppController::resetPlayback(bool unloadSource) {
     timer_.stop();
@@ -474,6 +499,7 @@ void AppController::resetPlayback(bool unloadSource) {
     snapshotDirty_ = true;
     if (unloadSource) {
         engine_.unload();
+        rawItems_.clear();
         sourceTitle_.clear();
         loadedDuration_ = 0;
     } else engine_.seek(0);
@@ -759,7 +785,15 @@ void AppController::beginDemo(int count) {
                                                                   : 1),
                          QStringLiteral("弹幕测试 %1 · Fluent / Qt Quick").arg(i).toUtf8().toStdString(),
                          0xffffff});
-    engine_.load(std::move(items));
+    rawItems_ = items;
+    auto convertedItems = std::move(items);
+    const auto mode = danmax::parseChineseConversion(settings_.values()["chineseConversion"].toString());
+    if (mode != danmax::ChineseConversion::Off) {
+        for (auto& item : convertedItems) {
+            item.text = danmax::convertChinese(item.text, mode);
+        }
+    }
+    engine_.load(std::move(convertedItems));
     loadedDuration_ = duration_ = 30;
     position_ = 0;
     demo_ = true;

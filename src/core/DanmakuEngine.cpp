@@ -149,6 +149,12 @@ void Engine::unload() {
     cursor_ = activeCount_ = overlapTrack_ = 0;
     dropped_ = retiredBySettings_ = suppressedWhileHidden_ = 0;
 }
+void Engine::updateItemTexts(const std::vector<std::string>& texts) {
+    if (texts.size() != items_.size()) return;
+    for (std::size_t i = 0; i < items_.size(); ++i) {
+        items_[i].text = texts[i];
+    }
+}
 void Engine::seek(double position) {
     clear();
     position_ = lastPosition_ = std::max(0.0, position);

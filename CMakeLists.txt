@@ -117,7 +117,8 @@ if(DANMAKU_BUILD_APP)
         src/renderer/DanmakuItem.cpp src/renderer/DanmakuItem.h
         src/infrastructure/XmlLoader.cpp src/infrastructure/XmlLoader.h
         src/infrastructure/SettingsStore.cpp src/infrastructure/SettingsStore.h
-        src/infrastructure/LogModel.cpp src/infrastructure/LogModel.h)
+        src/infrastructure/LogModel.cpp src/infrastructure/LogModel.h
+        src/infrastructure/ChineseConverter.cpp src/infrastructure/ChineseConverter.h)
     target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi)
     file(GLOB fluent_icons CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/resources/fluent/*.png")
     qt_add_resources(danmaku_runtime fluent_icons PREFIX "/fluent"
@@ -166,12 +167,18 @@ if(DANMAKU_BUILD_APP)
         add_test(NAME online_danmaku COMMAND online_danmaku_tests -o "${CMAKE_BINARY_DIR}/online-danmaku-tests.txt,txt")
         set_tests_properties(online_danmaku PROPERTIES TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
         add_executable(xml_loader_tests tests/runtime/XmlLoaderTests.cpp
-            src/infrastructure/XmlLoader.cpp)
+            src/infrastructure/XmlLoader.cpp src/infrastructure/ChineseConverter.cpp)
         target_include_directories(xml_loader_tests PRIVATE src)
         target_link_libraries(xml_loader_tests PRIVATE Qt6::Core Qt6::Test)
         danmaku_compile_options(xml_loader_tests)
         add_test(NAME xml_loader COMMAND xml_loader_tests)
         set_tests_properties(xml_loader PROPERTIES TIMEOUT 120)
+        add_executable(chinese_converter_tests tests/runtime/ChineseConverterTests.cpp)
+        target_include_directories(chinese_converter_tests PRIVATE src)
+        target_link_libraries(chinese_converter_tests PRIVATE danmaku_runtime Qt6::Core Qt6::Test)
+        danmaku_compile_options(chinese_converter_tests)
+        add_test(NAME chinese_converter COMMAND chinese_converter_tests)
+        set_tests_properties(chinese_converter PROPERTIES TIMEOUT 30)
         add_executable(runtime_tests tests/runtime/RuntimeTests.cpp)
         target_link_libraries(runtime_tests PRIVATE danmaku_runtime)
         if(DANMAKU_STATIC_QT)

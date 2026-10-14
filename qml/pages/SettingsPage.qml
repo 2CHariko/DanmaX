@@ -57,6 +57,17 @@ PageFrame {
             SpinBox { from: 5; to: 100; value: Math.round(page.values.opacity * 100); editable: true; Accessible.name: I18n.settings.opacityAccessible; onValueModified: page.put("opacity", value / 100) }
             Label { text: I18n.common.percentSuffix }
         }
+        SettingsRow {
+            title: I18n.settings.chineseConversionTitle
+            description: I18n.settings.chineseConversionDesc
+            AppComboBox {
+                model: I18n.settings.chineseConversionOptions
+                currentIndex: Math.max(0, ["off", "simplified", "traditional"].indexOf(page.values.chineseConversion))
+                implicitWidth: 160
+                Accessible.name: I18n.settings.chineseConversionAccessible
+                onActivated: page.put("chineseConversion", ["off", "simplified", "traditional"][currentIndex])
+            }
+        }
     }
 
     SettingsSection {

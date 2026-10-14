@@ -48,6 +48,8 @@ const QList<Setting>& schema() {
          "轨道额外行距比例，范围：0～2，默认：0.2（20%）。\n该值是比例，不是像素数；值越大，同样高度内的可用轨道越少。"},
         {"Danmaku", "overlap", false,
          "轨道已满时是否允许重叠：true=允许，false=禁止，默认：false。\n无论是否开启都优先使用安全轨道；禁止重叠且无可用位置时丢弃新弹幕。"},
+        {"Danmaku", "chineseConversion", "off",
+         "弹幕简繁转换：off=保持原样，simplified=转为简体中文，traditional=转为繁体中文。默认：off。\n修改后即时对当前与后续弹幕生效。"},
         {"Rendering", "textureBudgetAuto", true,
          "文字图片预算模式：true=按当前活动弹幕需求自动调整，false=手动固定预算。默认：true。\n自动从最多 64 MiB 起步，预留 25% 余量并分档增长，持续低需求 10 秒后收缩；不查询系统可用显存。"},
         {"Rendering", "textureBudgetMiB", 512,
@@ -111,6 +113,8 @@ QVariant checked(const QString& key, const QVariant& value, const QVariant& fall
         return {};
     const auto text = value.toString();
     if (key == "theme" && text != "system" && text != "light" && text != "dark")
+        return {};
+    if (key == "chineseConversion" && !QStringList{"off", "simplified", "traditional"}.contains(text))
         return {};
     if (key == "debugPosition" &&
         !QStringList{"top_left", "top_right", "bottom_left", "bottom_right"}.contains(text))

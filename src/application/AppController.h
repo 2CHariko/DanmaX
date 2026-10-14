@@ -5,6 +5,7 @@
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
 #include "platform/windows/MediaMonitor.h"
+#include "infrastructure/ChineseConverter.h"
  #include "renderer/DanmakuItem.h"
  #include "platform/windows/ToolbarInputFilter.h"
 #include "platform/windows/ToolbarPointerMonitor.h"
@@ -169,6 +170,7 @@ class AppController final : public QObject {
     void commitItems(std::vector<danmaku::Item> items, const QString& title);
 
     void fail(const QString& message);
+    void applyChineseConversion();
     void updateWindow();
     bool updatePresentationVisibility(bool forceForeground = false, bool notify = true);
     void updateMetrics();
@@ -181,6 +183,7 @@ class AppController final : public QObject {
     ForegroundQuery foregroundQuery_;
     MainForegroundQuery mainForegroundQuery_;
     danmaku::Engine engine_;
+    std::vector<danmaku::Item> rawItems_;
     danmaku::MediaClock mediaClock_;
     QElapsedTimer monotonicTime_;
     QPointer<DanmakuItem> renderer_;

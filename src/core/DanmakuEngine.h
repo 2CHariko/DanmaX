@@ -41,6 +41,7 @@ class Engine {
     void clear();
     // Unload the file and release all pool/occupancy storage; keep playback options.
     void unload();
+    void updateItemTexts(const std::vector<std::string>& texts);
     void tick(double position, double elapsed, bool playing, const Measure& measure, bool emitNew = true);
     [[nodiscard]] const std::vector<Item>& items() const {
         return items_;

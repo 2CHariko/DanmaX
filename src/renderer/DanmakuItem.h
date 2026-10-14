@@ -13,6 +13,7 @@ class DanmakuItem : public QQuickItem {
     bool configure(const QVariantMap& settings); // Whether live geometry needs remeasurement.
     void present(const danmaku::Engine& engine);
     void clearContent(); // GUI state only; the window releases scene-graph resources.
+    void invalidateLayoutCache();
     danmaku::Engine::Extent measure(const danmaku::Item& item);
     double trackHeight() const;
     int snapshotCount() const { return static_cast<int>(visuals_.size()); }

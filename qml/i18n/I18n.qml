@@ -216,6 +216,10 @@ QtObject {
         strokeWidthAccessible: "描边宽度",
         opacityTitle: "不透明度",
         opacityAccessible: "弹幕不透明度百分比",
+        chineseConversionTitle: "繁简转换",
+        chineseConversionDesc: "自动将弹幕文本转换为指定形式，即时生效。",
+        chineseConversionOptions: ["保留原样", "转为简体", "转为繁体"],
+        chineseConversionAccessible: "弹幕繁简转换",
 
         // 播放
         playbackSection: "弹幕播放",

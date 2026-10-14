@@ -1,4 +1,5 @@
 #include "application/DanmakuLibrary.h"
+#include "infrastructure/ChineseConverter.h"
 #include <QDateTime>
 #include <QDir>
 #include <QJsonArray>
@@ -179,9 +180,13 @@ void DanmakuLibrary::work(std::function<Work(std::stop_token)> action, std::func
 void DanmakuLibrary::searchAnime(const QString& keyword) {
     begin(QStringLiteral("正在搜索动画…"));
     animeId_.clear(); episodeId_.clear(); animes_.clear(); episodes_.clear(); emit changed(); emit cacheChanged();
-    if (keyword.trimmed().isEmpty()) { fail(QStringLiteral("请输入动画名称")); return; }
-    if (keyword.size() > 512) { fail(QStringLiteral("搜索关键词过长")); return; }
-    QUrlQuery query; query.addQueryItem("keyword", keyword.trimmed());
+    const auto trimmed = keyword.trimmed();
+    if (trimmed.isEmpty()) { fail(QStringLiteral("请输入动画名称")); return; }
+    if (trimmed.size() > 512) { fail(QStringLiteral("搜索关键词过长")); return; }
+
+    // 弹弹play 兼容服务的番剧库以简体中文为主；将关键词自动归一化为简体，可确保繁体搜索词精准命中
+    const auto queryKeyword = danmax::toSimplified(trimmed);
+    QUrlQuery query; query.addQueryItem("keyword", queryKeyword);
     startAttempts([this, query] { request("/api/v2/search/anime", query.query(QUrl::FullyEncoded), [this](QByteArray bytes) {
         work([bytes = std::move(bytes)](std::stop_token stop) {
             Work output;
