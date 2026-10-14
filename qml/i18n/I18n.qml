@@ -84,7 +84,15 @@ QtObject {
         railScrollLeft: "向左滚动",
         railScrollRight: "向右滚动",
         cachedBadge: "本地历史",
-        airingBadge: "连载中"
+        airingBadge: "连载中",
+        matchSeasonDanmaku: "匹配本季弹幕",
+        episodesSectionTitle: "剧集选集",
+        summarySectionTitle: "剧情简介",
+        expandSummary: "展开完整简介",
+        collapseSummary: "收起简介",
+        ratingCountFormat: "%1 人评分",
+        episodeNumberFormat: "第 %1 话",
+        singleEpisodeTip: "点击分集直接载入弹幕"
     })
 
     // 播放页
