@@ -398,7 +398,7 @@ QtObject {
     // 关于页
     readonly property var about: ({
         title: "关于",
-        appDescription: "高性能桌面弹幕覆盖层与媒体同步器",
+        appDescription: "Windows 平台下的原生高性能外挂弹幕工具",
         versionFormat: "版本 %1",
         feedbackSection: "反馈",
         reportBugTitle: "报告错误",
