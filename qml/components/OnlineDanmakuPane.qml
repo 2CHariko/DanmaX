@@ -112,6 +112,11 @@ ColumnLayout {
                 placeholderText: I18n.online.searchPlaceholder
                 Accessible.name: I18n.online.searchAccessible
                 maximumLength: 512
+                Component.onCompleted: text = pane.library.searchKeyword
+                Connections {
+                    target: pane.library
+                    function onSearchKeywordChanged() { keyword.text = pane.library.searchKeyword }
+                }
                 onAccepted: if (text.trim().length > 0) pane.library.searchAnime(text)
             }
 
@@ -121,6 +126,13 @@ ColumnLayout {
                 enabled: pane.library.servers.length > 0 && keyword.text.trim().length > 0 && !pane.library.busy
                 onClicked: pane.library.searchAnime(keyword.text)
             }
+        }
+
+        Label {
+            Layout.fillWidth: true
+            visible: pane.library.requestedEpisode.length > 0
+            text: pane.library.requestedEpisode
+            wrapMode: Text.WordWrap
         }
 
         // 检索结果与剧集选择卡片

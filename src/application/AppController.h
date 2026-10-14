@@ -1,4 +1,5 @@
 #pragma once
+#include "infrastructure/AnimeMetadataService.h"
 #include "core/DanmakuEngine.h"
 #include "core/MediaClock.h"
 #include "application/DanmakuLibrary.h"
@@ -23,6 +24,7 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* settings READ settings CONSTANT)
     Q_PROPERTY(QObject* logs READ logs CONSTANT)
     Q_PROPERTY(QObject* library READ library CONSTANT)
+    Q_PROPERTY(QObject* metadata READ metadata CONSTANT)
     Q_PROPERTY(QObject* toolbarPointer READ toolbarPointer CONSTANT)
     Q_PROPERTY(QString sourceTitle READ sourceTitle NOTIFY stateChanged)
     Q_PROPERTY(QVariantList sessions READ sessions NOTIFY sessionsChanged)
@@ -66,6 +68,7 @@ class AppController final : public QObject {
         return &logs_;
     }
     QObject* library() { return &library_; }
+    QObject* metadata() { return &metadata_; }
     QObject* toolbarPointer() { return &toolbarPointer_; }
     QString sourceTitle() const { return sourceTitle_; }
     QVariantList sessions() const {
@@ -144,6 +147,8 @@ class AppController final : public QObject {
      Q_INVOKABLE void stepTimeOffset(double delta);
      Q_INVOKABLE void stepFontSize(int delta);
      Q_INVOKABLE void showMainWindow();
+    Q_INVOKABLE void showOnlineDanmakuForAnime(const QString& animeTitle, const QString& episodeTitle = {}, double episodeNumber = 0);
+    Q_INVOKABLE void loadCachedDanmaku(const QString& key);
     void beginDemo(int activeCount = 40);
     void writeReport(const QString& path);
   signals:
@@ -155,6 +160,7 @@ class AppController final : public QObject {
     void danmakuVisibleChanged();
      void loadCompleted(bool success);
      void requestShowMainWindow();
+    void requestNavigateToPage(int page, int sourceTab = 0);
 
   private slots:
     void onSample(const MediaSample& sample);
@@ -179,6 +185,7 @@ class AppController final : public QObject {
     SettingsStore settings_;
     LogModel logs_;
     DanmakuLibrary library_;
+    AnimeMetadataService metadata_;
     MediaMonitor monitor_;
     ForegroundQuery foregroundQuery_;
     MainForegroundQuery mainForegroundQuery_;

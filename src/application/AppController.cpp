@@ -22,6 +22,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
       logs_(QDir(dataDirectory).filePath("logs")),
 #endif
       library_(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
+      metadata_(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       monitor_(this),
       foregroundQuery_(foregroundQuery ? std::move(foregroundQuery) : ForegroundQuery(MediaMonitor::targetForeground)),
       mainForegroundQuery_(mainForegroundQuery ? std::move(mainForegroundQuery) : MainForegroundQuery([](QWindow* window) {
@@ -865,4 +866,17 @@ void AppController::showMainWindow() {
     // Explicitly opening an already-active panel can raise it without an
     // activation change. Reapply the toolbar order after the QML raise.
     windowLayers_.invalidate();
+}
+void AppController::showOnlineDanmakuForAnime(const QString& animeTitle, const QString& episodeTitle, double episodeNumber) {
+    if (!animeTitle.trimmed().isEmpty()) {
+        if (episodeNumber > 0 || !episodeTitle.trimmed().isEmpty())
+            library_.searchAnimeForEpisode(animeTitle.trimmed(), episodeTitle, episodeNumber);
+        else library_.searchAnime(animeTitle.trimmed());
+    }
+    emit requestNavigateToPage(1, 1);
+}
+void AppController::loadCachedDanmaku(const QString& key) {
+    if (key.isEmpty()) return;
+    library_.loadCached(key);
+    emit requestNavigateToPage(1, 2);
 }

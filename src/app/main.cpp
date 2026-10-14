@@ -108,13 +108,16 @@ int main(int argc, char* argv[]) {
     parser.addOption({"report", "Write benchmark metrics to JSON", "path"});
     parser.addOption({"media-session", "Select a real SMTC session (read only)", "id"});
     parser.addOption({"file", "Load an XML file on startup", "path"});
-    parser.addOption({"page", "Initial page: player, logs, settings", "page", "player"});
+    parser.addOption({"page", "Initial page: home, player, logs, settings, about", "page", "home"});
     parser.addOption({"source-tab", "Initial source tab: xml, online, cache (UI validation)", "tab", "xml"});
     parser.addOption({"theme", "Theme for isolated UI validation", "theme"});
     parser.addOption({"window-width", "Width for layout validation", "pixels"});
     parser.addOption({"capture-state", "UI smoke capture state: settings-middle, font-popup, diagnostics-group or cache-group", "state"});
     parser.process(app);
     try {
+        const QStringList pageNames{"home", "player", "logs", "settings", "about"};
+        const int initialPage = pageNames.indexOf(parser.value("page"));
+        if (initialPage < 0) throw std::runtime_error("Unknown initial page");
         const auto paths =
             AppPaths::prepare(app.applicationFilePath(), parser.value("data-dir"), parser.value("cache-dir"));
 #ifndef DANMAKU_STATIC_PORTABLE
@@ -144,9 +147,7 @@ int main(int argc, char* argv[]) {
         });
         engine.setInitialProperties({{"backdrop", QVariant::fromValue(&backdrop)}, {"backend", QVariant::fromValue(&controller)},
                                      {"sourceTab", parser.value("source-tab") == "online" ? 1 : parser.value("source-tab") == "cache" ? 2 : 0},
-                                     {"selectedPage", parser.value("page") == "settings" ? 2
-                                                      : parser.value("page") == "logs"   ? 1
-                                                                                         : 0}});
+                                     {"selectedPage", initialPage}});
         QWK::registerTypes(&engine);
         engine.loadFromModule("DanmaX", "Main");
         if (creationFailed || engine.rootObjects().isEmpty())
@@ -200,7 +201,7 @@ int main(int argc, char* argv[]) {
         }
         if (parser.isSet("smoke-test") && parser.isSet("capture-state")) {
             QTimer::singleShot(300, &app, [&, mainWindow] {
-                mainWindow->setProperty("selectedPage", 2);
+                mainWindow->setProperty("selectedPage", pageNames.indexOf("settings"));
                 QTimer::singleShot(100, &app, [&, mainWindow] {
                     auto* page = mainWindow->findChild<QObject*>("settingsPage");
                     if (!page) { qmlWarning = true; return; }
@@ -244,6 +245,9 @@ int main(int argc, char* argv[]) {
                     : parser.isSet("seconds") ? std::clamp(parser.value("seconds").toInt(), 1, 30) * 1000 : 1500;
             QTimer::singleShot(duration, &app, [&] {
                 bool passed = controller.position() > 0 && !qmlWarning && app.allWindows().size() >= 2;
+                if (parser.isSet("smoke-test"))
+                    passed = passed && mainWindow->property("currentPageName").toString() ==
+                        (parser.isSet("capture-state") ? QStringLiteral("settings") : parser.value("page"));
                 if (parser.isSet("smoke-test") && !parser.isSet("file") &&
                     qEnvironmentVariable("DANMAKU_RENDER_BACKEND") != "text")
                     passed = passed && controller.metrics().value("imageNodes").toInt() > 0;

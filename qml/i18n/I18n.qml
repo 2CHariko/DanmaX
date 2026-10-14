@@ -44,10 +44,39 @@ QtObject {
         expandNav: "展开导航",
         navExpanded: "导航已展开",
         navCollapsed: "导航已收起",
+        home: "首页",
         play: "播放",
         logs: "日志",
         settings: "设置",
         about: "关于"
+    })
+    // 首页流媒体媒体库
+    readonly property var home: ({
+        title: "首页",
+        description: "浏览放送日历，查找番剧并匹配剧集弹幕。",
+        heroWatchNow: "搜索弹幕",
+        heroDetails: "番剧详情",
+        heroRatingFormat: "★ %1",
+        airingToday: "今日放送",
+        weeklyCalendar: "追番周历",
+        continueWatching: "最近缓存",
+        topRated: "热门高分",
+        noSummary: "暂无剧情简介",
+        noEpisodes: "暂无剧集列表",
+        episodesCountFormat: "共 %1 话",
+        episodeLoadDanmaku: "载入第 %1 话弹幕",
+        airDatePrefix: "首播：",
+        ratingPrefix: "评分：",
+        weekdays: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"],
+        emptyCalendar: "暂无排期数据，请检查网络连接或重试",
+        refreshSchedule: "刷新周历",
+        loadingCalendar: "正在同步番组放送表…",
+        searchDanmakuTitle: "匹配弹幕",
+        closeDialog: "关闭详情",
+        railScrollLeft: "向左滚动",
+        railScrollRight: "向右滚动",
+        cachedBadge: "本地历史",
+        airingBadge: "连载中"
     })
 
     // 播放页

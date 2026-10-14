@@ -108,6 +108,7 @@ if(DANMAKU_BUILD_APP)
         src/application/DanmakuLibrary.cpp src/application/DanmakuLibrary.h
         src/infrastructure/OnlineDanmakuData.cpp src/infrastructure/OnlineDanmakuData.h
         src/application/AppController.cpp src/application/AppController.h
+        src/infrastructure/AnimeMetadataService.cpp src/infrastructure/AnimeMetadataService.h
         src/infrastructure/AppPaths.cpp src/infrastructure/AppPaths.h
         src/platform/windows/MediaMonitor.cpp src/platform/windows/MediaMonitor.h
         src/platform/windows/WindowBackdropController.cpp src/platform/windows/WindowBackdropController.h
@@ -156,7 +157,7 @@ if(DANMAKU_BUILD_APP)
             file(WRITE "${CMAKE_BINARY_DIR}/ui-source/i18n/qmldir" "singleton I18n 1.0 I18n.qml\n")
             target_compile_definitions(ui_workflow_tests PRIVATE DANMAKU_UI_DIR="${CMAKE_BINARY_DIR}/ui-source")
             add_test(NAME ui_workflow COMMAND ui_workflow_tests -o "${CMAKE_BINARY_DIR}/ui-workflow-tests.txt,txt")
-            set_tests_properties(ui_workflow PROPERTIES TIMEOUT 90 ENVIRONMENT "QT_QUICK_BACKEND=software")
+            set_tests_properties(ui_workflow PROPERTIES TIMEOUT 120 ENVIRONMENT "QT_QUICK_BACKEND=software")
         endif()
         add_executable(online_danmaku_tests tests/runtime/OnlineDanmakuTests.cpp)
         target_link_libraries(online_danmaku_tests PRIVATE danmaku_runtime Qt6::Test)
@@ -166,6 +167,14 @@ if(DANMAKU_BUILD_APP)
         danmaku_compile_options(online_danmaku_tests)
         add_test(NAME online_danmaku COMMAND online_danmaku_tests -o "${CMAKE_BINARY_DIR}/online-danmaku-tests.txt,txt")
         set_tests_properties(online_danmaku PROPERTIES TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
+        add_executable(anime_metadata_tests tests/runtime/AnimeMetadataTests.cpp)
+        target_link_libraries(anime_metadata_tests PRIVATE danmaku_runtime Qt6::Test)
+        if(DANMAKU_STATIC_QT)
+            qt_import_plugins(anime_metadata_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin Qt6::QSchannelBackendPlugin)
+        endif()
+        danmaku_compile_options(anime_metadata_tests)
+        add_test(NAME anime_metadata COMMAND anime_metadata_tests -o "${CMAKE_BINARY_DIR}/anime-metadata-tests.txt,txt")
+        set_tests_properties(anime_metadata PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
         add_executable(xml_loader_tests tests/runtime/XmlLoaderTests.cpp
             src/infrastructure/XmlLoader.cpp src/infrastructure/ChineseConverter.cpp)
         target_include_directories(xml_loader_tests PRIVATE src)

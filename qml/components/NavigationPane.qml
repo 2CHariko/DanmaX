@@ -60,14 +60,19 @@ ColumnLayout {
     Repeater {
         model: [
             {
+                title: I18n.nav.home,
+                icon: "home",
+                page: 0
+            },
+            {
                 title: I18n.nav.play,
                 icon: "play",
-                page: 0
+                page: 1
             },
             {
                 title: I18n.nav.logs,
                 icon: "logs",
-                page: 1
+                page: 2
             }
         ]
         ItemDelegate {
@@ -95,33 +100,33 @@ ColumnLayout {
     // 2. 底部系统导航项 (关于与设置)
     ItemDelegate {
         id: aboutItem
-        objectName: "navigation3"
+        objectName: "navigation4"
         Layout.fillWidth: true
         Layout.preferredHeight: 40
         text: I18n.nav.about
         icon.source: Ui.icon("info")
         display: nav.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
-        highlighted: nav.selected === 3
+        highlighted: nav.selected === 4
         Accessible.name: I18n.nav.about
         Accessible.selected: highlighted
         ToolTip { visible: aboutItem.hovered && nav.compact; text: aboutItem.Accessible.name }
-        onClicked: nav.navigate(3)
+        onClicked: nav.navigate(4)
 
     }
 
     ItemDelegate {
         id: settingsItem
-        objectName: "navigation2"
+        objectName: "navigation3"
         Layout.fillWidth: true
         Layout.preferredHeight: 40
         text: I18n.nav.settings
         icon.source: Ui.icon("settings")
         display: nav.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
-        highlighted: nav.selected === 2
+        highlighted: nav.selected === 3
         Accessible.name: I18n.nav.settings
         Accessible.selected: highlighted
         ToolTip { visible: settingsItem.hovered && nav.compact; text: settingsItem.Accessible.name }
-        onClicked: nav.navigate(2)
+        onClicked: nav.navigate(3)
 
     }
 }

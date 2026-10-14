@@ -89,6 +89,88 @@ void writeBytes(const QString& path, const QByteArray& bytes) {
 class OnlineDanmakuTests final : public QObject {
     Q_OBJECT
   private slots:
+    void commandLinePageRouting() {
+        QTemporaryDir root;
+        for (const auto& page : {"home", "player", "logs", "settings", "about"}) {
+            QProcess process;
+            process.start(QDir(QCoreApplication::applicationDirPath()).filePath("DanmaX.exe"),
+                {"--smoke-test", "--seconds", "1", "--page", page, "--data-dir", root.filePath(QString(page) + "-data"),
+                 "--cache-dir", root.filePath("cache")});
+            QVERIFY(process.waitForStarted());
+            QVERIFY(process.waitForFinished(15000));
+            QVERIFY2(process.exitCode() == 0, process.readAllStandardError().constData());
+        }
+    }
+    void homepageCacheNavigationAndCoverRoundTrip() {
+        QTemporaryDir root;
+        auto result = parseOnlineDanmaku(commentBody());
+        result.metadata = metadata();
+        result.metadata["imageUrl"] = "https://example.test/poster.jpg";
+        const auto cache = root.filePath("cache");
+        QVERIFY(saveCachedDanmaku(QDir(cache).filePath("danmaku"), result).isEmpty());
+        AppController controller(root.filePath("data"), nullptr, {}, cache);
+        auto* library = qobject_cast<DanmakuLibrary*>(controller.library());
+        QSignalSpy navigation(&controller, &AppController::requestNavigateToPage);
+        QSignalSpy loaded(&controller, &AppController::loadCompleted);
+        const auto key = danmakuCacheKey(result.metadata["server"].toString(), 42001);
+        controller.loadCachedDanmaku(key);
+        QTRY_COMPARE(loaded.count(), 1);
+        QVERIFY(loaded.first().first().toBool());
+        QCOMPARE(controller.total(), 2);
+        QCOMPARE(navigation.count(), 1);
+        QCOMPARE(navigation.first().at(0).toInt(), 1);
+        QCOMPARE(navigation.first().at(1).toInt(), 2);
+        QVERIFY(!library->busy());
+        QVERIFY(library->error().isEmpty());
+        QTRY_VERIFY(!library->scanning());
+        QCOMPARE(library->cachedEntries().first().toMap()["imageUrl"].toString(), QString("https://example.test/poster.jpg"));
+    }
+    void homepageEpisodeMatchingAndAmbiguity() {
+        for (int ambiguity : {0, 1, 2}) {
+            QTemporaryDir root;
+            FakeServer server;
+            server.response = [ambiguity](QByteArray target) {
+                if (target.contains("/search/anime")) {
+                    QJsonArray animes{QJsonObject{{"animeId", 42}, {"animeTitle", "测试动画"}, {"imageUrl", "https://example.test/poster.jpg"}}};
+                    if (ambiguity == 1) animes.append(QJsonObject{{"animeId", 43}, {"animeTitle", "测试动画"}});
+                    return Response{200, QJsonDocument(QJsonObject{{"animes", animes}}).toJson()};
+                }
+                if (target.contains("/bangumi/")) {
+                    QJsonArray episodes{QJsonObject{{"episodeId", 42001}, {"episodeTitle", "第1话 开始"}},
+                        QJsonObject{{"episodeId", 42009}, {"episodeTitle", "第9话 冒险"}}};
+                    if (ambiguity == 2) episodes.append(QJsonObject{{"episodeId", 43009}, {"episodeTitle", "第9话 另一版本"}});
+                    return Response{200, QJsonDocument(QJsonObject{{"episodes", episodes}}).toJson()};
+                }
+                return Response{200, commentBody()};
+            };
+            DanmakuLibrary library(root.path());
+            library.setServers({server.base()});
+            QSignalSpy ready(&library, &DanmakuLibrary::sourceReady);
+            library.searchAnimeForEpisode(QStringLiteral("测试动画"), QStringLiteral("冒险"), 9);
+            if (ambiguity == 1) {
+                QTRY_VERIFY(!library.busy());
+                QCOMPARE(ready.count(), 0);
+                QVERIFY(library.selectedAnime().isEmpty());
+                QVERIFY(library.requestedEpisode().contains("9"));
+                library.selectAnime("42");
+            } else if (ambiguity == 2) {
+                QTRY_VERIFY(!library.busy());
+                QCOMPARE(ready.count(), 0);
+                QVERIFY(library.selectedEpisode().isEmpty());
+                QVERIFY(library.status().contains(QStringLiteral("手动")));
+                library.selectEpisode("42009");
+                library.downloadEpisode();
+            }
+            QTRY_COMPARE(ready.count(), 1);
+            auto result = library.takeReadyResult();
+            QVERIFY(result);
+            QCOMPARE(result->metadata["episodeId"].toString(), QString("42009"));
+            QCOMPARE(result->metadata["imageUrl"].toString(), QString("https://example.test/poster.jpg"));
+            QVERIFY(library.requestedEpisode().isEmpty());
+            const auto key = danmakuCacheKey(server.base(), 42009);
+            QCOMPARE(readCachedDanmaku(root.filePath("danmaku"), key).metadata["imageUrl"].toString(), QString("https://example.test/poster.jpg"));
+        }
+    }
     void orderedSettingsRoundTrip() {
         QTemporaryDir root;
         writeBytes(root.filePath("settings.ini"), "[Meta]\nformatVersion=1\n[Online]\ndanmakuServer=\"https://old.test\"\n");
@@ -422,7 +504,7 @@ class OnlineDanmakuTests final : public QObject {
         for (const auto& source : {"online", "cache"}) {
             QProcess process;
             process.start(QDir(QCoreApplication::applicationDirPath()).filePath("DanmaX.exe"),
-                {"--smoke-test", "--seconds", "3", "--source-tab", source, "--data-dir", root.filePath(QString(source) + "-data"),
+                {"--smoke-test", "--seconds", "3", "--page", "player", "--source-tab", source, "--data-dir", root.filePath(QString(source) + "-data"),
                  "--cache-dir", cacheRoot, "--window-width", "520", "--theme", source == QString("cache") ? "dark" : "light"});
             QVERIFY(process.waitForStarted()); QVERIFY(process.waitForFinished(15000));
             QCOMPARE(process.exitStatus(), QProcess::NormalExit);

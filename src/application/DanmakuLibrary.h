@@ -24,6 +24,8 @@ class DanmakuLibrary final : public QObject {
     Q_PROPERTY(int progress READ progress NOTIFY changed)
     Q_PROPERTY(QString status READ status NOTIFY changed)
     Q_PROPERTY(QString error READ error NOTIFY changed)
+    Q_PROPERTY(QString searchKeyword READ searchKeyword NOTIFY searchKeywordChanged)
+    Q_PROPERTY(QString requestedEpisode READ requestedEpisode NOTIFY changed)
   public:
     explicit DanmakuLibrary(QString cacheRoot, QObject* parent = nullptr, int timeoutMs = 30000);
     ~DanmakuLibrary() override;
@@ -40,8 +42,11 @@ class DanmakuLibrary final : public QObject {
     int progress() const { return progress_; }
     QString status() const { return status_; }
     QString error() const { return error_; }
+    QString searchKeyword() const { return searchKeyword_; }
+    QString requestedEpisode() const;
     void setServers(const QStringList& addresses);
     Q_INVOKABLE void searchAnime(const QString& keyword);
+    Q_INVOKABLE void searchAnimeForEpisode(const QString& keyword, const QString& episodeTitle, double episodeNumber);
     Q_INVOKABLE void selectAnime(const QString& id);
     Q_INVOKABLE void selectEpisode(const QString& id);
     Q_INVOKABLE void downloadEpisode(bool refresh = false);
@@ -52,6 +57,7 @@ class DanmakuLibrary final : public QObject {
     std::shared_ptr<OnlineDanmakuResult> takeReadyResult();
   signals:
     void changed();
+    void searchKeywordChanged();
     void cacheChanged();
     void sourceLoadStarted();
     void sourceReady();
@@ -72,6 +78,9 @@ class DanmakuLibrary final : public QObject {
     void acceptResult(std::shared_ptr<OnlineDanmakuResult> result);
     QVariantMap episodeMetadata() const;
     void invalidate();
+    void matchRequestedEpisode();
+    QString searchKeyword_, requestedEpisodeTitle_;
+    double requestedEpisodeNumber_{};
     QString directory_, server_, animeId_, episodeId_, status_, error_;
     QStringList servers_, attemptErrors_;
     qsizetype attemptIndex_{-1};

@@ -14,6 +14,7 @@ ApplicationWindow {
     Binding { target: Ui; property: "micaActive"; value: root.backdrop ? root.backdrop.effectiveMica : false }
     property int selectedPage: 0
     property int sourceTab: 0
+    readonly property string currentPageName: ["home", "player", "logs", "settings", "about"][selectedPage] || ""
     readonly property bool compact: width < Ui.expandedNavigationWidth
     visible: false
     width: 1080; height: 760
@@ -36,6 +37,11 @@ ApplicationWindow {
             if (root.visibility === Window.Minimized) root.showNormal()
             root.raise()
             root.requestActivate()
+        }
+        function onRequestNavigateToPage(page, tab) {
+            root.sourceTab = tab
+            if (page === 1) playerPage.selectSourceTab(tab)
+            root.navigate(page)
         }
     }
     // Keep the swapchain alpha-capable across live material preference changes.
@@ -146,11 +152,21 @@ ApplicationWindow {
                     anchors.fill: parent
                     currentIndex: root.selectedPage
 
+                    HomePage {
+                        id: homePage
+                        objectName: "homePage"
+                        backend: root.backend
+                        onOpenDanmakuForAnime: (title, episodeTitle, episodeNumber) => {
+                            root.backend.showOnlineDanmakuForAnime(title, episodeTitle, episodeNumber)
+                        }
+                    }
                     PlayerPage {
+                        id: playerPage
+                        objectName: "playerPage"
                         backend: root.backend
                         sourceTab: root.sourceTab
                         onOpenSettings: {
-                            root.navigate(2)
+                            root.navigate(3)
                             Qt.callLater(settingsPage.focusOnlineSettings)
                         }
                     }

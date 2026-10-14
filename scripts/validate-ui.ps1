@@ -8,7 +8,7 @@ Invoke-ProjectEnvironment {
     $results = @()
     foreach ($theme in @('light','dark')) {
         foreach ($width in @(520,800,1080)) {
-            foreach ($page in $(if ($SettingsGroups) { @('diagnostics-group','cache-group') } elseif ($ScrollPopup) { @('settings-middle','font-popup') } else { @('player','settings','logs') })) {
+            foreach ($page in $(if ($SettingsGroups) { @('diagnostics-group','cache-group') } elseif ($ScrollPopup) { @('settings-middle','font-popup') } else { @('home','player','settings','logs','about') })) {
                 $name = "$page-$theme-$width"
                 # QQuickWindow::grabWindow captures only Qt pixels, not the DWM
                 # backdrop. Use a deliberate opaque fixture for layout captures;

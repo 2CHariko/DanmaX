@@ -107,6 +107,11 @@
       "file": "stop.svg",
       "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Stop/SVG/ic_fluent_stop_20_regular.svg",
       "sha256": "8023e072d92bf65ac7647ae651d828d083834abc2eee1a2d24d64e10815d493a"
+    },
+    {
+      "file": "home.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Home/SVG/ic_fluent_home_20_regular.svg",
+      "sha256": "b810b7e896c6ef2b4cfa0b693650e0f94b4a6760b222531d60e55ee38212a861"
     }
   ],
   "derivedAssets": [
@@ -277,6 +282,14 @@
     {
       "file": "stop-dark.png",
       "sha256": "47a5745710bf066b3180a9f26d7fb6ea9366a206ed2e4532244368fa0c4b7bee"
+    },
+    {
+      "file": "home.png",
+      "sha256": "0af85cf7e46860a730cc4f9632314140441782782b2f6d7152e50c8faa85d77f"
+    },
+    {
+      "file": "home-dark.png",
+      "sha256": "ec7faa96d50919aab5192ae8c6368fcd731651750e50bc9c44836db1c6608c9f"
     }
   ],
   "rendering": "sharp 0.35.5; 60x60 PNG; dark=negate RGB preserving alpha"

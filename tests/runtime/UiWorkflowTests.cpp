@@ -14,6 +14,9 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QWheelEvent>
 #include <QStyleHints>
 #include <memory>
@@ -33,6 +36,168 @@
 class UiWorkflowTests : public QObject {
     Q_OBJECT
 private slots:
+    void homePageWorkflow() {
+        QTemporaryDir directory;
+        const auto cache = directory.filePath("cache");
+        QVERIFY(QDir().mkpath(cache + "/metadata"));
+        QImage poster(60, 90, QImage::Format_RGB32);
+        poster.fill(QColor("#008080"));
+        const auto posterPath = directory.filePath("poster.png");
+        QVERIFY(poster.save(posterPath));
+        const auto cover = QUrl::fromLocalFile(posterPath).toString();
+        QJsonArray calendar;
+        for (int day = 1; day <= 7; ++day) {
+            calendar.append(QJsonObject{{"weekday", QJsonObject{{"id", day}}}, {"items", QJsonArray{
+                QJsonObject{{"id", 123}, {"name_cn", "回归番剧"}, {"rating", QJsonObject{{"score", 8.2}}},
+                    {"images", QJsonObject{{"large", cover}}}}}}});
+        }
+        QFile calendarFile(cache + "/metadata/calendar.json");
+        QVERIFY(calendarFile.open(QIODevice::WriteOnly));
+        calendarFile.write(QJsonDocument(calendar).toJson());
+        calendarFile.close();
+        auto cached = parseOnlineDanmaku(R"({"comments":[{"p":"1,1,16777215,user","m":"hello"}]})");
+        cached.metadata = {{"server", "https://example.test"}, {"animeId", "42"}, {"episodeId", "42001"},
+            {"animeTitle", "回归番剧"}, {"episodeTitle", "第1话"}, {"imageUrl", cover}, {"downloadedAt", "2026-10-14T00:00:00.000Z"}};
+        QVERIFY(saveCachedDanmaku(cache + "/danmaku", cached).isEmpty());
+        cached.metadata["episodeId"] = "42002";
+        QVERIFY(saveCachedDanmaku(cache + "/danmaku", cached).isEmpty());
+        QFile damaged(cache + "/danmaku/" + QString(64, 'f') + ".json");
+        QVERIFY(damaged.open(QIODevice::WriteOnly)); damaged.write("broken"); damaged.close();
+
+        QTcpServer server;
+        connect(&server, &QTcpServer::newConnection, &server, [&] {
+            while (server.hasPendingConnections()) {
+                auto* socket = server.nextPendingConnection();
+                auto bytes = std::make_shared<QByteArray>();
+                connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+                connect(socket, &QTcpSocket::readyRead, &server, [&, socket, bytes] {
+                    bytes->append(socket->readAll());
+                    if (!bytes->contains("\r\n\r\n")) return;
+                    disconnect(socket, &QTcpSocket::readyRead, &server, nullptr);
+                    QByteArray body;
+                    if (bytes->contains("/calendar")) body = QJsonDocument(calendar).toJson();
+                    else if (bytes->contains("/v0/episodes")) body = R"({"data":[{"id":901,"sort":9,"name_cn":"第9话 冒险","type":0}],"total":1})";
+                    else body = QJsonDocument(QJsonObject{{"id", 123}, {"name_cn", "回归番剧"},
+                        {"summary", QStringLiteral("用于验证详情滚动与键盘操作的剧情简介。\n").repeated(40)},
+                        {"images", QJsonObject{{"large", cover}}}}).toJson();
+                    socket->write("HTTP/1.1 200 OK\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                    socket->disconnectFromHost();
+                });
+            }
+        });
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        AppController backend(directory.filePath("data"), nullptr, {}, cache);
+        auto* metadata = qobject_cast<AnimeMetadataService*>(backend.metadata());
+        metadata->setBaseUrl(QString("http://127.0.0.1:%1").arg(server.serverPort()));
+        auto* library = qobject_cast<DanmakuLibrary*>(backend.library());
+        library->setServers({});
+        QTRY_VERIFY(!library->scanning());
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
+        settings->setValue("micaEnabled", false);
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+        QVERIFY(window);
+        window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* home = window->findChild<QQuickItem*>("homePage");
+        QVERIFY(home);
+        QCOMPARE(home->property("recentWatchedList").toList().size(), 1);
+        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
+            if (parent->objectName() == name) return parent;
+            for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
+            return nullptr;
+        };
+        QQuickItem* cachedCard = nullptr;
+        QQuickItem* weeklyCard = nullptr;
+        std::function<void(QQuickItem*)> collect = [&](QQuickItem* item) {
+            if (item->objectName() == "animeCard") {
+                QCOMPARE(item->property("cardTitle").toString(), QStringLiteral("回归番剧"));
+                QCOMPARE(item->property("cardCover").toString(), cover);
+                if (!item->property("animeData").toMap().value("key").toString().isEmpty()) cachedCard = item;
+                else weeklyCard = item;
+            }
+            for (auto* child : item->childItems()) collect(child);
+        };
+        QTest::qWait(100);
+        collect(home);
+        QVERIFY(cachedCard && weeklyCard);
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/home-fix/") +
+            (qEnvironmentVariable("QT_QUICK_BACKEND") == "software" ? QStringLiteral("software") : QStringLiteral("native")) +
+            (qEnvironmentVariableIsSet("DANMAKU_UI_LARGE_TEXT") ? QStringLiteral("-scaled") : QString());
+        QDir().mkpath(evidence);
+        for (const auto& theme : {"light", "dark"}) {
+            settings->setValue("theme", theme);
+            for (int width : {520, 800, 1080}) {
+                window->resize(width, width == 520 ? 480 : 760);
+                QTest::qWait(70);
+                auto* weekday = find(home, "weekday7");
+                QVERIFY(weekday);
+                const auto right = weekday->mapToItem(home, QPointF(weekday->width(), 0)).x();
+                QVERIFY2(right <= home->width(), qPrintable(QString("weekday right %1 > home width %2").arg(right).arg(home->width())));
+                auto* flick = home->property("contentItem").value<QObject*>();
+                QVERIFY(flick);
+                flick->setProperty("contentY", 0);
+                QVERIFY(window->grabWindow().save(evidence + QString("/home-%1-%2-top.png").arg(theme).arg(width)));
+                flick->setProperty("contentY", std::max(0.0, flick->property("contentHeight").toDouble() - home->height()));
+                QVERIFY(flick->property("contentY").toDouble() > 0);
+                QVERIFY(window->grabWindow().save(evidence + QString("/home-%1-%2-bottom.png").arg(theme).arg(width)));
+            }
+        }
+        auto* weekday = find(home, "weekday7");
+        QVERIFY(weekday);
+        weekday->forceActiveFocus();
+        QTest::keyClick(window, Qt::Key_Space);
+        QCOMPARE(home->property("activeWeekday").toInt(), 7);
+        QVERIFY(QMetaObject::invokeMethod(cachedCard, "clicked"));
+        QTRY_COMPARE(backend.total(), 1);
+        QCOMPARE(window->property("currentPageName").toString(), QString("player"));
+        auto* tabs = find(window->contentItem(), "danmakuSourceTabs");
+        QVERIFY(tabs);
+        QCOMPARE(tabs->property("currentIndex").toInt(), 2);
+        QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 0)));
+        metadata->fetchDetail(123);
+        QTRY_VERIFY(!metadata->loadingDetail());
+        auto* dialog = home->findChild<QObject*>("animeDetailDialog");
+        QVERIFY(dialog);
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QVERIFY(window->grabWindow().save(evidence + "/detail.png"));
+        QTest::keyClick(window, Qt::Key_Escape);
+        QTRY_VERIFY(!dialog->property("visible").toBool());
+        QVERIFY(metadata->currentDetail().isEmpty());
+        metadata->fetchDetail(123);
+        QTRY_VERIFY(!metadata->loadingDetail());
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        auto* content = dialog->property("contentItem").value<QQuickItem*>();
+        QVERIFY(content);
+        auto* episode = find(content, "animeEpisode9");
+        QVERIFY(episode);
+        auto* detailFlick = content->property("contentItem").value<QQuickItem*>();
+        QVERIFY(detailFlick);
+        const auto wheelPosition = content->mapToScene(QPointF(content->width() / 2, content->height() / 2));
+        QWheelEvent scroll(wheelPosition, window->mapToGlobal(wheelPosition.toPoint()), {}, QPoint(0, -120),
+            Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(window, &scroll);
+        QTRY_VERIFY(detailFlick->property("contentY").toDouble() > 0);
+        detailFlick->setProperty("contentY", std::max(0.0,
+            detailFlick->property("contentHeight").toDouble() - content->height()));
+        QVERIFY(window->grabWindow().save(evidence + "/detail-bottom.png"));
+        QSignalSpy selected(home, SIGNAL(openDanmakuForAnime(QString,QString,double)));
+        QVERIFY(selected.isValid());
+        episode->forceActiveFocus();
+        QTest::keyClick(window, Qt::Key_Space);
+        QCOMPARE(selected.count(), 1);
+        QCOMPARE(selected.first().at(1).toString(), QStringLiteral("第9话 冒险"));
+        QCOMPARE(selected.first().at(2).toDouble(), 9.0);
+        QCOMPARE(tabs->property("currentIndex").toInt(), 1);
+        tabs->setProperty("currentIndex", 0);
+        backend.showOnlineDanmakuForAnime(QStringLiteral("回归番剧"));
+        QCOMPARE(tabs->property("currentIndex").toInt(), 1);
+        QCOMPARE(warnings.count(), 0);
+    }
     void toolbarSingleLineTips() {
         QTemporaryDir directory;
         AppController backend(directory.path(), nullptr, {}, directory.path(), [](QWindow*) { return true; });
@@ -1217,19 +1382,22 @@ ApplicationWindow {
             QTest::keyClick(window, Qt::Key_Space);
             QTest::qWait(50);
         };
-        activate(find("navigation2"));
-        QCOMPARE(window->property("selectedPage").toInt(), 2);
+        activate(find("navigation3"));
+        QCOMPARE(window->property("selectedPage").toInt(), 3);
         activate(find("micaSwitch"));
         QVERIFY(!settings->values().value("micaEnabled").toBool());
         activate(find("micaSwitch"));
         QVERIFY(settings->values().value("micaEnabled").toBool());
-        activate(find("navigation3"));
-        QCOMPARE(window->property("selectedPage").toInt(), 3);
+        activate(find("navigation4"));
+        QCOMPARE(window->property("selectedPage").toInt(), 4);
         QVERIFY(find("reportBugCard"));
-        activate(find("navigation1"));
-        QCOMPARE(window->property("selectedPage").toInt(), 1);
+        activate(find("navigation2"));
+        QCOMPARE(window->property("selectedPage").toInt(), 2);
         activate(find("navigation0"));
         QCOMPARE(window->property("selectedPage").toInt(), 0);
+        QVERIFY(find("homePage"));
+        activate(find("navigation1"));
+        QCOMPARE(window->property("selectedPage").toInt(), 1);
         auto* start = find("startPlayback");
         QVERIFY(start);
         auto* sourceTab = find("sourceLocalTab");
@@ -1306,16 +1474,16 @@ ApplicationWindow {
         backend.clearError();
         auto* tabs = find("danmakuSourceTabs");
         tabs->setProperty("currentIndex", 2);
-        window->setProperty("selectedPage", 2);
+        window->setProperty("selectedPage", 3);
         QTest::qWait(50);
-        window->setProperty("selectedPage", 0);
+        window->setProperty("selectedPage", 1);
         QCOMPARE(tabs->property("currentIndex").toInt(), 2);
         tabs->setProperty("currentIndex", 1);
         auto* player = tabs;
         while (player && player->metaObject()->indexOfSignal("openSettings()") < 0) player = player->parentItem();
         QVERIFY(player);
         QVERIFY(QMetaObject::invokeMethod(player, "openSettings"));
-        QTRY_COMPARE(window->property("selectedPage").toInt(), 2);
+        QTRY_COMPARE(window->property("selectedPage").toInt(), 3);
         QTRY_VERIFY(find("danmakuServerInput"));
         QTRY_VERIFY(find("danmakuServerInput")->hasActiveFocus());
         const auto serverPosition = find("danmakuServerInput")->mapToScene(QPointF());
@@ -1367,7 +1535,7 @@ ApplicationWindow {
         QVERIFY(QMetaObject::invokeMethod(onlineFrame, "focusOnlineSettings"));
         QTRY_VERIFY(find("danmakuServerInput"));
         activate(find("cancelServersBtn"));
-        window->setProperty("selectedPage", 1);
+        window->setProperty("selectedPage", 2);
         logs->clear();
         QTRY_COMPARE(find("logEmptyState")->property("text").toString(), QString::fromUtf8("暂无日志"));
         logs->append("INFO", QString::fromUtf8("测试消息：这是一条用于检查换行和筛选状态的中文日志。"));
@@ -1382,7 +1550,7 @@ ApplicationWindow {
             settings->setValue("theme", theme);
             for (int width : {520, 800, 1080}) {
                 window->resize(width, width == 520 ? 480 : 760);
-                for (int page = 0; page < 3; ++page) {
+                for (int page = 0; page < 4; ++page) {
                     QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, page)));
                     QTest::qWait(80);
                     QVERIFY(window->grabWindow().save(output + QString("/page-%1-%2-%3.png").arg(page).arg(theme).arg(width)));

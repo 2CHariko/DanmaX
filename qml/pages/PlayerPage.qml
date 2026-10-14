@@ -22,6 +22,8 @@ PageFrame {
         return (seconds >= 3600 ? Math.floor(minutes / 60) + ":" + String(minutes % 60).padStart(2, "0") : String(minutes).padStart(2, "0")) + ":" + String(seconds % 60).padStart(2, "0")
     }
 
+    function selectSourceTab(tab) { sourceTabs.currentIndex = tab }
+
     // ==========================================
     // 1. 顶部 HERO 主控台与就绪状态看板
     // ==========================================

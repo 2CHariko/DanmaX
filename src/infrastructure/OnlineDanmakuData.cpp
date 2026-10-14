@@ -148,7 +148,7 @@ OnlineDanmakuResult readCachedDanmaku(const QString& directory, const QString& k
     if (error.error != QJsonParseError::NoError || !doc.isObject()) { result.error = QStringLiteral("缓存 JSON 损坏"); return result; }
     auto object = doc.object();
     const auto rawComments = object.take("comments");
-    for (const auto& field : {"version", "server", "animeId", "episodeId", "animeTitle", "episodeTitle", "downloadedAt", "count"})
+    for (const auto& field : {"version", "server", "animeId", "episodeId", "animeTitle", "episodeTitle", "downloadedAt", "count", "imageUrl"})
         result.metadata[field] = object.value(field).toVariant();
     result.metadata["key"] = key;
     if (object.value("version").toInt(-1) != 1) { result.error = QStringLiteral("不支持的缓存版本"); return result; }
