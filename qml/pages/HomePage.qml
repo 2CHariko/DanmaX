@@ -8,6 +8,8 @@ import "../i18n"
 PageFrame {
     id: page
     required property QtObject backend
+    required property Item searchField
+    function focusFirstSearchResult() { searchPane.focusFirstResult() }
     signal openDanmakuForAnime(string title, string episodeTitle, real episodeNumber)
     property real detailSubjectId: 0
     function showDetails(anime) {
@@ -18,6 +20,7 @@ PageFrame {
 
     title: I18n.home.title
     description: I18n.home.description
+    headingVisible: !searchPane.showingResults
 
     property int activeWeekday: backend.metadata.todayWeekday
 
@@ -68,7 +71,6 @@ PageFrame {
     AnimeSearchPane {
         id: searchPane
         metadata: page.backend.metadata
-        ownerVisible: page.visible
         onDetailsRequested: anime => page.showDetails(anime)
         onRevealRequested: item => page.reveal(item)
     }
@@ -77,8 +79,7 @@ PageFrame {
         sequences: [StandardKey.Find]
         enabled: page.visible
         onActivated: {
-            page.reveal(searchPane.searchField)
-            searchPane.searchField.contentItem.forceActiveFocus(Qt.ShortcutFocusReason)
+            page.searchField.contentItem.forceActiveFocus(Qt.ShortcutFocusReason)
         }
     }
 

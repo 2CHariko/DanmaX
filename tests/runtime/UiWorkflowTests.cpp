@@ -1,5 +1,6 @@
 
 #include <QGuiApplication>
+#include <QScreen>
 #include <QCursor>
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
@@ -245,8 +246,21 @@ private slots:
         window->show();
         QVERIFY(QTest::qWaitForWindowExposed(window));
         auto* home = window->findChild<QQuickItem*>("homePage");
-        auto* field = home->findChild<QQuickItem*>("homeAnimeSearch");
+        const auto available = window->screen()->availableGeometry().size() - QSize(32, 32);
+        QCOMPARE(window->minimumWidth(), std::min(800, std::max(1, available.width())));
+        QCOMPARE(window->minimumHeight(), std::min(600, std::max(1, available.height())));
+        auto* field = window->findChild<QQuickItem*>("homeAnimeSearch");
         QVERIFY(field);
+        auto* searchHint = window->findChild<QQuickItem*>("homeAnimeSearchHint");
+        QVERIFY(searchHint && searchHint->isVisible());
+        QCOMPARE(searchHint->property("text").toString(), QStringLiteral("搜索番剧"));
+        auto* heading = home->findChild<QQuickItem*>("pageHeading");
+        QVERIFY(heading && heading->isVisible());
+        auto* titleBar = window->findChild<QQuickItem*>("mainTitleBar");
+        auto* captions = window->findChild<QQuickItem*>("mainCaptionButtons");
+        QVERIFY(titleBar && captions);
+        QVERIFY(field->mapToScene(QPointF()).y() >= 7.5);
+        QTRY_VERIFY(field->mapToScene(QPointF(0, field->height())).y() <= home->mapToScene(QPointF()).y());
         std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
             if (parent->objectName() == name) return parent;
             for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
@@ -267,6 +281,7 @@ private slots:
         else {
             QInputMethodEvent preedit(QStringLiteral("ceshi"), {});
             QCoreApplication::sendEvent(editor, &preedit);
+            QVERIFY(!searchHint->isVisible());
             QCOMPARE(requests, 0);
             QInputMethodEvent commit;
             commit.setCommitString(QStringLiteral("测试番剧"));
@@ -277,6 +292,7 @@ private slots:
         QTest::keyClick(window, Qt::Key_Return);
         QTRY_VERIFY_WITH_TIMEOUT(!metadata->searching() && !metadata->searchResults().isEmpty(), 20000);
         QVERIFY2(metadata->searchError().isEmpty(), qPrintable(metadata->searchError()));
+        QVERIFY(!heading->isVisible());
         auto* first = find(home, "animeSearchResult0");
         QVERIFY(first && first->isVisible());
         if (!live) QCOMPARE(metadata->searchResults().size(), 20);
@@ -301,23 +317,43 @@ private slots:
         QVERIFY(flick);
         for (auto theme : {"light", "dark"}) {
             QVERIFY(settings->setValue("theme", theme));
-            for (int width : {1080, 800, 520}) {
-                window->resize(width, width == 520 ? 480 : 760);
+            for (int width : {1080, 1008, 800}) {
+                window->resize(width, width == 800 ? 600 : 760);
                 flick->setProperty("contentY", 0);
                 QTest::qWait(100);
                 QVERIFY(field->width() <= field->parentItem()->width());
                 QVERIFY(std::abs(field->x() + field->width() / 2 - field->parentItem()->width() / 2) < 1);
+                QVERIFY(field->mapToScene(QPointF()).y() >= 0);
+                QVERIFY(field->mapToScene(QPointF(0, field->height())).y() <= titleBar->height());
+                QVERIFY(captions->mapToScene(QPointF()).x()
+                    - field->mapToScene(QPointF(field->width(), 0)).x() >= 47.5);
+#if defined(Q_OS_WIN)
+                const auto hwnd = reinterpret_cast<HWND>(window->winId());
+                const auto hitAt = [&](const QPointF& scene) {
+                    POINT pixel{qRound(scene.x() * window->devicePixelRatio()),
+                        qRound(scene.y() * window->devicePixelRatio())};
+                    ClientToScreen(hwnd, &pixel);
+                    return SendMessageW(hwnd, WM_NCHITTEST, 0, MAKELPARAM(pixel.x, pixel.y));
+                };
+                QCOMPARE(hitAt(field->mapToScene(QPointF(field->width() / 2, field->height() / 2))), LRESULT(HTCLIENT));
+                QCOMPARE(hitAt(QPointF(captions->mapToScene(QPointF()).x() - 24, titleBar->height() / 2)), LRESULT(HTCAPTION));
+                auto* maxButton = captions->property("maxBtn").value<QQuickItem*>();
+                QVERIFY(maxButton);
+                QCOMPARE(hitAt(maxButton->mapToScene(QPointF(maxButton->width() / 2, maxButton->height() / 2))), LRESULT(HTMAXBUTTON));
+#endif
                 const auto right = first->mapToItem(home, QPointF(first->width(), 0)).x();
                 QVERIFY(right <= home->width());
                 QVERIFY(window->grabWindow().save(evidence + QString("/%1-%2.png").arg(theme).arg(width)));
             }
         }
         flick->setProperty("contentY", 0);
+        const auto searchY = field->mapToScene(QPointF()).y();
         const auto point = home->mapToScene(QPointF(home->width() / 2, home->height() / 2));
         QWheelEvent wheel(point, window->mapToGlobal(point.toPoint()), {}, QPoint(0, -120),
             Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
         QCoreApplication::sendEvent(window, &wheel);
         QTRY_VERIFY(flick->property("contentY").toDouble() > 0);
+        QCOMPARE(field->mapToScene(QPointF()).y(), searchY);
         flick->setProperty("contentY", std::max(0.0, flick->property("contentHeight").toDouble() - home->height()));
         QTest::qWait(50);
         QVERIFY(window->grabWindow().save(evidence + "/bottom.png"));
@@ -325,12 +361,11 @@ private slots:
         QVERIFY(searchShortcut);
         QVERIFY(QMetaObject::invokeMethod(searchShortcut, "activated"));
         QTRY_VERIFY(editor->hasActiveFocus());
-        const auto fieldTop = field->mapToItem(home, QPointF()).y();
+        const auto fieldTop = field->mapToScene(QPointF()).y();
         QVERIFY(fieldTop >= -0.5);
-        QVERIFY(fieldTop + field->height() <= home->height());
+        QVERIFY(fieldTop + field->height() <= titleBar->height());
         if (!live) {
             const auto submit = [&](const QString& text) {
-                flick->setProperty("contentY", 0);
                 field->setProperty("text", text);
                 editor->forceActiveFocus();
                 if (text == "error") QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
@@ -338,6 +373,7 @@ private slots:
                 else QTest::keyClick(window, Qt::Key_Return);
             };
             submit("error");
+            QTRY_COMPARE(flick->property("contentY").toDouble(), 0.0);
             QTRY_VERIFY(!metadata->searchError().isEmpty());
             auto* retry = find(home, "retryAnimeSearch");
             QVERIFY(retry && retry->isVisible());
@@ -363,12 +399,31 @@ private slots:
         QTest::keyClick(window, Qt::Key_Escape);
         QTRY_VERIFY(field->property("text").toString().isEmpty());
         QVERIFY(metadata->searchKeyword().isEmpty());
+        QVERIFY(searchHint->isVisible());
         flick->setProperty("contentY", 0);
+        QTRY_VERIFY(heading->isVisible());
+        QTRY_VERIFY(field->mapToScene(QPointF(0, field->height())).y() <= home->mapToScene(QPointF()).y());
+        QVERIFY(window->grabWindow().save(evidence + "/cleared-home.png"));
         field->setProperty("text", "clear button");
         QTest::qWait(20);
         QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
             clearIcon->mapToScene(QPointF(clearIcon->width() / 2, clearIcon->height() / 2)).toPoint());
         QTRY_VERIFY(field->property("text").toString().isEmpty());
+        const auto headingY = heading->mapToScene(QPointF()).y();
+        const auto headerHeight = titleBar->height();
+        for (int pageIndex = 1; pageIndex < 5; ++pageIndex) {
+            QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, pageIndex)));
+            QTest::qWait(30);
+            QCOMPARE(titleBar->height(), headerHeight);
+            QVERIFY(!field->isVisible());
+            QQuickItem* visibleHeading = nullptr;
+            for (auto* candidate : window->findChildren<QQuickItem*>("pageHeading"))
+                if (candidate->isVisible()) visibleHeading = candidate;
+            QVERIFY(visibleHeading);
+            QVERIFY(std::abs(visibleHeading->mapToScene(QPointF()).y() - headingY) < 0.5);
+            QVERIFY(window->grabWindow().save(evidence + QString("/page-%1-heading.png").arg(pageIndex)));
+        }
+        QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 0)));
         for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) loadErrors << error.toString();
         QVERIFY2(warnings.isEmpty(), qPrintable(loadErrors.join('\n')));
     }

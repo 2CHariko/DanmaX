@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFontDatabase>
 #include <QGuiApplication>
+#include <QQmlEngine>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QQuickWindow>
@@ -121,6 +122,14 @@ QStringList AppController::screens() const {
                      .arg(screen->size().width())
                      .arg(screen->size().height());
     return names;
+}
+QObject* AppController::screenForName(const QString& name) const {
+    auto* selected = qGuiApp->primaryScreen();
+    for (auto* screen : qGuiApp->screens())
+        if (screen->name() == name) { selected = screen; break; }
+    // Screens belong to Qt; an invokable must not transfer them to QML's GC.
+    if (selected) QQmlEngine::setObjectOwnership(selected, QQmlEngine::CppOwnership);
+    return selected;
 }
 bool AppController::hasFluentIcons() const {
     return QFontDatabase::families().contains("Segoe Fluent Icons");

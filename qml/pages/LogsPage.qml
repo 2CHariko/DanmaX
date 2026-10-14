@@ -19,6 +19,7 @@ ColumnLayout {
 
     Label {
         id: heading
+        objectName: "pageHeading"
         text: I18n.logs.title
         font.pixelSize: Ui.titleSize
         font.weight: Font.DemiBold

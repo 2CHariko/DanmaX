@@ -717,3 +717,36 @@ Windows 10/早期 Windows 11、系统透明开关与节能切换、高对比度�
 - Debug、Release 完整 CTest 均 **17/17 通过**，耗时分别为 **300.95 秒／141.40 秒**。其中元数据套件各 **21 passed、0 failed、0 skipped**；界面套件各 **14 passed、0 failed、3 skipped**（两项 Windows 前台输入检查未获前台，另一项为需显式启用的真实媒体透明度检查），工具栏套件各 **12 passed、0 failed、1 skipped**（需显式启用的真实媒体生命周期检查）。这些跳过不计为本轮实机验收；构建保留既有 Qt／QWindowKit 配置与 Qt 生成代码警告。
 - 全套之后补齐从结果底部定位搜索框时的完整可见性与编辑焦点检查，并重新构建两种配置。Debug software 与 Release 默认图形后端的最终搜索流程各 **3 passed、0 failed、0 skipped**；该检查通过公开 Shortcut 激活信号验证页面处理，不作为 Windows 全局快捷键输入验收。最后改动仅涉及该 QML 定位处理与界面测试，未重复运行不受影响的核心套件。
 - 证据位于 `out/validation/home-search/`，真实服务截图为 `live-release-native/`，模拟服务器截图按构建／渲染后端／文字缩放分别保存。真实检查通过环境变量 `DANMAKU_TEST_METADATA_LIVE=1` 显式启用，再运行 `ui_workflow_tests homeAnimeSearchWorkflow`；默认回归使用本地模拟服务器，不依赖联网。
+
+### 搜索位置调整（同日）
+
+- 搜索区域移至首页标题和说明上方，保持内容区居中与官方控件外观；提交搜索后隐藏首页标题及说明，清空后恢复。PageFrame 提供可选标题前区域，其他页面默认保留原布局。
+- 按用户要求仅做最小验证：Release 主程序与 UI 测试目标增量构建通过，仅执行 `homeAnimeSearchWorkflow`，**3 passed、0 failed、0 skipped，7.315 秒**（含初始化与清理），无 QML 警告。增加搜索框位于标题上方、搜索时标题隐藏、清空后恢复的断言；原专项同时覆盖搜索交互、滚动及浅深主题和窄窗。未执行全量 CTest，也未重跑真实服务或 Debug 验证。
+- 本次证据为 `out/validation/home-search/release-heading-layout.txt` 和 `release-native/` 截图；清空后首页布局为 `release-native/cleared-home.png`。
+
+### 标题栏搜索优化（同日，取代上方独立搜索行布局）
+
+- 将原生 SearchField 拆为 AnimeSearchField，与窗口按钮共用顶部横排，仅首页显示；输入框在按钮左侧剩余区域居中、最大宽度 560，预留 48 单位拖拽空白，窄窗缩小宽度。顶部按控件自然高度加上下各 4 单位间距布局，不再另占页面内容行；页面保留搜索结果和详情入口，滚动时输入框固定。
+- QWindowKit 通过公开 `setHitTestVisible` 将输入区域排除拖拽命中，窗口按钮保持既有系统按钮注册。Ctrl+F 直接聚焦顶部输入；向下键定位首项，提交新搜索返回结果顶部，切页仍清空并取消请求。官方控件视觉、搜索服务和弹幕链路保持原实现。
+- 最终 Debug、Release 主程序和 UI 测试目标均重新配置并构建成功；仅执行 `homeAnimeSearchWorkflow` 专项，Debug 在 150% 缩放／13.5pt 字体下 **3 passed、0 failed、0 skipped，14.149 秒**，Release 默认缩放 **3 passed、0 failed、0 skipped，7.191 秒**（均含初始化与清理），无 QML 警告。覆盖浅深主题、520／800／1080 窗口宽度、顶部与按钮间距、滚动固定、提交回到顶部及原搜索交互；已目视复核窄窗放大文字和常规宽窗截图。
+- 对实际 Windows 窗口发送 `WM_NCHITTEST`，验证输入中心为 `HTCLIENT`、预留空白为 `HTCAPTION`、最大化按钮为 `HTMAXBUTTON`。该检查验证原生命中，不代替真实鼠标拖动、双击最大化或 Snap 浮层交互验收。本轮未跑全量 CTest、真实网络、Narrator、高对比度或混合 DPI 验收，构建保留既有配置及 Qt 生成代码警告。
+- 最终报告为 `out/validation/home-search/debug-titlebar-layout.txt` 和 `release-titlebar-layout.txt`；截图位于 `debug-native-scaled/` 与 `release-native/`，其中 `cleared-home.png` 显示清空后标题与推荐区恢复。
+
+### 紧凑尺寸与搜索提示（同日）
+
+- 按用户后续要求，搜索最大宽度从 560 减至 440，常规高度调至 28；高度下限同时考虑文字内容与控件上下内边距。首页顶部从控件自然高度加 8 改为实际高度加 4、最低 32，减少额外留白。保留官方背景、图标、内边距与字体。
+- 提示文字改为“搜索番剧”。锁定版本 SearchField 内部使用模板 TextField，不含占位文字绘制，因此通过编辑器公开属性定位一个无交互 Label，沿用编辑器字体与语义提示色；空输入显示，输入与输入法预编辑时隐藏，清空后恢复。未替换输入控件或访问私有 API。
+- Debug、Release 均完成重新配置及主程序／UI 测试目标构建，仅运行首页搜索专项，各 **3 passed、0 failed、0 skipped**，耗时 **12.809 秒／7.011 秒**（含初始化与清理），无 QML 警告。增加提示文字、初始显示、输入法预编辑隐藏及清空恢复断言；现有专项同时复核浅深主题、窄窗、搜索交互及 Windows 原生命中。目视确认提示与紧凑布局；未跑全量测试，本轮未另跑放大文字或混合 DPI 实机验收。
+- 报告为 `out/validation/home-search/debug-compact-hint.txt` 和 `release-compact-hint.txt`；截图在 `debug-native/`、`release-native/`，空输入提示见 `cleared-home.png`。
+
+### 统一顶部间距与页面标题（同日）
+
+- 搜索框保持紧凑尺寸，顶部横排高度统一为至少 44，并按输入框实际高度加上下各 8 单位留白适配。无搜索框的页面保留同一顶部高度，内容区统一增加 8 单位顶部间距，首页、播放、日志、设置和关于的标题起点一致；间距定义于 Ui 语义层。
+- Debug、Release 主程序及 UI 测试目标均构建通过，仅运行首页搜索专项，各 **3 passed、0 failed、0 skipped，12.640 秒／7.334 秒**（含初始化与清理），无 QML 引擎警告。专项新增搜索框顶部留白断言，以及切换全部四个其他页面时的标题坐标、顶部高度一致和搜索框隐藏断言；目视复核首页与日志页截图。未运行全量测试。
+- Debug 首次链接被正在运行的开发程序占用，通过正常窗口关闭请求退出该 Debug 实例后重新链接成功，未强制终止进程。报告为 `out/validation/home-search/debug-header-spacing.txt`、`release-header-spacing.txt`；页面标题截图为对应 `*-native/page-1-heading.png` 至 `page-4-heading.png`。
+
+### 主窗口最小尺寸（同日）
+
+- 常规下限调整为 800×600 逻辑单位，默认启动大小保留 1080×760，导航展开阈值保留 1008。按当前显示器 QScreen 的 availableGeometry 分别限制宽高下限为可用尺寸减 32 的边框余量；工作区变化由公开属性通知更新，换屏通过窗口 screen.name 重新选择实际屏幕，不使用合并桌面的 availableVirtualSize。返回的 QScreen 显式保持 C++ 所有权，避免 QML 垃圾回收误接管系统对象。
+- Debug、Release 完成主程序及 UI 测试目标构建，仅运行首页搜索专项，各 **3 passed、0 failed、0 skipped，12.183 秒／7.191 秒**（含初始化与清理），无 QML 引擎警告。检查当前屏幕最小尺寸绑定，布局截图改为 800×600／1008×760／1080×760，并保留搜索、滚动、原生命中和所有页面标题一致性检查；目视复核 800×600 首页。未执行全量测试，工作区不足时的回退已实现，未单独实测低分辨率或混合 DPI 换屏。
+- 证据为 `out/validation/home-search/debug-minimum-window.txt`、`release-minimum-window.txt` 和对应 native 截图目录。构建前通过正常关闭请求退出占用 Debug 可执行文件的开发实例。

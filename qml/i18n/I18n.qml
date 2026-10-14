@@ -71,7 +71,7 @@ QtObject {
         emptyCalendar: "暂无排期数据，请检查网络连接或重试",
         refreshSchedule: "刷新周历",
         loadingCalendar: "正在同步番组放送表…",
-        searchPlaceholder: "搜索番剧名称",
+        searchPlaceholder: "搜索番剧",
         searchAccessible: "搜索番剧元信息",
         searchResultsTitle: "“%1”的搜索结果",
         searchLoading: "正在搜索番剧…",

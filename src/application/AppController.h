@@ -75,6 +75,7 @@ class AppController final : public QObject {
         return sessions_;
     }
     QStringList screens() const;
+    Q_INVOKABLE QObject* screenForName(const QString& name) const;
     QStringList fontFamilies();
     QString status() const {
         return status_;

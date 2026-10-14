@@ -18,7 +18,10 @@ ApplicationWindow {
     readonly property bool compact: width < Ui.expandedNavigationWidth
     visible: false
     width: 1080; height: 760
-    minimumWidth: 520; minimumHeight: 480
+    readonly property QtObject sizingScreen: backend.screenForName(screen ? screen.name : "")
+    readonly property rect sizingWorkArea: sizingScreen ? sizingScreen.availableGeometry : Qt.rect(0, 0, 832, 632)
+    minimumWidth: Math.min(800, Math.max(1, sizingWorkArea.width - 32))
+    minimumHeight: Math.min(600, Math.max(1, sizingWorkArea.height - 32))
     title: I18n.nav.appTitle
     WindowAgent { id: windowAgent }
     function syncTheme() {
@@ -106,11 +109,32 @@ ApplicationWindow {
             // 顶部沉浸式标题栏（拖拽区域与控制按钮）
             Item {
                 id: titleBar
+                objectName: "mainTitleBar"
                 Layout.fillWidth: true
-                Layout.preferredHeight: 36
+                // Keep every page heading aligned with the homepage search layout.
+                Layout.preferredHeight: Math.max(44, homeSearch.height + 2 * Ui.titleBarVerticalPadding)
+
+                Item {
+                    id: searchHost
+                    anchors.left: parent.left
+                    anchors.leftMargin: root.compact ? 16 : Ui.pagePadding
+                    anchors.right: captionButtons.left
+                    anchors.rightMargin: 48
+                    height: parent.height
+                    AnimeSearchField {
+                        id: homeSearch
+                        metadata: root.backend.metadata
+                        visible: root.selectedPage === 0
+                        anchors.centerIn: parent
+                        width: Math.max(0, Math.min(440, parent.width))
+                        onFirstResultRequested: homePage.focusFirstSearchResult()
+                        onSubmitted: homePage.contentItem.contentY = 0
+                    }
+                }
 
                 WindowCaptionButtons {
                     id: captionButtons
+                    objectName: "mainCaptionButtons"
                     anchors.right: parent.right
                     anchors.top: parent.top
                 }
@@ -123,7 +147,7 @@ ApplicationWindow {
                 Layout.leftMargin: root.compact ? 16 : Ui.pagePadding
                 Layout.rightMargin: 0
                 Layout.bottomMargin: 0
-                Layout.topMargin: 0
+                Layout.topMargin: Ui.pageHeaderGap
                 spacing: 12
 
             RowLayout {
@@ -156,6 +180,7 @@ ApplicationWindow {
                         id: homePage
                         objectName: "homePage"
                         backend: root.backend
+                        searchField: homeSearch
                         onOpenDanmakuForAnime: (title, episodeTitle, episodeNumber) => {
                             root.backend.showOnlineDanmakuForAnime(title, episodeTitle, episodeNumber)
                         }
@@ -198,6 +223,7 @@ ApplicationWindow {
         windowAgent.setSystemButton(WindowAgent.Maximize, captionButtons.maxBtn)
         windowAgent.setSystemButton(WindowAgent.Close, captionButtons.closeBtn)
         windowAgent.setHitTestVisible(navPane, true)
+        windowAgent.setHitTestVisible(homeSearch, true)
         root.syncTheme()
         root.backend.attach(overlay.renderer, overlay, toolbarWindow, root)
     }

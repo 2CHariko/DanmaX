@@ -8,6 +8,7 @@ ScrollView {
     id: page
     property string title
     property string description
+    property bool headingVisible: true
     default property alias entries: contentArea.data
     readonly property alias verticalBar: verticalBar
     readonly property alias bodyItem: body
@@ -60,8 +61,9 @@ ScrollView {
             spacing: Ui.sectionGap
             ColumnLayout {
                 Layout.fillWidth: true
+                visible: page.headingVisible
                 spacing: 8
-                Label { id: heading; text: page.title; font.pixelSize: Ui.titleSize; font.weight: Font.DemiBold; color: Ui.textColor; Accessible.role: Accessible.Heading }
+                Label { id: heading; objectName: "pageHeading"; text: page.title; font.pixelSize: Ui.titleSize; font.weight: Font.DemiBold; color: Ui.textColor; Accessible.role: Accessible.Heading }
                 Label { visible: text.length > 0; text: page.description; color: Ui.secondaryText; wrapMode: Text.WordWrap; Layout.fillWidth: true }
             }
         }

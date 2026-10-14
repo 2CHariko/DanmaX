@@ -7,49 +7,15 @@ import "../i18n"
 ColumnLayout {
     id: pane
     required property QtObject metadata
-    property bool ownerVisible: true
     readonly property bool showingResults: metadata.searchKeyword.length > 0
-    readonly property alias searchField: keyword
     signal detailsRequested(var anime)
     signal revealRequested(var item)
     Layout.fillWidth: true
     spacing: 12
 
-    function reset() {
-        metadata.clearSearch()
-        keyword.text = ""
-    }
-    onOwnerVisibleChanged: if (!ownerVisible) reset()
-
-    Item {
-        Layout.fillWidth: true
-        implicitHeight: keyword.implicitHeight
-        SearchField {
-            id: keyword
-            objectName: "homeAnimeSearch"
-            anchors.horizontalCenter: parent.horizontalCenter
-            width: Math.min(560, parent.width)
-            live: false
-            suggestionModel: []
-            // SearchField exposes its native TextField through public contentItem.
-            Binding { target: keyword.contentItem; property: "placeholderText"; value: I18n.home.searchPlaceholder }
-            Binding { target: keyword.contentItem; property: "maximumLength"; value: 512 }
-            Accessible.name: I18n.home.searchAccessible
-            onSearchTriggered: pane.metadata.searchBangumi(text)
-            onSearchButtonPressed: pane.metadata.searchBangumi(text)
-            onClearButtonPressed: pane.reset()
-            onTextChanged: if (text.trim().length === 0) pane.metadata.clearSearch()
-            Keys.onDownPressed: event => {
-                if (results.count > 0) {
-                    pane.revealRequested(results.itemAt(0))
-                    event.accepted = true
-                } else event.accepted = false
-            }
-            Keys.onEscapePressed: event => {
-                if (text.length > 0) { pane.reset(); event.accepted = true }
-                else event.accepted = false
-            }
-        }
+    visible: showingResults
+    function focusFirstResult() {
+        if (results.count > 0) pane.revealRequested(results.itemAt(0))
     }
 
     ColumnLayout {

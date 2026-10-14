@@ -15,6 +15,8 @@ QtObject {
     readonly property bool highContrast: Application.styleHints.accessibility.contrastPreference === Qt.HighContrast
     readonly property color secondaryText: highContrast ? colors.text : (dark ? "#9D9D9D" : "#5D5D5D")
     readonly property int pagePadding: 32
+    readonly property int titleBarVerticalPadding: 8
+    readonly property int pageHeaderGap: 8
     readonly property int bodySize: Math.round(14 * textScale)
     readonly property real textScale: Math.max(1, Qt.application.font.pointSize / 9)
     readonly property int titleSize: Math.round(28 * textScale)
