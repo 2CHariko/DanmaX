@@ -109,6 +109,8 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/OnlineDanmakuData.cpp src/infrastructure/OnlineDanmakuData.h
         src/application/AppController.cpp src/application/AppController.h
         src/infrastructure/AnimeMetadataService.cpp src/infrastructure/AnimeMetadataService.h
+        src/infrastructure/MetadataCache.cpp src/infrastructure/MetadataCache.h
+        src/infrastructure/CoverCache.cpp src/infrastructure/CoverCache.h
         src/infrastructure/AppPaths.cpp src/infrastructure/AppPaths.h
         src/platform/windows/MediaMonitor.cpp src/platform/windows/MediaMonitor.h
         src/platform/windows/SmtcReader.cpp src/platform/windows/SmtcReader.h
@@ -145,6 +147,12 @@ if(DANMAKU_BUILD_APP)
     if(BUILD_TESTING)
         find_package(Qt6 6.11.0 EXACT REQUIRED COMPONENTS Test
             PATHS "${danmaku_qt_directory}/lib/cmake/Qt6" NO_DEFAULT_PATH)
+        add_executable(app_paths_tests tests/runtime/AppPathsTests.cpp src/infrastructure/AppPaths.cpp)
+        target_include_directories(app_paths_tests PRIVATE src)
+        target_link_libraries(app_paths_tests PRIVATE Qt6::Core Qt6::Test)
+        danmaku_compile_options(app_paths_tests)
+        add_test(NAME app_paths COMMAND app_paths_tests)
+        set_tests_properties(app_paths PROPERTIES TIMEOUT 20)
         if(NOT DANMAKU_STATIC_QT)
             add_executable(ui_workflow_tests tests/runtime/UiWorkflowTests.cpp)
             target_link_libraries(ui_workflow_tests PRIVATE danmaku_runtime Qt6::QuickControls2 Qt6::Test QWindowKit::Quick)

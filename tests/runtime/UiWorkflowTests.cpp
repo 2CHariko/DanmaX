@@ -23,6 +23,7 @@
 #include <QInputMethodEvent>
 #include <QElapsedTimer>
 #include <QSaveFile>
+#include <QBuffer>
 #include <QScopeGuard>
 #include <cmath>
 #include <memory>
@@ -176,6 +177,121 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void metadataCacheOfflineWorkflow() {
+        QTemporaryDir directory;
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        const auto base = QString("http://127.0.0.1:%1").arg(server.serverPort());
+        const auto cover = base + "/cover";
+        QImage image(120, 180, QImage::Format_RGB32); image.fill(QColor("#008080"));
+        QByteArray png; QBuffer buffer(&png); QVERIFY(buffer.open(QIODevice::WriteOnly)); QVERIFY(image.save(&buffer, "PNG"));
+        const QJsonObject subject{{"id", 123}, {"type", 2}, {"name_cn", "离线缓存回归番剧"},
+            {"summary", QStringLiteral("重启后从本地缓存显示详情与封面。\n").repeated(35)},
+            {"images", QJsonObject{{"large", cover}}}, {"rating", QJsonObject{{"score", 8.2}}}};
+        QJsonArray calendar;
+        for (int day = 1; day <= 7; ++day) calendar.append(QJsonObject{{"weekday", QJsonObject{{"id", day}}}, {"items", QJsonArray{subject}}});
+        int requests = 0;
+        connect(&server, &QTcpServer::newConnection, &server, [&] {
+            while (server.hasPendingConnections()) {
+                auto* socket = server.nextPendingConnection(); auto request = std::make_shared<QByteArray>();
+                connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+                connect(socket, &QTcpSocket::readyRead, &server, [&, socket, request] {
+                    request->append(socket->readAll());
+                    if (!request->contains("\r\n\r\n")) return;
+                    const auto length = QRegularExpression("(?im)^Content-Length:\\s*(\\d+)").match(QString::fromLatin1(*request)).captured(1).toInt();
+                    if (request->size() < request->indexOf("\r\n\r\n") + 4 + length) return;
+                    disconnect(socket, &QTcpSocket::readyRead, &server, nullptr); ++requests;
+                    const auto target = request->split(' ').value(1);
+                    QByteArray body;
+                    if (target.startsWith("/cover")) body = png;
+                    else if (target.startsWith("/calendar")) body = QJsonDocument(calendar).toJson();
+                    else if (target.startsWith("/v0/search")) body = QJsonDocument(QJsonObject{{"data", QJsonArray{subject}}, {"total", 1}}).toJson();
+                    else if (target.startsWith("/v0/episodes")) body = R"({"data":[{"id":901,"sort":1,"name_cn":"离线分集","type":0}],"total":1})";
+                    else body = QJsonDocument(subject).toJson();
+                    socket->write("HTTP/1.1 200 OK\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                    socket->disconnectFromHost();
+                });
+            }
+        });
+        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
+            if (parent->objectName() == name) return parent;
+            for (auto* child : parent->childItems()) if (auto* item = find(child, name)) return item;
+            return nullptr;
+        };
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/metadata-cache/") +
+            (qEnvironmentVariable("QT_QUICK_BACKEND") == "software" ? "software" : "native") +
+            (qEnvironmentVariableIsSet("DANMAKU_UI_LARGE_TEXT") ? "-scaled" : "");
+        QVERIFY(QDir().mkpath(evidence));
+        for (int restart = 0; restart < 2; ++restart) {
+            const auto before = requests;
+            AppController backend(directory.filePath("data"), nullptr, {}, directory.filePath("cache"));
+            auto* metadata = qobject_cast<AnimeMetadataService*>(backend.metadata()); metadata->setBaseUrl(base);
+            auto* settings = qobject_cast<SettingsStore*>(backend.settings()); QVERIFY(settings->setValue("micaEnabled", false));
+            QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+            engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+            engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml"))); QVERIFY(!engine.rootObjects().isEmpty());
+            auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window); window->show();
+            QVERIFY(QTest::qWaitForWindowExposed(window));
+            QTRY_VERIFY(!metadata->loading() && !metadata->weeklyCalendar().isEmpty());
+            QTRY_VERIFY(metadata->heroAnime().contains("summary"));
+            QTRY_VERIFY(metadata->coverCacheBytes() > 0);
+            const auto coverReady = [&] {
+                for (auto* item : window->findChildren<QQuickItem*>("cachedCoverImage"))
+                    if (item->isVisible() && item->property("status").toInt() == 1 && item->property("source").toUrl().isLocalFile()) return true;
+                return false;
+            };
+            QTRY_VERIFY(coverReady());
+            auto* home = window->findChild<QQuickItem*>("homePage"); auto* field = window->findChild<QQuickItem*>("homeAnimeSearch");
+            QVERIFY(home && field);
+            auto* editor = field->property("contentItem").value<QQuickItem*>(); QVERIFY(editor);
+            editor->setProperty("text", "cached"); editor->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Return);
+            QTRY_VERIFY(!metadata->searching() && metadata->searchResults().size() == 1);
+            auto* result = find(home, "animeSearchResult0"); QVERIFY(result); result->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+            auto* dialog = home->findChild<QObject*>("animeDetailDialog"); QVERIFY(dialog);
+            QTRY_VERIFY(dialog->property("opened").toBool() && !metadata->loadingDetail());
+            QCOMPARE(metadata->currentDetail().value("episodes").toList().size(), 1);
+            QVERIFY(metadata->detailError().isEmpty() && metadata->searchError().isEmpty() && metadata->error().isEmpty());
+            if (restart) {
+                QVERIFY(window->grabWindow().save(evidence + "/offline-detail.png"));
+                auto* content = dialog->property("contentItem").value<QQuickItem*>(); QVERIFY(content);
+                auto* flick = content->property("contentItem").value<QQuickItem*>(); QVERIFY(flick);
+                const auto point = content->mapToScene(QPointF(content->width()/2, content->height()/2));
+                QWheelEvent wheel(point, window->mapToGlobal(point.toPoint()), {}, QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                QCoreApplication::sendEvent(window, &wheel); QTRY_VERIFY(flick->property("contentY").toDouble() > 0);
+                QVERIFY(window->grabWindow().save(evidence + "/offline-detail-scrolled.png"));
+            }
+            QTest::keyClick(window, Qt::Key_Escape); QTRY_VERIFY(!dialog->property("visible").toBool());
+            editor->setProperty("text", ""); QTest::qWait(40);
+            if (restart) {
+                QCOMPARE(requests, before);
+                QVERIFY(window->grabWindow().save(evidence + "/offline-home.png"));
+                auto* nav = find(window->contentItem(), "navigation3"); QVERIFY(nav); nav->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+                auto* settingsPage = window->findChild<QQuickItem*>("settingsPage"); QVERIFY(settingsPage);
+                auto* flick = settingsPage->property("contentItem").value<QQuickItem*>(); QVERIFY(flick);
+                auto* clear = find(settingsPage, "clearMetadataCacheCard"); QVERIFY(clear);
+                for (const auto& theme : {QString("light"), QString("dark")}) for (int width : {520, 800, 1080}) {
+                    QVERIFY(settings->setValue("theme", theme)); window->setMinimumWidth(480); window->resize(width, 640); QTest::qWait(40);
+                    flick->setProperty("contentY", 0);
+                    const auto point = settingsPage->mapToScene(QPointF(settingsPage->width()/2, settingsPage->height()/2));
+                    QWheelEvent wheel(point, window->mapToGlobal(point.toPoint()), {}, QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                    QCoreApplication::sendEvent(window, &wheel); QTRY_VERIFY(flick->property("contentY").toDouble() > 0);
+                    auto* group = settingsPage->findChild<QQuickItem*>("metadataCacheGroup"); QVERIFY(group);
+                    const auto y = group->mapToItem(flick->property("contentItem").value<QQuickItem*>(), QPointF()).y();
+                    flick->setProperty("contentY", std::max(0.0, std::min(y - 16, flick->property("contentHeight").toDouble() - flick->height())));
+                    clear->forceActiveFocus(); QTest::qWait(40);
+                    QVERIFY(clear->hasActiveFocus());
+                    const auto right = clear->mapToItem(settingsPage, QPointF(clear->width(), 0)).x(); QVERIFY(right <= settingsPage->width() + 1);
+                    QVERIFY(window->grabWindow().save(evidence + QString("/settings-%1-%2.png").arg(theme).arg(width)));
+                }
+                QTest::keyClick(window, Qt::Key_Space); QTRY_VERIFY(metadata->cacheCleared());
+                QCOMPARE(metadata->jsonCacheBytes(), 0); QCOMPARE(metadata->coverCacheBytes(), 0);
+                QTest::qWait(80); QCOMPARE(requests, before);
+                QVERIFY(window->grabWindow().save(evidence + "/cleared-settings.png"));
+            }
+            QCOMPARE(warnings.count(), 0);
+            if (!restart) server.close(); // Same URL, no server listening for the new service/engine instance.
+        }
+    }
     void homeAnimeSearchWorkflow() {
         const bool live = qEnvironmentVariableIsSet("DANMAKU_TEST_METADATA_LIVE");
         QTemporaryDir directory;
@@ -292,6 +408,7 @@ private slots:
         QTest::keyClick(window, Qt::Key_Return);
         QTRY_VERIFY_WITH_TIMEOUT(!metadata->searching() && !metadata->searchResults().isEmpty(), 20000);
         QVERIFY2(metadata->searchError().isEmpty(), qPrintable(metadata->searchError()));
+        if (live) QTRY_VERIFY_WITH_TIMEOUT(metadata->coverCacheBytes() > 0, 20000);
         QVERIFY(!heading->isVisible());
         auto* first = find(home, "animeSearchResult0");
         QVERIFY(first && first->isVisible());
@@ -352,7 +469,9 @@ private slots:
         QWheelEvent wheel(point, window->mapToGlobal(point.toPoint()), {}, QPoint(0, -120),
             Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
         QCoreApplication::sendEvent(window, &wheel);
-        QTRY_VERIFY(flick->property("contentY").toDouble() > 0);
+        if (!live || flick->property("contentHeight").toDouble() > flick->height() + 1)
+            QTRY_VERIFY(flick->property("contentY").toDouble() > 0);
+        else QCOMPARE(flick->property("contentY").toDouble(), 0.0);
         QCOMPARE(field->mapToScene(QPointF()).y(), searchY);
         flick->setProperty("contentY", std::max(0.0, flick->property("contentHeight").toDouble() - home->height()));
         QTest::qWait(50);

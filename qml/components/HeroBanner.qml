@@ -7,6 +7,7 @@ import "../i18n"
 Control {
     id: heroRoot
     property var anime: null
+    required property QtObject coverCache
     signal watchNowClicked(string title)
     signal detailsClicked(var anime)
 
@@ -28,13 +29,14 @@ Control {
         clip: true
 
         // 右侧半幅大图背景
-        Image {
+        CachedCoverImage {
             id: heroImage
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             width: Math.min(parent.width * 0.55, parent.height * 1.5)
-            source: heroRoot.animeCover
+            cacheService: heroRoot.coverCache
+            remoteSource: heroRoot.animeCover
             asynchronous: true
             cache: true
             fillMode: Image.PreserveAspectCrop

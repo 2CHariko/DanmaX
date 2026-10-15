@@ -7,6 +7,7 @@ import "../i18n"
 Item {
     id: cardRoot
     property var animeData: null
+    required property QtObject coverCache
     signal clicked()
 
     readonly property var effectiveData: animeData
@@ -73,10 +74,11 @@ Item {
         }
 
         // 海报大图（异步加载，限制解码宽度以节约纹理显存）
-        Image {
+        CachedCoverImage {
             id: posterImg
             anchors.fill: parent
-            source: cardCover
+            cacheService: cardRoot.coverCache
+            remoteSource: cardCover
             asynchronous: true
             cache: true
             sourceSize.width: 280

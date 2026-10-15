@@ -23,7 +23,6 @@
 #include <exception>
 #include <memory>
 #include <stdexcept>
-#ifdef DANMAKU_STATIC_PORTABLE
 #include <windows.h>
 #include <shellapi.h>
 
@@ -36,10 +35,8 @@ bool preparePortableCache(const QString& cache) {
            _wputenv_s(L"QML_DISK_CACHE_PATH", reinterpret_cast<const wchar_t*>(cache.utf16())) == 0;
 }
 } // namespace
-#endif
 
 int main(int argc, char* argv[]) {
-#ifdef DANMAKU_STATIC_PORTABLE
     // Set process-only cache/temp paths before QGuiApplication can initialize plugins.
     wchar_t executablePath[32768]{};
     const DWORD executableLength = GetModuleFileNameW(nullptr, executablePath, 32768);
@@ -77,6 +74,7 @@ int main(int argc, char* argv[]) {
         std::fprintf(stderr, "Cannot prepare portable cache/temporary directory\n");
         return 1;
     }
+#ifdef DANMAKU_STATIC_PORTABLE
     // Select the public D3D11 backend before Qt creates any Quick windows.
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
     qputenv("QT_PLUGIN_PATH", QByteArray());
@@ -112,7 +110,7 @@ int main(int argc, char* argv[]) {
     parser.addOption({"source-tab", "Initial source tab: xml, online, cache (UI validation)", "tab", "xml"});
     parser.addOption({"theme", "Theme for isolated UI validation", "theme"});
     parser.addOption({"window-width", "Width for layout validation", "pixels"});
-    parser.addOption({"capture-state", "UI smoke capture state: settings-middle, font-popup, diagnostics-group or cache-group", "state"});
+    parser.addOption({"capture-state", "UI smoke capture state: settings-middle, font-popup, diagnostics-group, cache-group or metadata-cache-group", "state"});
     parser.process(app);
     try {
         const QStringList pageNames{"home", "player", "logs", "settings", "about"};
@@ -120,9 +118,6 @@ int main(int argc, char* argv[]) {
         if (initialPage < 0) throw std::runtime_error("Unknown initial page");
         const auto paths =
             AppPaths::prepare(app.applicationFilePath(), parser.value("data-dir"), parser.value("cache-dir"));
-#ifndef DANMAKU_STATIC_PORTABLE
-        qputenv("QML_DISK_CACHE_PATH", paths.cache.toUtf8());
-#endif
         qmlRegisterType<DanmakuItem>("DanmaX.Native", 1, 0, "DanmakuCanvas");
         AppController controller(paths.data, nullptr, {}, paths.cache);
         if (parser.isSet("theme"))
@@ -209,8 +204,9 @@ int main(int argc, char* argv[]) {
                         auto* bar = page->property("verticalBar").value<QObject*>();
                         if (bar) bar->setProperty("position", 0.4);
                         else qmlWarning = true;
-                    } else if (parser.value("capture-state") == "diagnostics-group" || parser.value("capture-state") == "cache-group") {
-                        const auto name = parser.value("capture-state") == "diagnostics-group" ? "diagnosticsGroup" : "cacheGroup";
+                    } else if (parser.value("capture-state") == "diagnostics-group" || parser.value("capture-state") == "cache-group" || parser.value("capture-state") == "metadata-cache-group") {
+                        const auto name = parser.value("capture-state") == "diagnostics-group" ? "diagnosticsGroup"
+                            : parser.value("capture-state") == "metadata-cache-group" ? "metadataCacheGroup" : "cacheGroup";
                         auto* group = mainWindow->findChild<QQuickItem*>(name);
                         if (!group) { qmlWarning = true; return; }
                         QTimer::singleShot(100, page, [page, group] {

@@ -528,6 +528,28 @@ PageFrame {
     }
 
     SettingsSection {
+        objectName: "metadataCacheGroup"
+        title: I18n.metadataCache.title
+        Layout.fillWidth: true
+        SettingsRow {
+            title: I18n.metadataCache.jsonTitle
+            description: I18n.format(I18n.metadataCache.usage, (page.backend.metadata.jsonCacheBytes / 1048576).toFixed(2), 64)
+        }
+        SettingsRow {
+            title: I18n.metadataCache.coverTitle
+            description: I18n.format(I18n.metadataCache.usage, (page.backend.metadata.coverCacheBytes / 1048576).toFixed(2), 512)
+        }
+        ActionCard {
+            objectName: "clearMetadataCacheCard"
+            title: I18n.metadataCache.clear
+            description: page.backend.metadata.clearingCache ? I18n.metadataCache.clearing : page.backend.metadata.cacheError || (page.backend.metadata.cacheCleared ? I18n.metadataCache.cleared : I18n.metadataCache.description)
+            isExternal: false
+            enabled: !page.backend.metadata.clearingCache
+            onActionTriggered: page.backend.metadata.clearMetadataCache()
+        }
+    }
+
+    SettingsSection {
         objectName: "diagnosticsGroup"
         title: I18n.settings.diagnosticsSection; Layout.fillWidth: true
         SettingsRow { title: I18n.settings.debugTitle; Switch { objectName: "diagnosticsDebugSwitch"; checked: page.values.debug; Accessible.name: I18n.settings.debugAccessible; onToggled: page.put("debug", checked) } }

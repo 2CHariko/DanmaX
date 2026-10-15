@@ -3,6 +3,7 @@ param([ValidateSet('','windows-release','windows-static-release')][string] $Pres
       [ValidateSet('static-exe','directory','single-exe')][string] $Format = 'static-exe')
 . "$PSScriptRoot/common.ps1"
 . "$PSScriptRoot/portable.ps1"
+. "$PSScriptRoot/deployment.ps1"
 Invoke-ProjectEnvironment {
     if (-not $Preset) { $Preset = if ($Format -eq 'static-exe') { 'windows-static-release' } else { 'windows-release' } }
     if (($Format -eq 'static-exe') -ne ($Preset -eq 'windows-static-release')) {
@@ -95,35 +96,7 @@ in static-exe. These materials are not a completed component-by-component licens
     $stage = Get-ProjectPath ('out/stage/DanmaX-' + $timestamp)
     New-Item -ItemType Directory -Force $stage | Out-Null
     Copy-Item -LiteralPath $exe -Destination $stage
-    Invoke-Checked (Join-Path $tools.Qt 'bin/windeployqt.exe') @('--release','--no-compiler-runtime','--verbose','0',
-        '--skip-plugin-types','qmltooling,generic,networkinformation',
-        '--exclude-plugins','qdirect2d,qminimal,qopensslbackend', '--include-plugins','qoffscreen,qschannelbackend',
-        '--qmldir',(Get-ProjectPath 'qml'),(Join-Path $stage 'DanmaX.exe'))
-    if (Get-ChildItem -LiteralPath $stage -Recurse -Filter FluentIcons.ttf) { throw 'Bundled Microsoft icon font must not be distributed.' }
-    # Qt's deployment tool may still copy optional TLS backends. Use Windows
-    # Schannel only; never distribute a nonfunctional OpenSSL backend/runtime.
-    $unusedTlsBackend = Join-Path $stage 'tls/qopensslbackend.dll'
-    if (Test-Path -LiteralPath $unusedTlsBackend) {
-        if (-not ([IO.Path]::GetFullPath($unusedTlsBackend)).StartsWith($stage + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'TLS deployment cleanup escaped its new stage directory.'
-        }
-        Remove-Item -LiteralPath $unusedTlsBackend
-    }
-    # Optional Controls imports make windeployqt copy every style. Keep Fluent,
-    # its official Fusion -> Basic fallback, and the standard dialogs' dependencies.
-    foreach ($style in @('Imagine','Material','Universal','Windows')) {
-        foreach ($relative in @("qml/QtQuick/Controls/$style", "qml/QtQuick/Dialogs/quickimpl/qml/+$style")) {
-            $target = Get-ProjectPath ([IO.Path]::GetRelativePath($ProjectRoot, (Join-Path $stage $relative)))
-            if (-not $target.StartsWith($stage + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-                throw 'Deployment cleanup escaped its new stage directory.'
-            }
-            if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
-        }
-        foreach ($name in @("Qt6QuickControls2$style.dll", "Qt6QuickControls2${style}StyleImpl.dll")) {
-            $target = Get-ProjectPath ([IO.Path]::GetRelativePath($ProjectRoot, (Join-Path $stage $name)))
-            if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force }
-        }
-    }
+    Invoke-QtDeployment $stage $tools | Out-Null
     Copy-Item -LiteralPath (Get-ProjectPath 'LICENSE') -Destination $stage
     Copy-Item -LiteralPath (Get-ProjectPath 'docs/THIRD_PARTY.md') -Destination $stage
     Copy-Item -LiteralPath (Get-ProjectPath 'resources/fluent/LICENSE') -Destination (Join-Path $stage 'Fluent-System-Icons-LICENSE.txt')

@@ -40,7 +40,7 @@ ColumnLayout {
             Label {
                 objectName: "homeSearchStatus"
                 Layout.fillWidth: true
-                text: pane.metadata.searching ? I18n.home.searchLoading
+                text: pane.metadata.searching ? (pane.metadata.searchStale ? I18n.home.updatingCache : I18n.home.searchLoading)
                     : pane.metadata.searchError || (pane.metadata.searchResults.length === 0 ? I18n.home.searchEmpty
                     : I18n.format(I18n.home.searchCount, pane.metadata.searchResults.length))
                 textFormat: Text.PlainText
@@ -50,9 +50,9 @@ ColumnLayout {
             }
             Button {
                 objectName: "retryAnimeSearch"
-                text: I18n.home.searchRetry
-                visible: pane.metadata.searchError.length > 0
-                onClicked: pane.metadata.searchBangumi(pane.metadata.searchKeyword)
+                text: pane.metadata.searchError.length > 0 ? I18n.home.searchRetry : I18n.common.refresh
+                enabled: !pane.metadata.searching
+                onClicked: pane.metadata.searchBangumi(pane.metadata.searchKeyword, true)
             }
         }
         Repeater {
@@ -67,11 +67,12 @@ ColumnLayout {
                 onClicked: pane.detailsRequested(modelData)
                 contentItem: RowLayout {
                     spacing: 12
-                    Image {
+                    CachedCoverImage {
                         Layout.preferredWidth: 48
                         Layout.preferredHeight: 64
-                        source: modelData.cover
-                        visible: source.toString().length > 0
+                        cacheService: pane.metadata.coverCache
+                        remoteSource: modelData.cover
+                        visible: remoteSource.toString().length > 0
                         sourceSize.width: 96
                         sourceSize.height: 128
                         fillMode: Image.PreserveAspectFit

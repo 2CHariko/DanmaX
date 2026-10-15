@@ -750,3 +750,44 @@ Windows 10/早期 Windows 11、系统透明开关与节能切换、高对比度�
 - 常规下限调整为 800×600 逻辑单位，默认启动大小保留 1080×760，导航展开阈值保留 1008。按当前显示器 QScreen 的 availableGeometry 分别限制宽高下限为可用尺寸减 32 的边框余量；工作区变化由公开属性通知更新，换屏通过窗口 screen.name 重新选择实际屏幕，不使用合并桌面的 availableVirtualSize。返回的 QScreen 显式保持 C++ 所有权，避免 QML 垃圾回收误接管系统对象。
 - Debug、Release 完成主程序及 UI 测试目标构建，仅运行首页搜索专项，各 **3 passed、0 failed、0 skipped，12.183 秒／7.191 秒**（含初始化与清理），无 QML 引擎警告。检查当前屏幕最小尺寸绑定，布局截图改为 800×600／1008×760／1080×760，并保留搜索、滚动、原生命中和所有页面标题一致性检查；目视复核 800×600 首页。未执行全量测试，工作区不足时的回退已实现，未单独实测低分辨率或混合 DPI 换屏。
 - 证据为 `out/validation/home-search/debug-minimum-window.txt`、`release-minimum-window.txt` 和对应 native 截图目录。构建前通过正常关闭请求退出占用 Debug 可执行文件的开发实例。
+
+## 番剧元信息与封面本地缓存（2026-10-15）
+
+### 已实现
+
+- `MetadataCache` 在 `AppPaths.cache/metadata/json`、`covers` 中保存版本 1 条目，资源键包含来源与完整搜索参数并使用 SHA-256 文件名；条目自身保存获取时间与最近使用时间，不依赖单一索引文件。JSON 缓存 64 MiB、封面 512 MiB，采用原子写入及最近使用淘汰；磁盘操作串行后台执行，JSON 转换与图片验证在后台执行。
+- 日历／分集有效期 6 小时、详情 24 小时、搜索 1 小时、封面 30 天；命中有效缓存不联网，过期先显示再更新，失败保留旧内容并冷却 5 分钟，手动刷新绕过有效期及冷却。日期按本地完整日期重算，未来获取时间按过期处理；空简介、合法空搜索也正常缓存。
+- 主推简介与详情共享请求；分集全部分页校验成功才替换完整缓存，失败时保留旧完整列表，没有旧列表时只展示当前会话已取得的部分。保留 15 秒默认超时、16 MiB JSON 响应与 5000 分集上限。
+- C++ 封面请求对象随图片组件释放，所有番剧图片使用缓存服务提供的本地 URL；下载合并，最多 4 个并发和 256 个待下载项。单图 8 MiB、单边 8192、总像素 1600 万上限，后台验证解码。新内容文件名含内容哈希，组件切换前保护旧图片文件；容量或写入受限时只供当前会话显示。
+- 设置增加占用、固定上限及清空动作，详情／搜索增加强制刷新和过期更新提示。清空停止自动日历检查，废弃请求与旧写入，重置界面；下一次访问或手动刷新才重新获取，不清理弹幕、文字缓存或用户配置。清理拒绝通过符号链接／目录联接访问托管目录，文件链接不跟随。
+- 旧日历文件只导入默认 Bangumi 来源，保留原获取时间，确认新格式落盘后移除。新增 `metadata-cache-group` 部署截图状态，并纳入已有设置分组验证脚本。
+
+### 已验证
+
+- 完整 Release CTest **17/17** 通过；后续元信息专项再次通过，CTest 的最新 `LastTest.log` 已被该专项覆盖。迁移恢复增加进程退出后遗留旧文件的清理补测，专项报告位于 `out/validation/metadata-cache/migration-tests.txt`。
+- Release 元信息与封面 Qt Test **35 passed、0 failed、0 skipped**（含初始化与清理），覆盖独立有效期边界、重启离线命中、冷却／强制刷新、空结果、来源隔离、共享主推请求、空简介、205 集分页及后续页失败保护、取消／销毁、清空与迟到写入、旧格式迁移、跨日／未来时间、损坏文件、写入失败、限额淘汰、图片解码限制、并发上限、会话图片回退和旧文件保护。报告：`out/build/windows-release/anime-metadata-tests.txt`。
+- `metadataCacheOfflineWorkflow` 在线获取后停止本地 HTTP 测试源，重建后端与 QML 引擎，验证周历、主推、相同搜索、详情、分集和封面均命中磁盘，未新增请求；实际滚动详情与设置页，覆盖键盘清空及浅深主题 × 520／800／1080 宽度，并要求无 QML 警告。软件后端 **3 passed、0 failed**；Release 原生图形后端在 `QT_SCALE_FACTOR=1.5`、13.5pt 字体下 **3 passed、0 failed、0 skipped**（含初始化与清理）。报告及截图：`out/validation/metadata-cache/`，已目视复核。
+- 原生 Release 通过真实 Bangumi 搜索 `CLANNAD`、读取详情／分集及持久化封面，**3 passed、0 failed、0 skipped**，无 QML 警告。真实搜索结果未溢出时按无滚动验证，固定测试源仍强制验证实际滚动。报告：`out/validation/metadata-cache/live-search-tests.txt`。
+- 当前锁定 Qt 的 `windeployqt` 生成独立动态 Release 目录 `out/stage/DanmaX-20261015-062937-329/`；独立进程使用仅系统 PATH 和无效 SDK 插件／QML 搜索路径，冷启动、重启及浅深主题 × 三个宽度的设置截图共 **8/8** 成功，stderr 为空。部署 EXE 与当前构建 SHA-256 相同，重启后日历获取时间未改变，共持久化 15 张封面。证据：`out/validation/metadata-cache/deployed-final/results.json`，已复核首页与设置截图。
+
+### 验收边界
+
+- 离线界面回归使用已停止的本地测试源；真实 Bangumi 与部署检查未关闭整机互联网连接。原生缩放检查不代表混合 DPI 换屏、Narrator 或高对比度验收。
+- 本轮交付并验证动态 Release 目录，未重新验证静态便携发布或干净机器；缓存保护的目录联接拒绝逻辑已实现，本轮未单独构造目录联接实测。未将缓存容量或响应时间描述为性能成绩。
+
+## 开发运行目录与部署布局（2026-10-15）
+
+### 已实现
+
+- `run.ps1` 默认增量构建 Debug，分别部署至 `out/run/windows-debug/`、`out/run/windows-release/`、`out/run/windows-static-release/`；自定义构建映射到 `out/run/custom/<预设>/<构建相对路径>/`。构建缓存仍在 `out/build/`，运行目录与动态发布包共用 Qt 部署规则。
+- 所有构建默认在 EXE 旁保存 `settings.ini`、`app.log` 与 `cache/`，Windows TEMP/TMP 使用 `cache/tmp/`，QML 缓存在创建 QGuiApplication 前定位。显式 `--data-dir`、`--cache-dir` 仍可覆盖；旧 `.local/` 数据保留且不自动迁移。
+- 运行时仅使用系统 PATH，清除 SDK 插件／QML 路径，依靠相对 `qt.conf` 加载本目录 Qt。未变更时复用配置和部署；缺失或被修改的受管依赖通过临时 stage 修复，保留用户配置与缓存。正式打包从构建产物生成新目录，不带入开发运行数据。
+- 构建前按完整 EXE 路径退出当前预设的运行实例及旧构建目录实例，先正常关闭，超时再终止。配置、构建、部署失败均停止启动；`-NoBuild` 明确校验原构建类型及静态 Qt 标记。部署写入和清理拒绝越界路径及目录联接。
+
+### 已验证与边界
+
+- Debug、Release 主程序构建及最终运行脚本烟雾检查均成功。两种配置的 `app_paths`、`runtime_services`、`application_smoke`、`application_image_smoke` 各 **4/4** 通过；AppPaths 覆盖默认／自定义路径、相对路径、中文空格、配置隔离及目录被文件占用时明确失败。
+- `tests/scripts/RunScriptTests.ps1` 使用隔离模拟工具链完成 **15 项**回归，覆盖配置／部署复用、输入变化、自定义构建、Debug/Release 隔离、NoBuild 校验、三个阶段失败不启动、依赖修复、静态预设分支、路径边界及目录联接拒绝。报告：`out/validation/run-script-20261015-152341-139/results.txt`。
+- 实际动态部署完成 **11 项**检查：仅系统 PATH 冷启动且 Qt 模块来自运行目录，重启保留配置和缓存，真实缺失插件修复，中文／空格目录搬迁启动，缓存路径不可写时退出，以及正常窗口重启 Debug 不关闭 Release。旧 `.local/data/settings.ini` 哈希保持一致。报告：`out/validation/runtime-isolation/results.json`。
+- 通过正式 `package.ps1 -Format directory` 生成 `out/stage/DanmaX-20261015-152252-463/`，确认启动前没有开发配置；在仅系统 PATH 下直接烟雾启动成功，生成同级配置、日志与缓存。报告：`out/validation/runtime-package-smoke.json`；构建与专项 CTest 日志为 `out/validation/runtime-*-tests.log`，最终运行日志为 `runtime-debug-final.log`、`runtime-release-final.log`。
+- 本轮未运行完整 CTest、重新构建静态 Qt／静态应用或验证干净机器。静态预设目录与 NoBuild 分支通过脚本模拟回归，不计为静态部署实测；本轮不增加真实 SMTC、透明合成、混合 DPI 或性能验收结论。

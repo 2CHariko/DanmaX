@@ -1,4 +1,9 @@
 #include "infrastructure/AnimeMetadataService.h"
+#include "infrastructure/CoverCache.h"
+#include <QBuffer>
+#include <QImage>
+#include <QTimeZone>
+#include <algorithm>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -101,9 +106,11 @@ public:
     int detailDelay{}, episodeDelay{}, episodeStatus{200}, episodeCount{4};
     int calendarRequests{}, subjectRequests{}, episodeRequests{};
     int searchRequests{}, searchDelay{}, searchStatus{200};
+    int coverRequests{}, coverDelay{}, coverStatus{200}, failEpisodeOffset{-1};
+    bool emptySummary{};
     QJsonObject searchPayload;
     QByteArray searchTarget, searchMethod, searchBody;
-    QByteArray calendarBody;
+    QByteArray calendarBody, coverBody;
     explicit MockBangumiServer() {
         connect(this, &QTcpServer::newConnection, this, [this] {
             while (hasPendingConnections()) {
@@ -120,13 +127,18 @@ public:
                     disconnect(socket, &QTcpSocket::readyRead, this, nullptr);
                     const auto target = request->split(' ').value(1);
 
+                    if (target.startsWith("/calendar")) ++calendarRequests;
+                    else if (target.startsWith("/v0/search/subjects")) ++searchRequests;
+                    else if (target.startsWith("/v0/subjects/")) ++subjectRequests;
+                    else if (target.startsWith("/v0/episodes")) ++episodeRequests;
+                    else if (target.startsWith("/cover")) ++coverRequests;
+
                     QByteArray body;
                     int responseStatus = status;
                     int delay = 0;
                     if (status != 200) {
                         body = "Internal Server Error";
                     } else if (target.startsWith("/v0/search/subjects")) {
-                        ++searchRequests;
                         searchMethod = request->split(' ').value(0);
                         searchTarget = target;
                         searchPayload = QJsonDocument::fromJson(request->mid(headerEnd)).object();
@@ -136,18 +148,19 @@ public:
                         delay = searchDelay;
                         responseStatus = searchStatus;
                     } else if (target.startsWith("/calendar")) {
-                        ++calendarRequests;
                         body = calendarBody.isEmpty() ? mockCalendarJson() : calendarBody;
                     } else if (target.startsWith("/v0/subjects/")) {
-                        ++subjectRequests;
                         body = mockSubjectJson(target.mid(QByteArray("/v0/subjects/").size()).toLongLong());
+                        if (emptySummary) { auto obj = QJsonDocument::fromJson(body).object(); obj["summary"] = ""; body = QJsonDocument(obj).toJson(); }
                         delay = detailDelay;
                     } else if (target.startsWith("/v0/episodes")) {
-                        ++episodeRequests;
                         const QUrlQuery query(QUrl(QStringLiteral("http://localhost") + QString::fromUtf8(target)));
                         body = mockEpisodesJson(query.queryItemValue("subject_id").toLongLong(), episodeCount, query.queryItemValue("offset").toInt());
                         delay = episodeDelay;
                         responseStatus = episodeStatus;
+                        if (query.queryItemValue("offset").toInt() == failEpisodeOffset) responseStatus = 503;
+                    } else if (target.startsWith("/cover")) {
+                        body = coverBody; delay = coverDelay; responseStatus = coverStatus;
                     }
 
                     QTimer::singleShot(delay, this, [guard = QPointer<QTcpSocket>(socket), body, responseStatus] {
@@ -170,9 +183,263 @@ public:
 };
 } // namespace
 
+namespace {
+class TestClock {
+public:
+    TestClock(QDateTime value) : stamp_(value.toMSecsSinceEpoch()) {}
+    TestClock& operator=(const QDateTime& value) { stamp_ = value.toMSecsSinceEpoch(); return *this; }
+    QDateTime value() const { return QDateTime::fromMSecsSinceEpoch(stamp_.load(), QTimeZone::UTC); }
+    operator QDateTime() const { return value(); }
+    QDateTime addSecs(qint64 seconds) const { return value().addSecs(seconds); }
+    QDateTime addDays(qint64 days) const { return value().addDays(days); }
+    QDateTime toLocalTime() const { return value().toLocalTime(); }
+private:
+    std::atomic<qint64> stamp_;
+};
+MetadataCache::Record readRecord(MetadataCache* store, const QString& key, bool cover = false) {
+    struct Pending { bool done = false; MetadataCache::Record value; };
+    auto pending = std::make_shared<Pending>();
+    store->read(key, cover, [pending](MetadataCache::Record value) { pending->value = std::move(value); pending->done = true; });
+    for (int i = 0; i < 500 && !pending->done; ++i) QTest::qWait(10);
+    return pending->value;
+}
+QByteArray imageBytes(QColor color = Qt::red) {
+    QImage image(24, 32, QImage::Format_ARGB32); image.fill(color);
+    QByteArray bytes; QBuffer buffer(&bytes); buffer.open(QIODevice::WriteOnly); image.save(&buffer, "PNG"); return bytes;
+}
+}
+
 class AnimeMetadataTests : public QObject {
     Q_OBJECT
 private slots:
+    void restartOfflineAndIndependentExpiry() {
+        MockBangumiServer server;
+        QTemporaryDir dir;
+        TestClock now(QDateTime::fromString("2026-10-15T08:00:00.000Z", Qt::ISODateWithMs));
+        MetadataCache::Policy policy; policy.now = [&] { return now.value(); };
+        {
+            AnimeMetadataService service(dir.path(), policy); service.setBaseUrl(server.url());
+            service.fetchDetail(101); service.searchBangumi("cached"); service.refreshCalendar();
+            QTRY_VERIFY(!service.loadingDetail() && !service.searching() && !service.loading());
+            QTRY_VERIFY(service.heroAnime().contains("summary"));
+            QVERIFY(readRecord(service.cacheStore(), server.url() + "|2|101").valid);
+        }
+        const int subjects = server.subjectRequests, episodes = server.episodeRequests, searches = server.searchRequests, calendars = server.calendarRequests;
+        server.status = 503;
+        AnimeMetadataService service(dir.path(), policy); service.setBaseUrl(server.url());
+        service.fetchDetail(101); service.searchBangumi("cached"); service.refreshCalendar();
+        QTRY_VERIFY(!service.loadingDetail() && !service.searching() && !service.loading());
+        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 4);
+        QCOMPARE(service.searchResults().size(), 1); QCOMPARE(service.weeklyCalendar().size(), 7);
+        QCOMPARE(server.subjectRequests, subjects); QCOMPARE(server.episodeRequests, episodes);
+        QCOMPARE(server.searchRequests, searches); QCOMPARE(server.calendarRequests, calendars);
+        now = now.addSecs(21600); // Episodes expire exactly at six hours; subject remains fresh.
+        service.fetchDetail(101);
+        QTRY_VERIFY(!service.loadingDetail());
+        QVERIFY(service.detailStale()); QVERIFY(!service.detailError().isEmpty());
+        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 4);
+        QCOMPARE(server.subjectRequests, subjects); QCOMPARE(server.episodeRequests, episodes + 1);
+        service.fetchDetail(101); QTRY_VERIFY(!service.loadingDetail());
+        QCOMPARE(server.episodeRequests, episodes + 1); // Failure cooldown.
+        server.status = 200;
+        service.fetchDetail(101, true); QTRY_VERIFY(!service.loadingDetail());
+        QVERIFY(service.detailError().isEmpty()); QVERIFY(!service.detailStale());
+        now = now.addSecs(86400);
+        server.status = 503;
+        service.fetchDetail(101); QTRY_VERIFY(!service.loadingDetail());
+        QCOMPARE(server.subjectRequests, subjects + 2);
+        QVERIFY(!service.currentDetail().isEmpty());
+    }
+    void completeEpisodesSurviveLaterPageFailure() {
+        MockBangumiServer server; QTemporaryDir dir;
+        server.episodeCount = 205;
+        AnimeMetadataService service(dir.path()); service.setBaseUrl(server.url()); service.fetchDetail(101);
+        QTRY_VERIFY(!service.loadingDetail());
+        const auto key = server.url() + "|2|101";
+        const auto original = readRecord(service.cacheStore(), key);
+        QVERIFY(original.valid);
+        server.episodeCount = 250; server.failEpisodeOffset = 100;
+        service.fetchDetail(101, true); QTRY_VERIFY(!service.loadingDetail());
+        QVERIFY(!service.detailError().isEmpty());
+        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 205);
+        QCOMPARE(readRecord(service.cacheStore(), key).data, original.data);
+        service.fetchDetail(202, true); QTRY_VERIFY(!service.loadingDetail());
+        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 100);
+        QVERIFY(!readRecord(service.cacheStore(), server.url() + "|2|202").valid);
+    }
+    void sharedHeroSubjectAndEmptySummary() {
+        MockBangumiServer server; QTemporaryDir dir; server.emptySummary = true; server.detailDelay = 100;
+        AnimeMetadataService service(dir.path()); service.setBaseUrl(server.url()); service.refreshCalendar();
+        QTRY_VERIFY(!service.weeklyCalendar().isEmpty());
+        const auto id = service.heroAnime().value("id").toLongLong();
+        QTRY_COMPARE(server.subjectRequests, 1);
+        service.refreshCalendar(); QTRY_VERIFY(!service.loading());
+        service.fetchDetail(id); QTRY_VERIFY(!service.loadingDetail());
+        QCOMPARE(server.subjectRequests, 1);
+        QVERIFY(service.heroAnime().contains("summary"));
+        service.refreshCalendar(); QTRY_VERIFY(!service.loading()); QTest::qWait(160);
+        QCOMPARE(server.subjectRequests, 1);
+    }
+    void searchEmptyExpiryAndSourceIsolation() {
+        MockBangumiServer server; QTemporaryDir dir;
+        TestClock now(QDateTime::currentDateTimeUtc()); MetadataCache::Policy policy; policy.now = [&] { return now.value(); };
+        server.searchBody = R"({"data":[],"total":0})";
+        {
+            AnimeMetadataService service(dir.path(), policy); service.setBaseUrl(server.url()); service.searchBangumi("empty");
+            QTRY_VERIFY(!service.searching()); QVERIFY(service.searchError().isEmpty());
+        }
+        AnimeMetadataService service(dir.path(), policy); service.setBaseUrl(server.url()); service.searchBangumi("empty");
+        QTRY_VERIFY(!service.searching()); QCOMPARE(server.searchRequests, 1);
+        now = now.addSecs(3600); server.searchStatus = 503;
+        service.searchBangumi("empty"); QTRY_VERIFY(!service.searching());
+        QCOMPARE(server.searchRequests, 2); QVERIFY(service.searchStale()); QVERIFY(!service.searchError().isEmpty());
+        service.setBaseUrl("http://127.0.0.1:1"); service.searchBangumi("empty"); QTRY_VERIFY(!service.searching());
+        QVERIFY(!service.searchStale()); QVERIFY(!service.searchError().isEmpty());
+    }
+    void clearCancelsLateWritesAndPreservesOtherCaches() {
+        MockBangumiServer server; QTemporaryDir dir;
+        QDir().mkpath(dir.filePath("danmaku")); QFile other(dir.filePath("danmaku/keep.json"));
+        QVERIFY(other.open(QIODevice::WriteOnly)); other.write("keep"); other.close();
+        server.detailDelay = server.searchDelay = server.episodeDelay = 150;
+        AnimeMetadataService service(dir.path()); service.setBaseUrl(server.url());
+        service.fetchDetail(101); service.searchBangumi("late");
+        QTRY_COMPARE(server.subjectRequests, 1);
+        service.clearMetadataCache(); QTRY_VERIFY(!service.clearingCache()); QTest::qWait(200);
+        QVERIFY(service.currentDetail().isEmpty()); QVERIFY(service.searchResults().isEmpty());
+        QVERIFY(!readRecord(service.cacheStore(), server.url() + "|1|101").valid);
+        QVERIFY(other.exists()); QCOMPARE(service.jsonCacheBytes(), 0);
+        server.detailDelay = server.episodeDelay = 0;
+        service.fetchDetail(101); QTRY_VERIFY(!service.loadingDetail()); QVERIFY(!service.currentDetail().isEmpty());
+    }
+    void calendarMigrationCrossDateAndFutureClock() {
+        QTemporaryDir dir; QDir().mkpath(dir.filePath("metadata"));
+        QFile old(dir.filePath("metadata/calendar.json")); QVERIFY(old.open(QIODevice::WriteOnly)); old.write(mockCalendarJson()); old.close();
+        TestClock now(QFileInfo(old).lastModified().toUTC());
+        MetadataCache::Policy policy; policy.now = [&] { return now.value(); };
+        AnimeMetadataService service(dir.path(), policy);
+        for (int day = 1; day <= 7; ++day) service.cacheStore()->write("https://api.bgm.tv|1|" + QString::number(day * 100 + 3), false, mockSubjectJson(day * 100 + 3), now);
+        service.refreshCalendar();
+        QTRY_VERIFY(!service.loading()); QCOMPARE(service.weeklyCalendar().size(), 7);
+        QTRY_VERIFY(!old.exists());
+        const auto key = "https://api.bgm.tv|0|";
+        QVERIFY(readRecord(service.cacheStore(), key).valid);
+        QVERIFY(old.open(QIODevice::WriteOnly)); old.write(mockCalendarJson()); old.close();
+        service.refreshCalendar(); QTRY_VERIFY(!service.loading()); QTRY_VERIFY(!old.exists());
+        // Move from a date's 23:30 to the next day's 00:30, retaining a fresh calendar.
+        now = QDateTime(now.toLocalTime().date(), QTime(23, 30), QTimeZone::systemTimeZone()).toUTC();
+        service.cacheStore()->write(key, false, mockCalendarJson(), now);
+        for (int day = 1; day <= 7; ++day) service.cacheStore()->write("https://api.bgm.tv|1|" + QString::number(day * 100 + 3), false, mockSubjectJson(day * 100 + 3), now);
+        QVERIFY(readRecord(service.cacheStore(), key).valid);
+        service.refreshCalendar(); QTRY_VERIFY(!service.loading());
+        now = now.addSecs(3600); service.refreshCalendar(); QTRY_VERIFY(!service.loading());
+        QCOMPARE(service.todayWeekday(), now.toLocalTime().date().dayOfWeek());
+        const auto record = readRecord(service.cacheStore(), key);
+        now = record.fetchedAt.addMSecs(-1); QVERIFY(!service.cacheStore()->fresh(record, 21600));
+        service.clearMetadataCache(); QTRY_VERIFY(!service.clearingCache()); QVERIFY(!old.exists());
+    }
+    void coverPersistenceDeduplicationAndFailure() {
+        MockBangumiServer server; QTemporaryDir dir; server.coverBody = imageBytes();
+        TestClock now(QDateTime::currentDateTimeUtc()); MetadataCache::Policy policy; policy.now = [&] { return now.value(); };
+        QUrl first;
+        {
+            AnimeMetadataService service(dir.path(), policy);
+            auto* covers = qobject_cast<CoverCache*>(service.coverCache()); QObject owner;
+            auto* a = qobject_cast<CoverRequest*>(covers->createRequest(&owner)); auto* b = qobject_cast<CoverRequest*>(covers->createRequest(&owner));
+            a->setUrl(QUrl(server.url() + "/cover")); b->setUrl(a->url());
+            QTRY_VERIFY(!a->source().isEmpty() && !b->source().isEmpty());
+            QCOMPARE(server.coverRequests, 1); first = a->source(); QCOMPARE(first, b->source()); QVERIFY(first.isLocalFile());
+        }
+        AnimeMetadataService service(dir.path(), policy);
+        auto* covers = qobject_cast<CoverCache*>(service.coverCache()); QObject owner;
+        auto* a = qobject_cast<CoverRequest*>(covers->createRequest(&owner)); a->setUrl(QUrl(server.url() + "/cover"));
+        QTRY_VERIFY(!a->source().isEmpty()); QCOMPARE(server.coverRequests, 1); QCOMPARE(a->source(), first);
+        now = now.addDays(30); server.coverStatus = 503;
+        auto* b = qobject_cast<CoverRequest*>(covers->createRequest(&owner)); b->setUrl(a->url());
+        QTRY_COMPARE(server.coverRequests, 2); QTest::qWait(80); QCOMPARE(b->source(), first);
+        now = now.addSecs(301); server.coverStatus = 200; server.coverBody = imageBytes(Qt::blue);
+        auto* c = qobject_cast<CoverRequest*>(covers->createRequest(&owner)); c->setUrl(a->url());
+        QTRY_VERIFY(!c->source().isEmpty() && c->source() != first); QCOMPARE(a->source(), c->source());
+        QTRY_VERIFY(!QFileInfo::exists(first.toLocalFile()));
+        server.coverDelay = 150;
+        auto* late = qobject_cast<CoverRequest*>(covers->createRequest(&owner)); late->setUrl(QUrl(server.url() + "/cover-late"));
+        QTRY_COMPARE(server.coverRequests, 4);
+        service.clearMetadataCache(); QTRY_VERIFY(!service.clearingCache()); QTest::qWait(180);
+        QVERIFY(a->source().isEmpty() && late->source().isEmpty()); QCOMPARE(service.coverCacheBytes(), 0);
+    }
+    void coverRejectsInvalidAndOversized_data() {
+        QTest::addColumn<QByteArray>("bytes");
+        QTest::newRow("invalid") << QByteArray("not an image");
+        QTest::newRow("transfer-limit") << QByteArray(8 * 1024 * 1024 + 1, 'x');
+        // BMP header advertises an excessive dimension before any pixel allocation.
+        QImage image(8193, 1, QImage::Format_RGB32); image.fill(Qt::white);
+        QByteArray bytes; QBuffer buffer(&bytes); buffer.open(QIODevice::WriteOnly); image.save(&buffer, "BMP");
+        QTest::newRow("dimension-limit") << bytes;
+        QImage pixels(4001, 4000, QImage::Format_Mono); pixels.fill(0);
+        bytes.clear(); QBuffer second(&bytes); second.open(QIODevice::WriteOnly); pixels.save(&second, "PNG");
+        QTest::newRow("pixel-limit") << bytes;
+    }
+    void coverConcurrencyAndSessionOnlyBudget() {
+        MockBangumiServer server; QTemporaryDir dir; server.coverBody = imageBytes(); server.coverDelay = 200;
+        MetadataCache::Policy policy; policy.coverBudget = 0;
+        AnimeMetadataService service(dir.path(), policy);
+        auto* covers = qobject_cast<CoverCache*>(service.coverCache()); QObject owner;
+        QList<CoverRequest*> handles;
+        for (int i = 0; i < 8; ++i) {
+            auto* handle = qobject_cast<CoverRequest*>(covers->createRequest(&owner));
+            handle->setUrl(QUrl(server.url() + "/cover/" + QString::number(i))); handles.append(handle);
+        }
+        QTRY_COMPARE(server.coverRequests, 4); QTest::qWait(40); QCOMPARE(server.coverRequests, 4);
+        QTRY_VERIFY(std::all_of(handles.begin(), handles.end(), [](const auto* handle) { return !handle->source().isEmpty(); }));
+        QCOMPARE(server.coverRequests, 8);
+        for (const auto* handle : handles) {
+            QCOMPARE(handle->source().scheme(), QString("data"));
+            QVERIFY(!readRecord(service.cacheStore(), "cover|" + handle->url().toString(QUrl::FullyEncoded), true).valid);
+        }
+        QCOMPARE(service.coverCacheBytes(), 0);
+    }
+    void coverRejectsInvalidAndOversized() {
+        QFETCH(QByteArray, bytes); MockBangumiServer server; QTemporaryDir dir; server.coverBody = bytes;
+        AnimeMetadataService service(dir.path()); auto* covers = qobject_cast<CoverCache*>(service.coverCache()); QObject owner;
+        auto* request = qobject_cast<CoverRequest*>(covers->createRequest(&owner)); request->setUrl(QUrl(server.url() + "/cover"));
+        QTRY_COMPARE(server.coverRequests, 1); QTest::qWait(200);
+        QVERIFY(request->source().isEmpty());
+        QVERIFY(!readRecord(service.cacheStore(), "cover|" + request->url().toString(QUrl::FullyEncoded), true).valid);
+    }
+    void storeBudgetCorruptionAndClearBarrier() {
+        QTemporaryDir dir; TestClock now(QDateTime::currentDateTimeUtc());
+        MetadataCache::Policy policy; policy.jsonBudget = 480; policy.coverBudget = 500; policy.now = [&] { return now.value(); };
+        MetadataCache store(dir.path(), policy);
+        const QByteArray payload = QJsonDocument(QJsonObject{{"text", QString(120, 'x')}}).toJson(QJsonDocument::Compact);
+        store.write("old", false, payload, now); QVERIFY(readRecord(&store, "old").valid);
+        now = now.addSecs(1); store.setPins("test", {"old"});
+        store.write("new", false, payload, now); QVERIFY(!readRecord(&store, "new").valid); QVERIFY(readRecord(&store, "old").valid);
+        store.setPins("test", {}); now = now.addSecs(1);
+        store.write("new", false, payload, now); QVERIFY(readRecord(&store, "new").valid); QVERIFY(!readRecord(&store, "old").valid);
+        const auto path = dir.filePath("metadata/json/" + MetadataCache::digest("new") + ".json");
+        QFile broken(path); QVERIFY(broken.open(QIODevice::WriteOnly)); broken.write("broken"); broken.close();
+        QVERIFY(!readRecord(&store, "new").valid);
+        store.write("late", false, payload, now);
+        bool done = false; store.clear([&](QString error) { QVERIFY(error.isEmpty()); done = true; }); QTRY_VERIFY(done);
+        QVERIFY(!readRecord(&store, "late").valid);
+        store.write("cover1", true, imageBytes(), now); QVERIFY(readRecord(&store, "cover1", true).valid);
+        now = now.addSecs(1); store.write("cover2", true, imageBytes(Qt::blue), now);
+        QVERIFY(readRecord(&store, "cover2", true).valid); QVERIFY(!readRecord(&store, "cover1", true).valid);
+        const auto current = readRecord(&store, "cover2", true);
+        store.setPins("test", {"cover2"});
+        store.setCoverFiles({QFileInfo(current.localUrl.toLocalFile()).fileName()});
+        bool completed = false; MetadataCache::Record session;
+        store.write("cover2", true, imageBytes(Qt::red), now, [&](MetadataCache::Record value) { session = value; completed = true; });
+        QTRY_VERIFY(completed); QVERIFY(session.localUrl.isEmpty());
+        QVERIFY(QFileInfo::exists(current.localUrl.toLocalFile()));
+        QCOMPARE(readRecord(&store, "cover2", true).data, current.data);
+    }
+    void storeWriteFailureRemainsUsable() {
+        MockBangumiServer server; QTemporaryDir dir; QDir().mkpath(dir.filePath("metadata"));
+        QFile blocker(dir.filePath("metadata/json")); QVERIFY(blocker.open(QIODevice::WriteOnly)); blocker.close();
+        AnimeMetadataService service(dir.path()); service.setBaseUrl(server.url()); service.fetchDetail(101);
+        QTRY_VERIFY(!service.loadingDetail()); QVERIFY(!service.currentDetail().isEmpty()); QVERIFY(service.detailError().isEmpty());
+        QVERIFY(!readRecord(service.cacheStore(), server.url() + "|1|101").valid);
+    }
     void searchRequestAndFields() {
         MockBangumiServer server;
         QTemporaryDir dir;
@@ -263,7 +530,7 @@ private slots:
         QVERIFY(service.searchResults().isEmpty());
         server.searchBody = R"({"data":[],"total":0})";
         server.searchStatus = 200;
-        service.searchBangumi(service.searchKeyword());
+        service.searchBangumi(service.searchKeyword(), true);
         QTRY_VERIFY(!service.searching());
         QVERIFY(service.searchError().isEmpty());
     }
@@ -299,17 +566,18 @@ private slots:
         AnimeMetadataService service(dir.path());
         service.setBaseUrl(server.url());
         server.detailDelay = 100;
+        server.episodeDelay = 100;
         service.fetchDetail(101);
         QTRY_COMPARE(server.subjectRequests, 1);
         service.clearDetail();
         QTest::qWait(150);
         QVERIFY(service.currentDetail().isEmpty());
         QVERIFY(service.detailError().isEmpty());
-        QCOMPARE(server.episodeRequests, 0);
+        QCOMPARE(server.episodeRequests, 1);
         server.detailDelay = 0;
         server.episodeDelay = 100;
         service.fetchDetail(101);
-        QTRY_COMPARE(server.episodeRequests, 1);
+        QTRY_COMPARE(server.episodeRequests, 2);
         service.clearDetail();
         QTest::qWait(150);
         QVERIFY(service.currentDetail().isEmpty());
@@ -330,12 +598,12 @@ private slots:
         QCOMPARE(service.currentDetail().value("episodes").toList().size(), 205);
         QCOMPARE(server.episodeRequests, 3);
         server.episodeStatus = 503;
-        service.fetchDetail(101);
+        service.fetchDetail(101, true);
         QTRY_VERIFY(!service.loadingDetail());
         QCOMPARE(service.currentDetail().value("id").toLongLong(), 101);
         QVERIFY(!service.detailError().isEmpty());
         server.episodeStatus = 200;
-        service.fetchDetail(101);
+        service.fetchDetail(101, true);
         QTRY_VERIFY(!service.loadingDetail());
         QVERIFY(service.detailError().isEmpty());
         QCOMPARE(service.currentDetail().value("episodes").toList().size(), 205);
@@ -343,9 +611,13 @@ private slots:
     void cacheFreshnessAndInvalidResponsePreservation() {
         MockBangumiServer server;
         QTemporaryDir dir;
-        const auto path = QDir(dir.path()).filePath("metadata/calendar.json");
+        TestClock now(QDateTime::currentDateTimeUtc());
+        MetadataCache::Policy policy;
+        policy.now = [&] { return now.value(); };
+        const auto key = server.url() + "|0|";
+        const auto path = QDir(dir.path()).filePath("metadata/json/" + MetadataCache::digest(key.toUtf8()) + ".json");
         {
-            AnimeMetadataService service(dir.path());
+            AnimeMetadataService service(dir.path(), policy);
             service.setBaseUrl(server.url());
             service.refreshCalendar(true);
             QTRY_VERIFY(!service.loading());
@@ -353,10 +625,10 @@ private slots:
         }
         const int count = server.calendarRequests;
         {
-            AnimeMetadataService service(dir.path());
+            AnimeMetadataService service(dir.path(), policy);
             service.setBaseUrl(server.url());
             service.refreshCalendar(false);
-            QTest::qWait(50);
+            QTRY_VERIFY(!service.loading());
             QCOMPARE(server.calendarRequests, count);
             service.refreshCalendar(true);
             QTRY_VERIFY(!service.loading());
@@ -368,14 +640,11 @@ private slots:
             QCOMPARE(service.weeklyCalendar().size(), 7);
             QFile file(path);
             QVERIFY(file.open(QIODevice::ReadOnly));
-            QCOMPARE(file.readAll(), mockCalendarJson());
+            QCOMPARE(QJsonDocument(QJsonDocument::fromJson(file.readAll()).object().value("payload").toArray()).toJson(QJsonDocument::Compact), mockCalendarJson());
         }
-        QFile file(path);
-        QVERIFY(file.open(QIODevice::ReadWrite));
-        QVERIFY(file.setFileTime(QDateTime::currentDateTimeUtc().addDays(-2), QFileDevice::FileModificationTime));
-        file.close();
+        now = now.addDays(2);
         server.calendarBody.clear();
-        AnimeMetadataService stale(dir.path());
+        AnimeMetadataService stale(dir.path(), policy);
         stale.setBaseUrl(server.url());
         stale.refreshCalendar(false);
         QTRY_VERIFY(!stale.loading());
@@ -449,16 +718,20 @@ private slots:
         }
 
         // Verify file exists
-        QFile file(QDir(dir.path()).filePath(QStringLiteral("metadata/calendar.json")));
+        const auto key = server.url() + "|0|";
+        QFile file(QDir(dir.path()).filePath("metadata/json/" + MetadataCache::digest(key.toUtf8()) + ".json"));
         QVERIFY(file.exists());
         QVERIFY(file.size() > 100);
 
-        // Construct a new instance pointing to invalid server; should load from disk cache immediately
+        // Restart with the same source, now unavailable. Fresh entries do not access it.
+        const auto count = server.calendarRequests;
+        server.status = 503;
         AnimeMetadataService offlineService(dir.path());
-        offlineService.setBaseUrl(QStringLiteral("http://127.0.0.1:1")); // Offline/closed port
-
-        // Data should already be populated from constructor disk cache load
+        offlineService.setBaseUrl(server.url());
+        offlineService.refreshCalendar();
+        QTRY_VERIFY(!offlineService.loading());
         QCOMPARE(offlineService.weeklyCalendar().size(), 7);
+        QCOMPARE(server.calendarRequests, count);
         QVERIFY(!offlineService.airingToday().isEmpty());
         QVERIFY(!offlineService.heroAnime().isEmpty());
     }

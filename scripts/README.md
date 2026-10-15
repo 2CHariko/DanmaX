@@ -14,7 +14,8 @@
 - `bootstrap.ps1`：下载并准备项目内 CMake、Ninja 与 Qt 6.11 工具链。
 - `doctor.ps1`：环境健康诊断（检查 MSVC、Windows SDK、Ninja、CMake、Qt）。
 - `build.ps1`：主构建入口（`-Preset windows-debug`、`-Preset windows-release`，可选 `-Test`）。
-- `run.ps1`：运行应用调试实例（支持 `-SmokeTest`）。
+- `run.ps1`：关闭旧实例、增量构建并更新 `out/run/<预设>/` 独立运行目录；配置、日志、缓存与 EXE 同级，Debug/Release 互相隔离。支持 `-SmokeTest`、`-BuildDirectory`、`-NoBuild`。
+- `deployment.ps1`：开发运行与动态打包共用的 Qt 部署规则，保留运行数据并检查受管文件。
 - `release.ps1`：官方正式打包与发布总控脚本（构建号自动递增，生成便携单 EXE、绿色 ZIP 与校验和）。
 - `validate-static.ps1`：静态单 EXE 便携版无释放与白名单严格验收。
 - `clean.ps1`：安全清理构建缓存（保留用户配置）。

@@ -71,6 +71,7 @@ QtObject {
         emptyCalendar: "暂无排期数据，请检查网络连接或重试",
         refreshSchedule: "刷新周历",
         loadingCalendar: "正在同步番组放送表…",
+        updatingCache: "正在更新本地缓存…",
         searchPlaceholder: "搜索番剧",
         searchAccessible: "搜索番剧元信息",
         searchResultsTitle: "“%1”的搜索结果",
@@ -237,6 +238,17 @@ QtObject {
     })
 
     // 设置页
+    readonly property var metadataCache: ({
+        title: "番剧元信息缓存",
+        jsonTitle: "日历、详情、分集与搜索",
+        coverTitle: "番剧封面",
+        usage: "已使用 %1 MiB，上限 %2 MiB",
+        clear: "清空元信息缓存",
+        clearing: "正在清空缓存…",
+        cleared: "元信息缓存已清空。下次访问时重新获取。",
+        description: "自动淘汰较久未使用的内容。清空后可重新获取番剧信息。"
+    })
+
     readonly property var settings: ({
         title: "设置",
         description: "修改后即时生效并保存。",

@@ -1,147 +1,375 @@
 #include "infrastructure/AnimeMetadataService.h"
-#include <QDate>
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
-#include <QJsonArray>
+#include "infrastructure/CoverCache.h"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkRequest>
-#include <QUrl>
 #include <QUrlQuery>
-#include <QSaveFile>
-#include <QSet>
 #include <algorithm>
 #include <cmath>
 #include <limits>
 
 namespace {
-constexpr qint64 kMaxResponseBytes = 16LL * 1024 * 1024;
-constexpr qint64 kCalendarMaxAgeSeconds = 6 * 60 * 60;
-
-void boundReply(QNetworkReply* reply, int timeoutMs) {
-    reply->setReadBufferSize(kMaxResponseBytes + 1);
-    QObject::connect(reply, &QIODevice::readyRead, reply, [reply] {
-        if (reply->bytesAvailable() > kMaxResponseBytes) reply->abort();
-    });
-    QTimer::singleShot(timeoutMs, reply, [reply] { if (!reply->isFinished()) reply->abort(); });
-}
-
+constexpr qint64 maxResponse = 16LL * 1024 * 1024;
 QString normalizeCoverUrl(QString url) {
-    if (url.startsWith(QStringLiteral("http://lain.bgm.tv"))) {
-        url.replace(0, 4, QStringLiteral("https"));
-    }
+    if (url.startsWith("http://lain.bgm.tv")) url.replace(0, 4, "https");
     return url;
 }
-} // namespace
-
-AnimeMetadataService::AnimeMetadataService(QString cacheRoot, QObject* parent, int timeoutMs)
-    : QObject(parent)
-    , cacheDir_(QDir(cacheRoot).filePath(QStringLiteral("metadata")))
-    , network_(this)
-    , timeoutMs_(timeoutMs)
-{
+}
+AnimeMetadataService::AnimeMetadataService(QString root, QObject* parent, int timeoutMs)
+    : AnimeMetadataService(std::move(root), MetadataCache::Policy{}, parent, timeoutMs) {}
+AnimeMetadataService::AnimeMetadataService(QString root, MetadataCache::Policy policy, QObject* parent, int timeoutMs)
+    : QObject(parent), cache_(std::move(root), std::move(policy)), network_(this), timeoutMs_(timeoutMs) {
+    covers_ = new CoverCache(&cache_, this, timeoutMs);
     worker_.setMaxThreadCount(1);
-    deadline_.setSingleShot(true);
-    connect(&deadline_, &QTimer::timeout, this, [this] {
-        if (calendarReply_) {
-            auto* reply = calendarReply_.data();
-            calendarReply_ = nullptr;
-            disconnect(reply, nullptr, this, nullptr);
-            reply->abort();
-            reply->deleteLater();
-            loading_ = false;
-            error_ = QStringLiteral("请求追番日历超时");
-            emit stateChanged();
-        }
-    });
-
-    todayWeekday_ = QDate::currentDate().dayOfWeek();
-    if (todayWeekday_ < 1 || todayWeekday_ > 7) todayWeekday_ = 1;
-
-    // Load disk cache first so data is instantly available without white screen
-    loadCalendarFromDiskCache();
+    todayWeekday_ = cache_.now().toLocalTime().date().dayOfWeek();
     refreshTimer_.setInterval(60000);
     connect(&refreshTimer_, &QTimer::timeout, this, [this] { refreshCalendar(false); });
+    connect(&cache_, &MetadataCache::usageChanged, this, [this](qint64 json, qint64 covers) {
+        jsonBytes_ = json; coverBytes_ = covers; emit cacheChanged();
+    });
+    // Loading is asynchronous and source-aware; the home page initiates the first access.
 }
-
 AnimeMetadataService::~AnimeMetadataService() {
-    ++generation_;
-    searchStop_.request_stop();
-    deadline_.stop();
-    if (calendarReply_) {
-        auto* r = calendarReply_.data();
-        calendarReply_ = nullptr;
-        disconnect(r, nullptr, this, nullptr);
-        r->abort();
-        r->deleteLater();
-    }
-    if (detailReply_) {
-        auto* r = detailReply_.data();
-        detailReply_ = nullptr;
-        disconnect(r, nullptr, this, nullptr);
-        r->abort();
-        r->deleteLater();
-    }
-    if (epReply_) {
-        auto* r = epReply_.data();
-        epReply_ = nullptr;
-        disconnect(r, nullptr, this, nullptr);
-        r->abort();
-        r->deleteLater();
-    }
-    if (searchReply_) {
-        auto* r = searchReply_.data();
-        searchReply_ = nullptr;
-        disconnect(r, nullptr, this, nullptr);
-        r->abort();
-        r->deleteLater();
-    }
-    if (heroReply_) {
-        auto* r = heroReply_.data();
-        heroReply_ = nullptr;
-        disconnect(r, nullptr, this, nullptr);
-        r->abort();
-        r->deleteLater();
-    }
-    workerStop_.request_stop();
-    worker_.clear();
-    worker_.waitForDone();
+    cancelAll(); worker_.clear(); worker_.waitForDone();
+    delete covers_; covers_ = nullptr;
 }
-
+QObject* AnimeMetadataService::coverCache() { return covers_; }
+QString AnimeMetadataService::resourceKey(Kind kind, const QString& identity) const {
+    return baseUrl_ + '|' + QString::number(static_cast<int>(kind)) + '|'
+        + (kind == Kind::Search ? QStringLiteral("/v0/search/subjects?limit=20&offset=0|") : QString()) + identity;
+}
 void AnimeMetadataService::setBaseUrl(const QString& url) {
-    baseUrl_ = url;
-    while (baseUrl_.endsWith(QLatin1Char('/'))) {
-        baseUrl_.chop(1);
+    auto normalized = url;
+    while (normalized.endsWith('/')) normalized.chop(1);
+    if (normalized == baseUrl_) return;
+    cancelAll(); baseUrl_ = normalized; failedAt_.clear();
+    weeklyCalendar_.clear(); airingToday_.clear(); topRated_.clear(); heroAnime_.clear();
+    loading_ = false; error_.clear(); calendarStale_ = false; calendarDate_ = {};
+    clearSearch(); clearDetail();
+    cache_.setPins("calendar", {}); cache_.setPins("hero", {});
+    emit calendarChanged(); emit stateChanged();
+}
+void AnimeMetadataService::cancelAll() {
+    refreshTimer_.stop();
+    for (const auto& job : std::as_const(jobs_)) {
+        job->active = false;
+        if (auto* reply = job->reply.data()) { job->reply = nullptr; reply->abort(); reply->deleteLater(); }
+    }
+    jobs_.clear(); ++calendarGeneration_; ++heroGeneration_; ++detailGeneration_; ++searchGeneration_;
+}
+void AnimeMetadataService::unsubscribe(const QString& scope) {
+    const auto jobs = jobs_.values();
+    for (const auto& job : jobs) {
+        job->watches.removeIf([&](const Watch& watch) { return watch.scope == scope; });
+        if (!job->watches.isEmpty()) continue;
+        job->active = false; jobs_.remove(job->key);
+        if (auto* reply = job->reply.data()) { job->reply = nullptr; reply->abort(); reply->deleteLater(); }
     }
 }
-
-void AnimeMetadataService::loadCalendarFromDiskCache() {
-    QFile file(QDir(cacheDir_).filePath(QStringLiteral("calendar.json")));
-    if (!file.open(QIODevice::ReadOnly)) return;
-    if (file.size() > kMaxResponseBytes) return;
-    const auto bytes = file.readAll();
-    file.close();
-    if (bytes.isEmpty()) return;
-
-    auto parsed = parseCalendarJson(bytes, todayWeekday_);
-    if (parsed.error.isEmpty() && !parsed.weeklyCalendar.isEmpty()) {
-        weeklyCalendar_ = std::move(parsed.weeklyCalendar);
-        airingToday_ = std::move(parsed.airingToday);
-        topRated_ = std::move(parsed.topRated);
-        heroAnime_ = std::move(parsed.heroAnime);
-        calendarFetchedAt_ = QFileInfo(file).lastModified().toUTC();
+void AnimeMetadataService::publish(const std::shared_ptr<Job>& job, Result result, bool done) {
+    if (!job->active) return;
+    const auto watches = job->watches;
+    job->cached = result;
+    if (done) { job->active = false; jobs_.remove(job->key); }
+    for (const auto& watch : watches) watch.callback(result);
+}
+void AnimeMetadataService::request(Kind kind, QString identity, QString scope, bool force, std::function<void(Result)> callback) {
+    if (clearing_) return;
+    const auto key = resourceKey(kind, identity);
+    if (auto found = jobs_.value(key)) {
+        // Explicit refresh bypasses a pending disk lookup as well as a fresh hit.
+        found->force |= force;
+        found->watches.append({std::move(scope), callback});
+        if (found->cached.available) callback(found->cached);
+        return;
+    }
+    auto job = std::make_shared<Job>();
+    job->key = key; job->identity = std::move(identity); job->kind = kind; job->force = force;
+    job->ttl = kind == Kind::Subject ? 86400 : kind == Kind::Search ? 3600 : 21600;
+    job->watches.append({std::move(scope), std::move(callback)});
+    jobs_.insert(key, job);
+    cache_.read(key, false, [this, job](MetadataCache::Record record) {
+        if (!job->active) return;
+        if (!record.valid && job->kind == Kind::Calendar && baseUrl_ == "https://api.bgm.tv") {
+            cache_.importCalendar([this, job](MetadataCache::Record legacy) { cached(job, std::move(legacy), true); });
+        } else cached(job, std::move(record));
+    });
+}
+void AnimeMetadataService::cached(const std::shared_ptr<Job>& job, MetadataCache::Record record, bool legacy) {
+    if (!job->active) return;
+    const auto weekday = cache_.now().toLocalTime().date().dayOfWeek();
+    worker_.start([this, job, record = std::move(record), legacy, weekday] {
+        auto result = record.valid ? parseResource(job->kind, job->identity, record.data, weekday) : Result{};
+        QMetaObject::invokeMethod(this, [this, job, result = std::move(result), record, legacy]() mutable {
+            if (!job->active) return;
+            const auto age = failedAt_.value(job->key).secsTo(cache_.now());
+            const bool cooldown = !job->force && failedAt_.contains(job->key) && age >= 0 && age < 300;
+            const bool fresh = cache_.fresh(record, job->ttl);
+            const bool fetch = job->force || ((!result.available || !fresh) && !cooldown);
+            if (result.available) {
+                // Resume cleanup if the process exited after migration committed but before its callback.
+                if (!legacy && job->kind == Kind::Calendar && baseUrl_ == "https://api.bgm.tv") cache_.finishCalendarMigration();
+                result.stale = !fresh; result.refreshing = fetch;
+                if (cooldown && !fresh) result.error = QStringLiteral("更新失败，继续显示本地缓存；稍后自动重试");
+                if (legacy) cache_.write(job->key, false, record.data, record.fetchedAt, [this, key = job->key](MetadataCache::Record) {
+                    // Verify the new entry exists before deleting the legacy file.
+                    cache_.read(key, false, [this](MetadataCache::Record saved) { if (saved.valid) cache_.finishCalendarMigration(); });
+                });
+                publish(job, result, !fetch);
+            } else if (!fetch) {
+                result.error = QStringLiteral("请求失败，请稍后重试或手动刷新"); publish(job, result, true);
+            }
+            if (fetch) network(job);
+        }, Qt::QueuedConnection);
+    });
+}
+void AnimeMetadataService::network(const std::shared_ptr<Job>& job) {
+    if (!job->active) return;
+    QString path;
+    if (job->kind == Kind::Calendar) path = "/calendar";
+    else if (job->kind == Kind::Subject) path = "/v0/subjects/" + job->identity;
+    else if (job->kind == Kind::Search) path = "/v0/search/subjects?limit=20&offset=0";
+    else path = "/v0/episodes?subject_id=" + job->identity + "&type=0&limit=100&offset=" + QString::number(job->episodes.size());
+    QNetworkRequest req(QUrl(baseUrl_ + path));
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("DanmaX/0.2.4 (https://github.com/2CHariko/DanmaX)"));
+    req.setRawHeader("Accept", "application/json");
+    req.setTransferTimeout(timeoutMs_);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::SameOriginRedirectPolicy);
+    QNetworkReply* reply;
+    if (job->kind == Kind::Search) {
+        req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+        reply = network_.post(req, job->identity.toUtf8());
+    } else reply = network_.get(req);
+    job->reply = reply;
+    reply->setReadBufferSize(maxResponse + 1);
+    connect(reply, &QIODevice::readyRead, reply, [reply] { if (reply->bytesAvailable() > maxResponse) reply->abort(); });
+    QTimer::singleShot(timeoutMs_, reply, [reply] { if (!reply->isFinished()) reply->abort(); });
+    connect(reply, &QNetworkReply::finished, this, [this, job, reply] {
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const bool ok = reply->error() == QNetworkReply::NoError && status == 200;
+        const auto body = reply->isOpen() ? reply->readAll() : QByteArray{};
+        reply->deleteLater(); job->reply = nullptr;
+        if (!job->active) return;
+        if (!ok || body.size() > maxResponse) {
+            failedAt_[job->key] = cache_.now();
+            auto result = job->cached; result.refreshing = false;
+            result.error = result.available ? QStringLiteral("更新失败，继续显示本地缓存（HTTP %1）").arg(status)
+                : QStringLiteral("请求失败或超时（HTTP %1），请重试").arg(status);
+            publish(job, result, true); return;
+        }
+        parseNetwork(job, body);
+    });
+}
+void AnimeMetadataService::parseNetwork(const std::shared_ptr<Job>& job, QByteArray body) {
+    const auto weekday = cache_.now().toLocalTime().date().dayOfWeek();
+    worker_.start([this, job, body = std::move(body), weekday]() mutable {
+        auto result = parseResource(job->kind, job->identity, body, weekday, false);
+        bool more = false;
+        if (job->kind == Kind::Episodes && result.available) {
+            const auto page = QJsonDocument::fromJson(body).object();
+            const auto items = page.value("data").toArray();
+            const int total = page.value("total").toInt();
+            if ((job->expectedTotal >= 0 && total != job->expectedTotal) || items.size() > 100
+                || job->episodes.size() + items.size() > total || (items.isEmpty() && job->episodes.size() < total)) result.available = false;
+            job->expectedTotal = total;
+            for (const auto& item : items) {
+                const auto id = item.toObject().value("id").toInteger();
+                if (job->episodeIds.contains(id)) result.available = false;
+                job->episodeIds.insert(id);
+            }
+            if (result.available) {
+                for (const auto& item : items) job->episodes.append(item);
+                more = job->episodes.size() < total;
+                body = QJsonDocument(QJsonObject{{"data", job->episodes}, {"total", more ? static_cast<int>(job->episodes.size()) : total}}).toJson(QJsonDocument::Compact);
+                result = parseResource(Kind::Episodes, job->identity, body, weekday);
+            }
+        }
+        QMetaObject::invokeMethod(this, [this, job, body = std::move(body), result = std::move(result), more]() mutable {
+            if (!job->active) return;
+            if (more && result.available) {
+                // Partial pages are session-only and cannot replace a cached complete list.
+                if (!job->cached.available) {
+                    result.refreshing = true;
+                    const auto watches = job->watches;
+                    for (const auto& watch : watches) watch.callback(result);
+                }
+                network(job); return;
+            }
+            if (!result.available) {
+                failedAt_[job->key] = cache_.now();
+                auto failure = job->cached; failure.refreshing = false;
+                failure.error = failure.available ? QStringLiteral("返回数据无效，继续显示本地缓存") : QStringLiteral("服务返回数据无效，请重试");
+                publish(job, failure, true); return;
+            }
+            failedAt_.remove(job->key);
+            cache_.write(job->key, false, body, cache_.now());
+            publish(job, result, true);
+        }, Qt::QueuedConnection);
+    });
+}
+AnimeMetadataService::Result AnimeMetadataService::parseResource(Kind kind, const QString& identity, const QByteArray& data, int weekday, bool completeEpisodes) {
+    Result result;
+    if (data.size() > maxResponse) return result;
+    if (kind == Kind::Calendar) {
+        const auto parsed = parseCalendarJson(data, weekday);
+        if (!parsed.error.isEmpty()) return result;
+        result.value = QVariantMap{{"weekly", parsed.weeklyCalendar}, {"today", parsed.airingToday}, {"top", parsed.topRated}, {"hero", parsed.heroAnime}};
+    } else if (kind == Kind::Subject) {
+        const auto parsed = parseSubjectDetail(data);
+        if (parsed.value("id").toLongLong() != identity.toLongLong() || parsed.value("title").toString().trimmed().isEmpty()) return result;
+        result.value = parsed;
+    } else if (kind == Kind::Episodes) {
+        const auto doc = QJsonDocument::fromJson(data);
+        const auto obj = doc.object();
+        const auto totalValue = obj.value("total");
+        if (!doc.isObject() || !obj.value("data").isArray() || !totalValue.isDouble() || totalValue.toDouble() < 0
+            || totalValue.toDouble() != std::floor(totalValue.toDouble()) || totalValue.toDouble() > 5000) return result;
+        const auto values = obj.value("data").toArray();
+        if (values.size() > totalValue.toInt() || (completeEpisodes && values.size() != totalValue.toInt())) return result;
+        QVariantList episodes; QSet<qint64> ids;
+        for (const auto& value : values) {
+            const auto ep = value.toObject();
+            const auto id = ep.value("id").toInteger();
+            const auto sort = ep.value("sort").toDouble(-1);
+            if (id <= 0 || ids.contains(id) || ep.value("type").toInt(-1) != 0 || !std::isfinite(sort) || sort < 0) return result;
+            ids.insert(id);
+            auto title = ep.value("name_cn").toString().trimmed();
+            if (title.isEmpty()) title = ep.value("name").toString().trimmed();
+            if (title.isEmpty()) title = QStringLiteral("第 %1 话").arg(sort);
+            episodes.append(QVariantMap{{"id", id}, {"sort", sort}, {"title", title}, {"airDate", ep.value("airdate").toString()}});
+        }
+        result.value = episodes;
+    } else {
+        const auto doc = QJsonDocument::fromJson(data);
+        const auto values = doc.object().value("data");
+        const auto total = doc.object().value("total");
+        if (!doc.isObject() || !values.isArray() || values.toArray().size() > 20 || !total.isDouble()
+            || total.toDouble() < values.toArray().size() || total.toDouble() != std::floor(total.toDouble())
+            || total.toDouble() > std::numeric_limits<int>::max()) return result;
+        QVariantList items; QSet<qint64> ids;
+        for (const auto& value : values.toArray()) {
+            const auto obj = value.toObject(); const auto id = obj.value("id").toInteger();
+            if (id <= 0 || ids.contains(id) || obj.value("type").toInt() != 2 || obj.value("nsfw").toBool()) continue;
+            auto title = obj.value("name_cn").toString().trimmed();
+            if (title.isEmpty()) title = obj.value("name").toString().trimmed();
+            if (title.isEmpty()) continue;
+            ids.insert(id);
+            auto cover = obj.value("images").toObject().value("large").toString();
+            if (cover.isEmpty()) cover = obj.value("images").toObject().value("common").toString();
+            const auto score = obj.value("rating").toObject().value("score").toDouble();
+            items.append(QVariantMap{{"id", id}, {"title", title}, {"originalTitle", obj.value("name").toString()},
+                {"airDate", obj.value("date").toString()}, {"cover", normalizeCoverUrl(cover)},
+                {"score", score > 0 && std::isfinite(score) ? QString::number(score, 'f', 1) : QString()}});
+        }
+        if (!values.toArray().isEmpty() && items.isEmpty()) return result;
+        result.value = QVariantMap{{"items", items}, {"total", total.toInt()}};
+    }
+    result.available = true; return result;
+}
+void AnimeMetadataService::applyCalendar(QVariantMap value) {
+    const auto oldId = heroAnime_.value("id");
+    const auto oldHero = heroAnime_;
+    weeklyCalendar_ = value.value("weekly").toList(); airingToday_ = value.value("today").toList();
+    topRated_ = value.value("top").toList(); heroAnime_ = value.value("hero").toMap();
+    if (oldId == heroAnime_.value("id")) {
+        if (oldHero.contains("summary")) heroAnime_["summary"] = oldHero.value("summary");
+        if (oldHero.contains("tags")) heroAnime_["tags"] = oldHero.value("tags");
+    }
+    calendarDate_ = cache_.now().toLocalTime().date(); todayWeekday_ = calendarDate_.dayOfWeek();
+    emit calendarChanged();
+}
+void AnimeMetadataService::refreshCalendar(bool force) {
+    if (clearing_ || (loading_ && !force)) return;
+    refreshTimer_.start();
+    unsubscribe("calendar"); const auto gen = ++calendarGeneration_;
+    cache_.setPins("calendar", {resourceKey(Kind::Calendar, {})});
+    loading_ = true; error_.clear(); emit stateChanged();
+    request(Kind::Calendar, {}, "calendar", force, [this, gen, force](Result result) {
+        if (gen != calendarGeneration_) return;
+        loading_ = result.refreshing; calendarStale_ = result.stale; error_ = result.error;
+        if (result.available) { applyCalendar(result.value.toMap()); fetchHeroDetails(force && !result.refreshing); }
+        emit stateChanged();
+    });
+}
+void AnimeMetadataService::fetchHeroDetails(bool force) {
+    const auto id = heroAnime_.value("id").toLongLong();
+    const auto pending = jobs_.value(resourceKey(Kind::Subject, QString::number(id)));
+    if (pending && std::any_of(pending->watches.begin(), pending->watches.end(), [](const Watch& watch) { return watch.scope == "hero"; })) {
+        pending->force |= force;
+        return;
+    }
+    unsubscribe("hero"); const auto gen = ++heroGeneration_;
+    cache_.setPins("hero", id > 0 ? QSet<QString>{resourceKey(Kind::Subject, QString::number(id))} : QSet<QString>{});
+    if (id <= 0) return;
+    request(Kind::Subject, QString::number(id), "hero", force, [this, gen, id](Result result) {
+        if (gen != heroGeneration_ || heroAnime_.value("id").toLongLong() != id || !result.available) return;
+        const auto subject = result.value.toMap();
+        heroAnime_["summary"] = subject.value("summary"); heroAnime_["tags"] = subject.value("tags");
         emit calendarChanged();
-    }
+    });
 }
-
-void AnimeMetadataService::saveCalendarToDiskCache(const QByteArray& data) {
-    QDir dir(cacheDir_);
-    if (!dir.exists()) dir.mkpath(QStringLiteral("."));
-    QSaveFile file(dir.filePath(QStringLiteral("calendar.json")));
-    if (file.open(QIODevice::WriteOnly)) {
-        if (file.write(data) == data.size()) file.commit();
-    }
+void AnimeMetadataService::clearDetail() {
+    ++detailGeneration_; unsubscribe("detail"); cache_.setPins("detail", {});
+    detailId_ = 0; loadingDetail_ = detailSubjectLoading_ = detailEpisodesLoading_ = false;
+    detailStale_ = detailSubjectStale_ = detailEpisodesStale_ = false;
+    detailError_.clear(); subjectError_.clear(); episodesError_.clear(); detailSubject_.clear(); detailEpisodes_.clear(); currentDetail_.clear(); emit detailChanged();
+}
+void AnimeMetadataService::updateDetail() {
+    currentDetail_ = detailSubject_;
+    if (!currentDetail_.isEmpty()) currentDetail_["episodes"] = detailEpisodes_;
+    loadingDetail_ = detailSubjectLoading_ || detailEpisodesLoading_;
+    detailStale_ = detailSubjectStale_ || detailEpisodesStale_;
+    detailError_ = !subjectError_.isEmpty() ? subjectError_ : episodesError_;
+    emit detailChanged();
+}
+void AnimeMetadataService::fetchDetail(qint64 id, bool force) {
+    if (id <= 0 || clearing_) return;
+    if (id != detailId_) clearDetail(); else { ++detailGeneration_; unsubscribe("detail"); }
+    detailId_ = id; const auto gen = detailGeneration_;
+    detailSubjectLoading_ = detailEpisodesLoading_ = true; subjectError_.clear(); episodesError_.clear(); updateDetail();
+    const auto identity = QString::number(id);
+    cache_.setPins("detail", {resourceKey(Kind::Subject, identity), resourceKey(Kind::Episodes, identity)});
+    request(Kind::Subject, identity, "detail", force, [this, gen](Result result) {
+        if (gen != detailGeneration_) return;
+        detailSubjectLoading_ = result.refreshing; detailSubjectStale_ = result.stale; subjectError_ = result.error;
+        if (result.available) detailSubject_ = result.value.toMap(); updateDetail();
+    });
+    request(Kind::Episodes, identity, "detail", force, [this, gen](Result result) {
+        if (gen != detailGeneration_) return;
+        detailEpisodesLoading_ = result.refreshing; detailEpisodesStale_ = result.stale; episodesError_ = result.error;
+        if (result.available) detailEpisodes_ = result.value.toList(); updateDetail();
+    });
+}
+void AnimeMetadataService::clearSearch() {
+    ++searchGeneration_; unsubscribe("search"); cache_.setPins("search", {});
+    searching_ = searchStale_ = false; searchResults_.clear(); searchKeyword_.clear(); searchError_.clear(); searchTotal_ = 0; emit searchChanged();
+}
+void AnimeMetadataService::searchBangumi(const QString& keyword, bool force) {
+    if (clearing_) return;
+    const auto trimmed = keyword.trimmed();
+    if (trimmed != searchKeyword_) clearSearch(); else { ++searchGeneration_; unsubscribe("search"); }
+    if (trimmed.isEmpty()) return;
+    searchKeyword_ = trimmed;
+    if (trimmed.size() > 512) { searching_ = false; searchError_ = QStringLiteral("搜索词不能超过 512 个字符"); emit searchChanged(); return; }
+    searching_ = true; searchError_.clear(); const auto gen = searchGeneration_; emit searchChanged();
+    const auto payload = QJsonDocument(QJsonObject{{"keyword", trimmed}, {"sort", "match"},
+        {"filter", QJsonObject{{"type", QJsonArray{2}}, {"nsfw", false}}}}).toJson(QJsonDocument::Compact);
+    cache_.setPins("search", {resourceKey(Kind::Search, QString::fromUtf8(payload))});
+    request(Kind::Search, QString::fromUtf8(payload), "search", force, [this, gen](Result result) {
+        if (gen != searchGeneration_) return;
+        searching_ = result.refreshing; searchStale_ = result.stale; searchError_ = result.error;
+        if (result.available) { const auto values = result.value.toMap(); searchResults_ = values.value("items").toList(); searchTotal_ = values.value("total").toInt(); }
+        emit searchChanged();
+    });
+}
+void AnimeMetadataService::clearMetadataCache() {
+    if (clearing_) return;
+    clearing_ = true; cacheCleared_ = false; cacheError_.clear(); cancelAll(); failedAt_.clear(); covers_->reset();
+    clearSearch(); clearDetail(); weeklyCalendar_.clear(); airingToday_.clear(); topRated_.clear(); heroAnime_.clear();
+    calendarDate_ = {}; loading_ = calendarStale_ = false; error_.clear();
+    cache_.setPins("calendar", {}); cache_.setPins("hero", {});
+    emit calendarChanged(); emit stateChanged(); emit cacheChanged();
+    cache_.clear([this](QString error) { clearing_ = false; cacheCleared_ = error.isEmpty(); cacheError_ = error; emit cacheChanged(); });
 }
 
 AnimeMetadataService::CalendarParsed AnimeMetadataService::parseCalendarJson(
@@ -248,99 +476,6 @@ AnimeMetadataService::CalendarParsed AnimeMetadataService::parseCalendarJson(
     return res;
 }
 
-void AnimeMetadataService::refreshCalendar(bool force) {
-    if (!refreshTimer_.isActive()) refreshTimer_.start();
-    if (loading_ && !force) return;
-
-    const auto now = QDateTime::currentDateTimeUtc();
-    const bool sameDay = todayWeekday_ == QDate::currentDate().dayOfWeek();
-    if (!force && sameDay && !weeklyCalendar_.isEmpty() && calendarFetchedAt_.isValid() &&
-        calendarFetchedAt_.secsTo(now) >= 0 && calendarFetchedAt_.secsTo(now) < kCalendarMaxAgeSeconds) {
-        if (heroAnime_.value("summary").toString().isEmpty() && !heroReply_) fetchHeroDetails();
-        return;
-    }
-
-    todayWeekday_ = QDate::currentDate().dayOfWeek();
-    if (todayWeekday_ < 1 || todayWeekday_ > 7) todayWeekday_ = 1;
-
-    if (!sameDay) loadCalendarFromDiskCache();
-    if (calendarReply_) {
-        auto* r = calendarReply_.data();
-        calendarReply_ = nullptr;
-        disconnect(r, nullptr, this, nullptr);
-        r->abort();
-        r->deleteLater();
-    }
-
-    const quint64 gen = ++generation_;
-    workerStop_.request_stop();
-    worker_.clear();
-    loading_ = true;
-    error_.clear();
-    emit stateChanged();
-
-    QUrl url(baseUrl_ + QStringLiteral("/calendar"));
-    QNetworkRequest req(url);
-    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("DanmaX/0.2.4 (https://github.com/DanmaX)"));
-    req.setRawHeader("Accept", "application/json");
-    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::SameOriginRedirectPolicy);
-    req.setTransferTimeout(timeoutMs_);
-
-    auto* reply = network_.get(req);
-    boundReply(reply, timeoutMs_);
-    calendarReply_ = reply;
-    deadline_.start(timeoutMs_);
-
-    connect(reply, &QNetworkReply::finished, this, [this, reply, gen] {
-        if (gen != generation_) {
-            reply->deleteLater();
-            return;
-        }
-        deadline_.stop();
-        calendarReply_ = nullptr;
-
-        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        const auto error = reply->error();
-        const auto body = reply->isOpen() ? reply->readAll() : QByteArray{};
-        reply->deleteLater();
-
-        if (error != QNetworkReply::NoError || status != 200 || body.size() > kMaxResponseBytes) {
-            loading_ = false;
-            error_ = QStringLiteral("获取放送表失败（HTTP %1）").arg(status);
-            emit stateChanged();
-            return;
-        }
-
-        workerStop_.request_stop();
-        worker_.clear();
-        workerStop_ = std::stop_source{};
-
-        worker_.start([this, body, gen, weekday = todayWeekday_, stop = workerStop_.get_token()] {
-            auto parsed = parseCalendarJson(body, weekday, stop);
-            if (stop.stop_requested()) return;
-
-            QMetaObject::invokeMethod(this, [this, gen, body, parsed = std::move(parsed)]() mutable {
-                if (gen != generation_) return;
-                loading_ = false;
-                if (!parsed.error.isEmpty()) {
-                    error_ = parsed.error;
-                } else {
-                    saveCalendarToDiskCache(body);
-                    calendarFetchedAt_ = QDateTime::currentDateTimeUtc();
-                    error_.clear();
-                    weeklyCalendar_ = std::move(parsed.weeklyCalendar);
-                    airingToday_ = std::move(parsed.airingToday);
-                    topRated_ = std::move(parsed.topRated);
-                    heroAnime_ = std::move(parsed.heroAnime);
-                    emit calendarChanged();
-                    fetchHeroDetails();
-                }
-                emit stateChanged();
-            }, Qt::QueuedConnection);
-        });
-    });
-}
-
 QVariantMap AnimeMetadataService::parseSubjectDetail(
     const QByteArray& json, const QByteArray& episodesJson, std::stop_token stop)
 {
@@ -415,258 +550,4 @@ QVariantMap AnimeMetadataService::parseSubjectDetail(
     res[QStringLiteral("episodes")] = epsList;
 
     return res;
-}
-
-void AnimeMetadataService::fetchDetail(qint64 subjectId) {
-    clearDetail();
-    if (subjectId <= 0) return;
-    const auto generation = detailGeneration_;
-    loadingDetail_ = true;
-    emit detailChanged();
-    QNetworkRequest request(QUrl(baseUrl_ + "/v0/subjects/" + QString::number(subjectId)));
-    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("DanmaX/0.2.4"));
-    request.setTransferTimeout(timeoutMs_);
-    auto* reply = network_.get(request);
-    boundReply(reply, timeoutMs_);
-    detailReply_ = reply;
-    connect(reply, &QNetworkReply::finished, this, [this, reply, subjectId, generation] {
-        if (generation != detailGeneration_) { reply->deleteLater(); return; }
-        detailReply_ = nullptr;
-        const auto body = reply->isOpen() ? reply->readAll() : QByteArray{};
-        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        const bool ok = reply->error() == QNetworkReply::NoError && status == 200 && body.size() <= kMaxResponseBytes;
-        reply->deleteLater();
-        auto detail = ok ? parseSubjectDetail(body) : QVariantMap{};
-        if (detail.value("id").toLongLong() != subjectId || detail.value("title").toString().isEmpty()) {
-            detailError_ = QStringLiteral("获取番剧详情失败（HTTP %1），请重试").arg(status);
-            loadingDetail_ = false;
-            emit detailChanged();
-            return;
-        }
-        currentDetail_ = std::move(detail);
-        emit detailChanged();
-        fetchEpisodes(subjectId, generation, body);
-    });
-}
-
-void AnimeMetadataService::fetchEpisodes(qint64 subjectId, quint64 generation, QByteArray subject, QJsonArray episodes) {
-    if (generation != detailGeneration_) return;
-    QUrl url(baseUrl_ + "/v0/episodes");
-    QUrlQuery query;
-    query.addQueryItem("subject_id", QString::number(subjectId));
-    query.addQueryItem("type", "0");
-    query.addQueryItem("limit", "100");
-    query.addQueryItem("offset", QString::number(episodes.size()));
-    url.setQuery(query);
-    QNetworkRequest request(url);
-    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("DanmaX/0.2.4"));
-    request.setTransferTimeout(timeoutMs_);
-    auto* reply = network_.get(request);
-    boundReply(reply, timeoutMs_);
-    epReply_ = reply;
-    connect(reply, &QNetworkReply::finished, this, [this, reply, subjectId, generation, subject = std::move(subject), episodes = std::move(episodes)]() mutable {
-        if (generation != detailGeneration_) { reply->deleteLater(); return; }
-        epReply_ = nullptr;
-        const auto body = reply->isOpen() ? reply->readAll() : QByteArray{};
-        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        const bool ok = reply->error() == QNetworkReply::NoError && status == 200 && body.size() <= kMaxResponseBytes;
-        reply->deleteLater();
-        const auto document = QJsonDocument::fromJson(body);
-        const auto page = document.object().value("data");
-        if (!ok || !document.isObject() || !page.isArray() || page.toArray().size() > 100) {
-            detailError_ = QStringLiteral("获取分集失败（HTTP %1），可重试或手动搜索弹幕").arg(status);
-            loadingDetail_ = false;
-            emit detailChanged();
-            return;
-        }
-        for (const auto& episode : page.toArray()) episodes.append(episode);
-        currentDetail_ = parseSubjectDetail(subject, QJsonDocument(QJsonObject{{"data", episodes}}).toJson(QJsonDocument::Compact));
-        const int total = document.object().value("total").toInt(static_cast<int>(episodes.size()));
-        if (episodes.size() < total && !page.toArray().isEmpty()) {
-            if (episodes.size() >= 5000 || total > 5000) {
-                detailError_ = QStringLiteral("分集超过 5000 条上限，请手动选择弹幕");
-            } else {
-                emit detailChanged();
-                fetchEpisodes(subjectId, generation, std::move(subject), std::move(episodes));
-                return;
-            }
-        }
-        loadingDetail_ = false;
-        emit detailChanged();
-    });
-}
-
-void AnimeMetadataService::clearDetail() {
-    ++detailGeneration_;
-    for (auto* pointer : {&detailReply_, &epReply_}) {
-        if (!*pointer) continue;
-        auto* reply = pointer->data();
-        *pointer = nullptr;
-        disconnect(reply, nullptr, this, nullptr);
-        reply->abort();
-        reply->deleteLater();
-    }
-    currentDetail_.clear();
-    detailError_.clear();
-    loadingDetail_ = false;
-    emit detailChanged();
-}
-void AnimeMetadataService::clearSearch() {
-    ++searchGeneration_;
-    searchStop_.request_stop();
-    if (searchReply_) {
-        auto* reply = searchReply_.data();
-        searchReply_ = nullptr;
-        disconnect(reply, nullptr, this, nullptr);
-        reply->abort();
-        reply->deleteLater();
-    }
-    searching_ = false;
-    searchResults_.clear();
-    searchKeyword_.clear();
-    searchError_.clear();
-    searchTotal_ = 0;
-    emit searchChanged();
-}
-
-void AnimeMetadataService::searchBangumi(const QString& keyword) {
-    clearSearch();
-    const auto trimmed = keyword.trimmed();
-    if (trimmed.isEmpty()) return;
-    searchKeyword_ = trimmed;
-    if (trimmed.size() > 512) {
-        searchError_ = QStringLiteral("搜索词不能超过 512 个字符");
-        emit searchChanged();
-        return;
-    }
-    searching_ = true;
-    searchStop_ = std::stop_source{};
-    const auto generation = searchGeneration_;
-    emit searchChanged();
-    // Bounded first page. A broad match asks the user to refine the keyword.
-    QNetworkRequest req(QUrl(baseUrl_ + QStringLiteral("/v0/search/subjects?limit=20&offset=0")));
-    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("DanmaX/0.2.4 (https://github.com/DanmaX)"));
-    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-    req.setRawHeader("Accept", "application/json");
-    req.setTransferTimeout(timeoutMs_);
-    const auto payload = QJsonDocument(QJsonObject{{"keyword", trimmed}, {"sort", "match"},
-        {"filter", QJsonObject{{"type", QJsonArray{2}}, {"nsfw", false}}}}).toJson(QJsonDocument::Compact);
-    auto* reply = network_.post(req, payload);
-    searchReply_ = reply;
-    boundReply(reply, timeoutMs_);
-
-    connect(reply, &QNetworkReply::finished, this, [this, reply, generation] {
-        if (generation != searchGeneration_) { reply->deleteLater(); return; }
-        searchReply_ = nullptr;
-        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        const auto body = reply->isOpen() ? reply->readAll() : QByteArray{};
-        const bool ok = reply->error() == QNetworkReply::NoError && status == 200 && body.size() <= kMaxResponseBytes;
-        reply->deleteLater();
-        if (!ok) {
-            searching_ = false;
-            searchError_ = status > 0 ? QStringLiteral("搜索失败（HTTP %1），请重试").arg(status)
-                : QStringLiteral("搜索请求失败或超时，请检查网络后重试");
-            emit searchChanged();
-            return;
-        }
-        worker_.start([this, body, generation, stop = searchStop_.get_token()] {
-            if (stop.stop_requested()) return;
-            QVariantList results;
-            QString error;
-            int total = 0;
-            const auto doc = QJsonDocument::fromJson(body);
-            const auto data = doc.object().value("data");
-            const auto count = doc.object().value("total");
-            if (!doc.isObject() || !data.isArray() || data.toArray().size() > 20 || !count.isDouble()
-                || count.toDouble() < data.toArray().size() || count.toDouble() != std::floor(count.toDouble())
-                || count.toDouble() > std::numeric_limits<int>::max()) {
-                error = QStringLiteral("搜索服务返回的数据无效，请重试");
-            } else {
-                total = count.toInt();
-                QSet<qint64> seen;
-                for (const auto& val : data.toArray()) {
-                    if (stop.stop_requested()) return;
-                    const auto obj = val.toObject();
-                    const qint64 id = obj.value(QStringLiteral("id")).toInteger();
-                    if (id <= 0 || seen.contains(id) || obj.value("type").toInt() != 2 || obj.value("nsfw").toBool()) continue;
-                    const auto name = obj.value("name").toString().trimmed();
-                    auto title = obj.value("name_cn").toString().trimmed();
-                    if (title.isEmpty()) title = name;
-                    if (title.isEmpty()) continue;
-                    seen.insert(id);
-
-                    const auto imgObj = obj.value(QStringLiteral("images")).toObject();
-                    QString cover = imgObj.value(QStringLiteral("large")).toString();
-                    if (cover.isEmpty()) cover = imgObj.value(QStringLiteral("common")).toString();
-                    cover = normalizeCoverUrl(cover);
-
-                    QVariantMap m;
-                    m[QStringLiteral("id")] = id;
-                    m[QStringLiteral("title")] = title;
-                    m[QStringLiteral("cover")] = cover;
-                    m[QStringLiteral("originalTitle")] = name;
-                    m[QStringLiteral("airDate")] = obj.value(QStringLiteral("date")).toString();
-                    const double score = obj.value("rating").toObject().value("score").toDouble();
-                    m[QStringLiteral("score")] = score > 0 && std::isfinite(score) ? QString::number(score, 'f', 1) : QString();
-                    results.append(m);
-                }
-                if (!data.toArray().isEmpty() && results.isEmpty()) error = QStringLiteral("搜索结果没有可用的番剧信息，请调整搜索词");
-            }
-            if (stop.stop_requested()) return;
-            QMetaObject::invokeMethod(this, [this, generation, results = std::move(results), error, total] {
-                if (generation != searchGeneration_) return;
-                searchResults_ = results;
-                searchTotal_ = total;
-                searchError_ = error;
-                searching_ = false;
-                emit searchChanged();
-            }, Qt::QueuedConnection);
-        });
-    });
-}
-void AnimeMetadataService::fetchHeroDetails() {
-    const qint64 heroId = heroAnime_.value(QStringLiteral("id")).toLongLong();
-    if (heroId <= 0) return;
-
-    if (heroReply_) {
-        auto* r = heroReply_.data();
-        heroReply_ = nullptr;
-        disconnect(r, nullptr, this, nullptr);
-        r->abort();
-        r->deleteLater();
-    }
-
-    QUrl url(baseUrl_ + QStringLiteral("/v0/subjects/") + QString::number(heroId));
-    QNetworkRequest req(url);
-    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("DanmaX/0.2.4 (https://github.com/DanmaX)"));
-    req.setRawHeader("Accept", "application/json");
-    req.setTransferTimeout(timeoutMs_);
-
-    auto* reply = network_.get(req);
-    heroReply_ = reply;
-    boundReply(reply, timeoutMs_);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, heroId] {
-        heroReply_ = nullptr;
-        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        const auto body = reply->isOpen() ? reply->readAll() : QByteArray{};
-        reply->deleteLater();
-
-        if (reply->error() == QNetworkReply::NoError && status == 200 && body.size() <= kMaxResponseBytes && !body.isEmpty()) {
-            const auto doc = QJsonDocument::fromJson(body);
-            if (doc.isObject()) {
-                const auto obj = doc.object();
-                const QString summary = obj.value(QStringLiteral("summary")).toString().trimmed();
-                QStringList tags;
-                for (const auto& tagVal : obj.value(QStringLiteral("tags")).toArray()) {
-                    const QString tag = tagVal.toObject().value(QStringLiteral("name")).toString().trimmed();
-                    if (!tag.isEmpty() && tags.size() < 5) tags.append(tag);
-                }
-                if (heroAnime_.value(QStringLiteral("id")).toLongLong() == heroId) {
-                    if (!summary.isEmpty()) heroAnime_[QStringLiteral("summary")] = summary;
-                    if (!tags.isEmpty()) heroAnime_[QStringLiteral("tags")] = tags;
-                    emit calendarChanged();
-                }
-            }
-        }
-    });
 }

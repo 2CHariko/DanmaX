@@ -5,7 +5,7 @@ $script:ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $script:DependencyLock = Get-Content (Join-Path $ProjectRoot 'toolchain/dependencies.lock.json') -Raw | ConvertFrom-Json
 
 function Get-ProjectPath([string] $Relative) {
-    $path = [IO.Path]::GetFullPath((Join-Path $ProjectRoot $Relative))
+    $path = [IO.Path]::GetFullPath($Relative, $ProjectRoot)
     if (-not $path.StartsWith($ProjectRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Path must remain within the project: $Relative"
     }

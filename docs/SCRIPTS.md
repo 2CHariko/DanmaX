@@ -12,7 +12,7 @@
    - 严格要求 **PowerShell 7 (`pwsh`)**。脚本头部声明 `#requires -Version 7.0`，不支持 Windows PowerShell 5.1。
 2. **零系统侵入与沙盒隔离**：
    - 所有脚本通过 `common.ps1` 中的 `Invoke-ProjectEnvironment` 在子进程执行，临时设置 `TEMP`/`TMP`、`QML_DISK_CACHE_PATH` 等。
-   - 依赖与开发工具落在项目内 `.tools/` 与 `.deps/`，产物落在 `out/`，缓存落在 `.cache/`，配置落在 `.local/`。
+   - 依赖与开发工具落在项目内 `.tools/` 与 `.deps/`，构建产物落在 `out/`，工具缓存落在 `.cache/`，工具链本机配置落在 `.local/`；开发运行数据随独立便携布局落在 `out/run/<预设>/`。
    - **禁止修改系统永久 PATH**，禁止依赖全局包管理器（vcpkg / Conan）。
 3. **自解析项目根路径**：
    - 脚本以自身物理位置反推项目根目录，支持从任意当前工作目录安全调用。
@@ -23,7 +23,7 @@
 
 ## 2. 脚本全量速查索引
 
-项目共包含 **24 个脚本**，按生命周期与职责分类如下：
+项目脚本按生命周期与职责分类如下：
 
 | 类别 | 脚本文件 | 核心参数摘要 | 功能简述 |
 | :--- | :--- | :--- | :--- |
@@ -31,7 +31,7 @@
 | | [`doctor.ps1`](#31-环境准备与诊断) | *(无)* | 诊断本机 MSVC、Windows SDK、Ninja、CMake、Qt 及锁文件状态 |
 | | [`clean.ps1`](#31-环境准备与诊断) | `[-Preset <Preset\|all>]` | 安全清理指定或全部构建预设目录（保留 `.local/` 用户配置） |
 | **日常编译与调试** | [`build.ps1`](#32-日常编译调试与运行) | `[-Preset <Preset>] [-Clean] [-Test]` | 驱动 CMake/Ninja 编译主工程各预设，可选执行全量 CTest |
-| | [`run.ps1`](#32-日常编译调试与运行) | `[-Preset <Preset>] [-SmokeTest] [-BuildDirectory <dir>]` | 启动开发调试实例，注入独立的进程临时路径与本地数据目录 |
+| | [`run.ps1`](#32-日常编译调试与运行) | `[-Preset <Preset>] [-SmokeTest] [-BuildDirectory <dir>] [-NoBuild]` | 退出同路径旧实例，增量构建主程序后启动开发调试实例 |
 | **静态 Qt 工具链** | [`prepare-qt-static.ps1`](#33-静态-qt-sdk-工具链构建) | `[-Offline]` | 联网下载并 SHA-256 校验 Qt 官方源码归档至 `.cache/sources/` |
 | | [`build-qt-static.ps1`](#33-静态-qt-sdk-工具链构建) | `[-Jobs <1-32>] [-Reconfigure]` | 纯静态 MSVC `/MT` 编译项目专用静态 Qt SDK（耗时较长） |
 | **打包与正式发布** | [`release.ps1`](#34-制品打包与正式发布) | `[-BuildNumber <int>]` | **官方发布总控**：自增构建号，打包静态单 EXE 与动态 ZIP，生成哈希 |
@@ -43,6 +43,7 @@
 | **性能横向评测** | [`compare-renderers.ps1`](#35-自动化质量验证与基准测试) | `[-Seconds <int>]` | 文本渲染后端对比：公开 Qt Quick 文本项 vs QImage 图片后端 |
 | | [`compare-texture-budgets.ps1`](#35-自动化质量验证与基准测试) | `-Xml <path> [-Count <int>]` | 文字纹理显存预算评测：固定 64 MiB 预算 vs 自适应 512 MiB 预算 |
 | **底层库与资产** | [`common.ps1`](#36-底层支持库与专用资产工具) | *(库文件，供点源调用)* | 提供环境沙盒、编译器加载、工具定位、路径校验等核心逻辑 |
+| | `deployment.ps1` | *(库文件，供点源调用)* | 开发运行与动态打包共用 Qt 部署规则，检查并修复受管运行文件 |
 | | [`portable.ps1`](#36-底层支持库与专用资产工具) | *(库文件，供点源调用)* | 便携构建底层支持（如 MSVC `/showIncludes` 前缀解析） |
 | | [`generate-icon.ps1`](#36-底层支持库与专用资产工具) | `-OutputDirectory <path>` | 基于系统 `System.Drawing` 动态合成各尺寸 `DanmaX.ico` 与 PNG |
 | | [`verify-fluent-assets.ps1`](#36-底层支持库与专用资产工具) | *(无)* | 校验 `resources/fluent/` 内图标资产与清单的一致性 |
@@ -97,20 +98,33 @@
   # 日常 Debug 开发编译
   pwsh -NoProfile -File scripts/build.ps1 -Preset windows-debug
 
-  # 运行全量 13 项单元与回归测试
+  # 运行全量单元与回归测试
   pwsh -NoProfile -File scripts/build.ps1 -Preset windows-release -Test
   ```
 
 #### `run.ps1`
-- **用途**：启动编译出的 `DanmaX.exe`。自动注入专用的环境变量沙盒，将配置重定向至 `.local/data`，缓存定向至项目内 QML 缓存目录。
+- **用途**：默认退出目标旧实例，增量构建 `danmaku_app`，更新 `out/run/<预设>/` 后启动其中的 EXE。首次运行、预设／工具链配置或 CMake 缓存变化时先配置；其余情况复用配置，由 CMake/Ninja 跟踪源码、QML 和构建文件变化。不构建全部测试目标，也不自动执行 CTest。
+- **运行目录**：Debug、Release、Static Release 分别使用 `out/run/windows-debug/`、`out/run/windows-release/`、`out/run/windows-static-release/`。每个目录包含程序、所需依赖、settings.ini、app.log 和 cache/；TEMP/TMP 位于各自 cache/tmp/，QML 缓存位于各自 cache/。动态版使用锁定 Qt 的 windeployqt，启动时清除 SDK 的 PATH 和导入路径。完整且未变化的部署直接复用，部署更新保留用户数据；不会将测试 EXE、构建中间文件或原开发共享数据复制进来。
+- **旧实例处理**：仅处理 EXE 完整路径与本次目标一致的进程，先请求正常关闭，等待 5 秒；超时后强制结束，并再等待最多 5 秒确认退出。关闭、配置或编译失败立即停止，不继续启动旧产物。其他构建目录及发布目录的实例不受影响。强制结束会跳过正常清理，可能丢失尚未写盘的设置或中断缓存写入。
 - **参数**：
   - `-Preset <name>`：选择运行的预设目标（默认 `windows-debug`）。
   - `-SmokeTest`：自动化烟雾模式，同时创建控制面板与覆盖窗，加载后自动安全退出。
+  - `-BuildDirectory <dir>`：指定项目 `out/build/` 下的构建目录，相对路径按项目根目录解析，也接受项目内绝对路径。默认目录为 `out/build/<Preset>`；自定义构建对应 `out/run/custom/<Preset>/<构建目录相对 out/build 的路径>/`，避免与默认实例或其他预设共享数据。
+  - `-NoBuild`：跳过配置和编译，检查现有构建与所选预设匹配后按需部署并启动。构建产物／缓存不存在或构建类型不匹配时直接报错，不保证包含最新源码。已部署的 EXE 也可直接启动。
 - **示例**：
   ```powershell
+  # 日常开发：关闭旧实例、增量编译、运行
   pwsh -NoProfile -File scripts/run.ps1 -Preset windows-debug
   pwsh -NoProfile -File scripts/run.ps1 -Preset windows-release -SmokeTest
+
+  # 仅重新运行现有产物
+  pwsh -NoProfile -File scripts/run.ps1 -NoBuild
+
+  # 使用独立构建目录，配置和运行保持一致
+  pwsh -NoProfile -File scripts/run.ps1 -BuildDirectory out/build/windows-debug-local
   ```
+- **数据保留**：普通 `clean.ps1` 仅清理 out/build/，不清理 out/run/；手动删除整个 out/ 会丢失运行数据。旧 `.local/data/` 和 `.cache/qml/<Qt版本>/` 保留，不自动迁移；可在所有相关实例退出后自行复制需要的 settings.ini 或弹幕缓存。
+- **脚本回归**：`pwsh -NoProfile -File tests/scripts/RunScriptTests.ps1` 使用隔离工具替身验证配置／部署复用、失败阻止启动、目录隔离与数据保留，不需要编译器或 Qt SDK；报告写入 out/validation/。真实部署启动验证另见 FRAMEWORK_STATUS.md。
 
 ---
 

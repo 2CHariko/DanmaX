@@ -57,7 +57,7 @@ UI 的具体约束以 [UI_DESIGN_SYSTEM.md](UI_DESIGN_SYSTEM.md) 为准：2026-1
 ├── .deps/                         # 忽略：确有需要的额外依赖
 ├── .cache/                        # 忽略：downloads、tmp、qml 等
 ├── .local/                        # 忽略：开发配置、日志、toolchain.local.json
-└── out/                           # 忽略：build、test-results、reports、stage、packages
+└── out/                           # 忽略：build、run、test-results、reports、stage、packages
 ```
 
 不把 `src/core` 拆成大量微型库。建议初始构建目标：`danmaku_core`（纯 C++ 静态库）、`danmaku_runtime`（Qt/平台服务）、`danmaku_app`（QML 与渲染）；测试按职责建立可执行目标即可。这些目标已建立并承载当前业务。
@@ -88,6 +88,7 @@ QML UI → Application Service → Core
 ### 基础设施与应用服务
 
 - 在线弹幕由独立 `DanmakuLibrary` QObject 提供搜索、剧集、下载和缓存操作；GUI 线程的 `QNetworkAccessManager` 只负责有界异步请求，JSON 转换/排序/去重和缓存 IO 使用可合作取消的工作池。服务地址来自有序设置列表 danmakuServers，默认包含 https://danmaku-api.152468.xyz，无自动联网、账号或签名。各服务共享弹弹play ID；搜索、剧集及下载独立按顺序回退，失败或无可用结果继续，首个有效结果停止；取消及配置变更废弃整条回退链。旧单地址字段不读取或迁移。缓存通过 `AppPaths.cache/danmaku` 定位，版本化 JSON 使用来源/剧集/参数摘要命名并原子替换。XML、在线下载和缓存载入统一提交到 `AppController`，代次拒绝旧结果；在线准备保留旧播放，成功提交才停止、清空并载入，保持停止状态。详见 [配置说明](CONFIGURATION.md)。
+- 番剧元信息由 `AnimeMetadataService` 访问 Bangumi，领域核心不参与网络或缓存。`MetadataCache` 使用单一后台队列读写版本化条目与原子文件，JSON 转换在后台执行；来源与参数摘要隔离日历、详情、完整分集和搜索。主推与详情共享请求，分集分页失败不替换旧完整列表；过期缓存先展示再更新。`CoverCache` 为 QML 图片提供生命周期绑定的请求对象及本地 URL，合并下载并限制为四个并发、256 个待下载条目；后台验证图片大小与解码尺寸。JSON／封面预算分别为 64／512 MiB，按最近使用时间淘汰并保护当前内容。清空通过请求代次与存储代次废弃旧回调和写入，只清理经过路径验证的元信息子目录。有效期、离线与管理行为见 [配置说明](CONFIGURATION.md#43-番剧元信息与封面缓存)。
 - XML 通过后台 `QXmlStreamReader` 解析，限制异常文件、超长文本和非有限时间；按批次报告进度。完成后一次性交接不可变数据。
 - Bilibili 下载兼容：在 Qt XML 读取前用有界 64 KiB 流式设备将原始非法 C0 控制字符替换为空格；保留 TAB/LF/CR，按 UTF-16/32 字节序处理多字节编码，不重写源文件、不修补结构性 XML 错误。模式 1/2/3 映射滚动，4/5 映射固定；其他模式不降级。明确缺失的颜色（空/undefined/null）回退白色。加载结果分别统计无效记录、不支持模式、字符修复及采用默认颜色的可播放记录；100 万条上限包含被过滤记录，错误/取消不交接部分数据。
 - 配置采用带详细中文注释的 UTF-8 INI（settings.ini），版本校验和 Qt `QSaveFile` 原子保存；首次运行生成完整默认配置。旧 JSON/INI 不读取、不迁移；程序保存时重建自带注释，不保留未知字段或额外注释。
@@ -132,7 +133,7 @@ QML UI → Application Service → Core
 
 Qt SDK、CMake、Ninja、下载文件、可选依赖、项目临时文件、QML 磁盘缓存、构建中间文件、测试结果、打包暂存和开发日志全部放入上述项目内目录。任何后续引入的工具都必须先确认缓存路径可配置。
 
-脚本在进程环境中设置 `TEMP`、`TMP` 为 `.cache/tmp/<任务>`，`QML_DISK_CACHE_PATH` 为 `.cache/qml/<Qt版本>/<配置>`；使用显式项目数据根处理配置和日志，而不是直接依赖默认 AppData 路径。Qt/工具的其他缓存若未提供重定向接口，必须在诊断文档中披露，不能宣称已完全隔离。
+构建脚本在进程环境中设置 `TEMP`、`TMP` 为项目 `.cache/tmp`，QML 缓存为 `.cache/qml/<Qt版本>/`。开发运行单独部署至 `out/run/<预设>/`，配置、日志和 `cache/` 与 EXE 同级；启动前设置该目录的 `cache/tmp/` 为 TEMP/TMP，`cache/` 为 QML 缓存，并移除 SDK 的 PATH、插件及 QML 导入路径。Qt/工具的其他缓存若未提供重定向接口，必须在诊断文档中披露，不能宣称已完全隔离。
 
 ### 系统边界
 
@@ -153,8 +154,8 @@ Qt/CMake/Ninja 应使用项目内独立版本。MSVC/SDK 后续可选择：
 
 - 路径相对项目根，目录含空格也必须可用；禁止硬编码盘符。
 - 缓存可再生但未必可搬迁；项目移动后重新配置/编译。不得承诺现成 CMake 构建目录可无损复制到任意位置。
-- 备份源码和 `.local` 中有价值的用户配置即可，缓存和工具可由锁定清单重建；离线环境应另行保留已校验下载包。
-- 开发运行写 `.local/`；静态便携包将设置、日志和 `cache/` 写在 EXE 旁；动态目录/自解压包沿用 `data/`。位置不可写时明确报错，可通过参数指定数据目录，不静默写入 AppData。
+- 备份源码、`.local` 中有价值的配置，以及 `out/run/` 各运行目录中的 settings.ini 和需要保留的弹幕；缓存和工具可由锁定清单重建。普通构建清理只作用于 `out/build/`，不删除运行目录；手动删除整个 out/ 会丢失其中的运行数据。离线环境应另行保留已校验下载包。
+- 开发运行、动态目录包和静态便携包统一将设置、日志和 `cache/` 写在 EXE 旁；旧 CAB 自解压启动器仍显式使用 `data/`。位置不可写时明确报错，可通过参数指定数据目录，不静默写入 AppData。旧开发共享目录保留，不自动迁移；用户授权的独立运行数据例外位于 out/run/。
 
 ## 6. 依赖与构建规范
 

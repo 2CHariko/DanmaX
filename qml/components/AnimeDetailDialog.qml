@@ -9,6 +9,8 @@ Dialog {
     objectName: "animeDetailDialog"
     property var detail: ({})
     property bool loading: false
+    required property QtObject coverCache
+    property bool stale: false
     property string error: ""
     property bool ownerVisible: true
     readonly property bool hasValidDetail: Boolean(detail && Number(detail.id) > 0)
@@ -41,6 +43,23 @@ Dialog {
         ColumnLayout {
             width: detailScroll.availableWidth
             spacing: 16
+
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    Layout.fillWidth: true
+                    text: dialogRoot.loading ? (dialogRoot.stale ? I18n.home.updatingCache : I18n.common.loading) : ""
+                    color: Ui.secondaryText
+                    wrapMode: Text.WordWrap
+                    Accessible.role: Accessible.AlertMessage
+                }
+                Button {
+                    objectName: "refreshAnimeDetail"
+                    text: I18n.common.refresh
+                    enabled: !dialogRoot.loading
+                    onClicked: dialogRoot.retryRequested()
+                }
+            }
 
             // 加载指示器
             BusyIndicator {
@@ -120,10 +139,11 @@ Dialog {
                             color: Ui.accentColor
                         }
 
-                        Image {
+                        CachedCoverImage {
                             id: posterImg
                             anchors.fill: parent
-                            source: (dialogRoot.detail && dialogRoot.detail.cover) || ""
+                            cacheService: dialogRoot.coverCache
+                            remoteSource: (dialogRoot.detail && dialogRoot.detail.cover) || ""
                             sourceSize.width: 320
                             fillMode: Image.PreserveAspectCrop
                             asynchronous: true

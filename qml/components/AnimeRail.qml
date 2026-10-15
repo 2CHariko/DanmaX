@@ -7,6 +7,7 @@ import "../i18n"
 ColumnLayout {
     id: railRoot
     property string title: ""
+    required property QtObject coverCache
     property var model: []
     property var weekdayTabs: []
     property int selectedWeekday: 0
@@ -93,6 +94,7 @@ ColumnLayout {
                 required property var modelData
                 objectName: "animeCard"
                 animeData: modelData
+                coverCache: railRoot.coverCache
                 onClicked: if (animeData) railRoot.cardClicked(animeData)
             }
 

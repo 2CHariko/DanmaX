@@ -89,7 +89,7 @@ PageFrame {
         Label {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
-            text: page.backend.metadata.loading ? I18n.home.loadingCalendar : page.backend.metadata.error
+            text: page.backend.metadata.loading ? (page.backend.metadata.calendarStale ? I18n.home.updatingCache : I18n.home.loadingCalendar) : page.backend.metadata.error
             visible: text.length > 0
             color: Ui.secondaryText
             Accessible.role: Accessible.AlertMessage
@@ -107,12 +107,14 @@ PageFrame {
         id: heroBanner
         visible: !searchPane.showingResults
         anime: page.backend.metadata.heroAnime
+        coverCache: page.backend.metadata.coverCache
         onWatchNowClicked: title => page.openDanmakuForAnime(title, "", 0)
         onDetailsClicked: anime => page.showDetails(anime)
     }
 
     // 2. 轨道一：继续追番 / 本地缓存历史（有历史记录时展示）
     AnimeRail {
+        coverCache: page.backend.metadata.coverCache
         visible: !searchPane.showingResults && Boolean(page.recentWatchedList && page.recentWatchedList.length > 0)
         title: I18n.home.continueWatching
         model: page.recentWatchedList
@@ -129,6 +131,7 @@ PageFrame {
     // 3. 轨道二：今日新番 / 追番周历（支持周一至周日 7 天 Tab 快速切换）
     AnimeRail {
         id: weeklyRail
+        coverCache: page.backend.metadata.coverCache
         visible: !searchPane.showingResults
         title: I18n.home.weeklyCalendar
         weekdayTabs: I18n.home.weekdays
@@ -145,6 +148,7 @@ PageFrame {
     // 4. 轨道三：季度热门 / 评分榜单
     AnimeRail {
         id: topRatedRail
+        coverCache: page.backend.metadata.coverCache
         visible: !searchPane.showingResults
         title: I18n.home.topRated
         model: page.backend.metadata.topRated
@@ -159,8 +163,10 @@ PageFrame {
         ownerVisible: page.visible
         detail: page.backend.metadata.currentDetail
         loading: page.backend.metadata.loadingDetail
+        stale: page.backend.metadata.detailStale
+        coverCache: page.backend.metadata.coverCache
         error: page.backend.metadata.detailError
-        onRetryRequested: page.backend.metadata.fetchDetail(page.detailSubjectId)
+        onRetryRequested: page.backend.metadata.fetchDetail(page.detailSubjectId, true)
         onCloseRequested: page.backend.metadata.clearDetail()
         onWatchNowRequested: animeTitle => {
             page.backend.metadata.clearDetail()
@@ -175,5 +181,9 @@ PageFrame {
     Component.onCompleted: {
         page.backend.metadata.refreshCalendar(false)
     }
-    onVisibleChanged: if (!visible && backend) backend.metadata.clearDetail()
+    onVisibleChanged: {
+        if (!backend) return
+        if (!visible) backend.metadata.clearDetail()
+        else backend.metadata.refreshCalendar(false)
+    }
 }

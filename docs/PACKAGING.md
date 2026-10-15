@@ -31,10 +31,10 @@ pwsh -NoProfile -File scripts/validate-static.ps1 -Executable out/packages/Danma
 
 `package.ps1` 会先按所选格式重新配置并增量构建当前主程序，再生成包；删除 `out/` 或其中的构建/打包目录后，直接重新执行打包命令即可恢复这些产物。项目内工具、Qt SDK、静态源码及已校验下载归档必须仍存在，依赖缺失仍按准备脚本处理，不在打包阶段自动联网。需要回归测试时另外执行对应预设的 `build.ps1 -Test`。
 
-## 静态包运行目录
+## 统一运行数据目录
 
 ```text
-DanmaX.exe        主程序，Qt/QML/插件嵌入其中
+DanmaX.exe             主程序；静态版嵌入 Qt/QML，动态版另附 DLL 与插件
 settings.ini          带详细中文注释的用户配置，首次运行创建
 settings.ini.backup-*  损坏配置的保留备份，仅需要时出现
 app.log                应用日志
@@ -43,7 +43,11 @@ cache/                 QML、图形管线等运行缓存
   tmp/                 本进程 TEMP/TMP；临时保存文件可自动删除
 ```
 
-在创建 QGuiApplication 前设置进程自己的 TEMP/TMP、QML 缓存位置；QSaveFile 的原子保存临时文件位于配置文件所在目录。配置与日志默认直接在 EXE 旁；开发 `run.ps1` 显式指定 `.local/` 数据和项目缓存。`--data-dir`、`--cache-dir` 可分别覆盖，相对路径按调用者工作目录解释，相对 XML 路径也保留这一语义。数据位置不可写时失败，不静默退回 AppData，不修改永久 PATH，不安装 Qt，不释放 DLL。
+所有构建在创建 QGuiApplication 前设置进程自己的 TEMP/TMP、QML 缓存位置；QSaveFile 的原子保存临时文件位于配置文件所在目录。动态与静态版均默认将配置、日志和 cache/ 放在 EXE 旁；`--data-dir` 改变数据目录时，默认缓存跟随为该目录下的 cache/，`--cache-dir` 可独立覆盖。相对参数按调用者工作目录解释，相对 XML 路径保留这一语义。数据位置不可写时失败，不静默退回 AppData，不修改永久 PATH。
+
+开发 `run.ps1` 默认先增量构建，再更新 `out/run/<预设>/` 并从中启动；Debug、Release、Static Release 分别部署、分别保存数据。动态版与 `package.ps1 -Format directory` 共用锁定 Qt 的部署规则，附带相对路径 qt.conf；运行时仅保留系统 PATH，不依赖 SDK 导入路径。程序、部署规则和依赖清单未变化且部署文件完整时复用部署；缺失或被改动的受管文件会触发重新部署。更新只覆盖程序和受管依赖，保留 settings.ini、app.log*、cache/ 等运行数据。`-NoBuild` 跳过构建但仍会检查并按需更新部署。
+
+普通构建清理不删除 out/run/；该目录包含需自行备份的开发配置与弹幕。旧 `.local/data/`、`.cache/qml/<Qt版本>/` 和动态版 `data/` 不自动迁移、删除或覆盖。正式打包始终使用新的独立 staging，不从开发运行目录收集文件。
 
 携带配置时同时移动 `settings.ini`；需要保留日志可一起移动 `app.log*`。`cache/` 可在全部实例退出后自行删除并重新生成。多实例共享默认设置位置，尚未增加跨实例配置写入协调。
 

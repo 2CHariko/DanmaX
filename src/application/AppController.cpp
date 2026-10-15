@@ -17,11 +17,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
                              QString cacheDirectory, MainForegroundQuery mainForegroundQuery,
                              ToolbarPointerMonitor::CursorQuery cursorQuery, WindowLayerController::Positioner positioner)
     : QObject(parent), settings_(dataDirectory),
-#ifdef DANMAKU_STATIC_PORTABLE
       logs_(dataDirectory),
-#else
-      logs_(QDir(dataDirectory).filePath("logs")),
-#endif
       library_(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       metadata_(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       monitor_(this),
