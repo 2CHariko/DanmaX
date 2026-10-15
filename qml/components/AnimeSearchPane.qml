@@ -55,59 +55,69 @@ ColumnLayout {
                 onClicked: pane.metadata.searchBangumi(pane.metadata.searchKeyword, true)
             }
         }
-        Repeater {
-            id: results
-            model: pane.metadata.searchResults
-            delegate: ItemDelegate {
-                required property var modelData
-                required property int index
-                objectName: "animeSearchResult" + index
-                Layout.fillWidth: true
-                Accessible.name: modelData.title + " " + modelData.originalTitle + " " + modelData.airDate
-                onClicked: pane.detailsRequested(modelData)
-                contentItem: RowLayout {
-                    spacing: 12
-                    CachedCoverImage {
-                        Layout.preferredWidth: 48
-                        Layout.preferredHeight: 64
-                        cacheService: pane.metadata.coverCache
-                        remoteSource: modelData.cover
-                        visible: remoteSource.toString().length > 0
-                        sourceSize.width: 96
-                        sourceSize.height: 128
-                        fillMode: Image.PreserveAspectFit
-                        asynchronous: true
-                    }
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.minimumWidth: 0
-                        spacing: 4
-                        Label {
-                            Layout.fillWidth: true
-                            text: modelData.title
-                            textFormat: Text.PlainText
-                            font.weight: Font.DemiBold
-                            wrapMode: Text.WordWrap
-                            maximumLineCount: 2
-                            elide: Text.ElideRight
+        LoadingPlaceholder {
+            objectName: "animeSearchSkeleton"
+            loading: pane.metadata.searching
+            hasContent: pane.metadata.searchResults.length > 0
+            onContentReady: resultsReveal.restart()
+        }
+        ContentReveal { id: resultsReveal; target: resultRows }
+        ColumnLayout {
+            id: resultRows
+            Layout.fillWidth: true
+            Repeater {
+                id: results
+                model: pane.metadata.searchResults
+                delegate: ItemDelegate {
+                    required property var modelData
+                    required property int index
+                    objectName: "animeSearchResult" + index
+                    Layout.fillWidth: true
+                    Accessible.name: modelData.title + " " + modelData.originalTitle + " " + modelData.airDate
+                    onClicked: pane.detailsRequested(modelData)
+                    contentItem: RowLayout {
+                        spacing: 12
+                        CachedCoverImage {
+                            Layout.preferredWidth: 48
+                            Layout.preferredHeight: 64
+                            cacheService: pane.metadata.coverCache
+                            remoteSource: modelData.cover
+                            sourceSize.width: 96
+                            sourceSize.height: 128
+                            fillMode: Image.PreserveAspectFit
+                            asynchronous: true
                         }
-                        Label {
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            text: modelData.originalTitle
-                            visible: text.length > 0 && text !== modelData.title
-                            textFormat: Text.PlainText
-                            wrapMode: Text.WordWrap
-                            maximumLineCount: 2
-                            elide: Text.ElideRight
-                            color: Ui.secondaryText
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            text: [modelData.airDate, modelData.score ? I18n.home.ratingPrefix + modelData.score : ""].filter(Boolean).join(" · ")
-                            textFormat: Text.PlainText
-                            wrapMode: Text.WordWrap
-                            color: Ui.secondaryText
-                            visible: text.length > 0
+                            Layout.minimumWidth: 0
+                            spacing: 4
+                            Label {
+                                Layout.fillWidth: true
+                                text: modelData.title
+                                textFormat: Text.PlainText
+                                font.weight: Font.DemiBold
+                                wrapMode: Text.WordWrap
+                                maximumLineCount: 2
+                                elide: Text.ElideRight
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: modelData.originalTitle
+                                visible: text.length > 0 && text !== modelData.title
+                                textFormat: Text.PlainText
+                                wrapMode: Text.WordWrap
+                                maximumLineCount: 2
+                                elide: Text.ElideRight
+                                color: Ui.secondaryText
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: [modelData.airDate, modelData.score ? I18n.home.ratingPrefix + modelData.score : ""].filter(Boolean).join(" · ")
+                                textFormat: Text.PlainText
+                                wrapMode: Text.WordWrap
+                                color: Ui.secondaryText
+                                visible: text.length > 0
+                            }
                         }
                     }
                 }

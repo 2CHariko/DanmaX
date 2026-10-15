@@ -9,6 +9,9 @@ Dialog {
     objectName: "animeDetailDialog"
     property var detail: ({})
     property bool loading: false
+    property bool loadingSubject: false
+    property bool loadingEpisodes: false
+    property bool episodesAvailable: false
     required property QtObject coverCache
     property bool stale: false
     property string error: ""
@@ -32,6 +35,10 @@ Dialog {
     title: loading && !hasValidDetail ? I18n.common.loading : ((detail && detail.title) || I18n.home.heroDetails)
     standardButtons: Dialog.Close
     onRejected: closeRequested()
+    Binding { target: dialogRoot.enter; property: "enabled"; value: Ui.motionEnabled }
+    Binding { target: dialogRoot.exit; property: "enabled"; value: Ui.motionEnabled }
+    ContentReveal { id: headerReveal; target: detailHeader }
+    ContentReveal { id: episodesReveal; target: episodesFlow }
 
     contentItem: ScrollView {
         id: detailScroll
@@ -46,6 +53,10 @@ Dialog {
 
             RowLayout {
                 Layout.fillWidth: true
+                BusyIndicator {
+                    running: dialogRoot.visible && dialogRoot.loading
+                    visible: running
+                }
                 Label {
                     Layout.fillWidth: true
                     text: dialogRoot.loading ? (dialogRoot.stale ? I18n.home.updatingCache : I18n.common.loading) : ""
@@ -61,13 +72,12 @@ Dialog {
                 }
             }
 
-            // 加载指示器
-            BusyIndicator {
-                running: dialogRoot.loading && !dialogRoot.hasValidDetail
-                visible: running
-                Layout.alignment: Qt.AlignHCenter
-                Layout.topMargin: 32
-                Layout.bottomMargin: 32
+            LoadingPlaceholder {
+                objectName: "animeDetailSkeleton"
+                appearance: "detail"
+                loading: dialogRoot.loadingSubject
+                hasContent: dialogRoot.hasValidDetail
+                onContentReady: headerReveal.restart()
             }
 
             // 错误提示与重试卡片
@@ -104,6 +114,7 @@ Dialog {
 
             // 顶部核心媒体卡片（海报 + 标题 + 评分/元数据 + 主行动 CTA 按钮）
             Rectangle {
+                id: detailHeader
                 Layout.fillWidth: true
                 visible: dialogRoot.hasValidDetail
                 implicitHeight: headerRow.implicitHeight + 24
@@ -128,16 +139,6 @@ Dialog {
                         border.width: 1
                         border.color: Ui.cardBorder
                         clip: true
-
-                        Label {
-                            anchors.centerIn: parent
-                            visible: posterImg.status !== Image.Ready
-                            text: (dialogRoot.detail && dialogRoot.detail.title && dialogRoot.detail.title.length > 0)
-                                  ? dialogRoot.detail.title.charAt(0) : "★"
-                            font.pixelSize: Math.round(36 * Ui.textScale)
-                            font.weight: Font.Bold
-                            color: Ui.accentColor
-                        }
 
                         CachedCoverImage {
                             id: posterImg
@@ -321,15 +322,26 @@ Dialog {
                     }
 
                     Label {
-                        text: I18n.format(I18n.home.episodesCountFormat, ((dialogRoot.detail && dialogRoot.detail.episodes) || []).length)
+                        objectName: "animeEpisodeCount"
+                        text: !dialogRoot.episodesAvailable ? (dialogRoot.loadingEpisodes ? I18n.common.loading : "")
+                            : I18n.format(I18n.home.episodesCountFormat, ((dialogRoot.detail && dialogRoot.detail.episodes) || []).length)
                         font.pixelSize: Ui.captionSize
                         color: Ui.secondaryText
                     }
                 }
 
                 // 选集按钮网格
+                LoadingPlaceholder {
+                    objectName: "animeEpisodesSkeleton"
+                    appearance: "episodes"
+                    loading: dialogRoot.loadingEpisodes
+                    hasContent: dialogRoot.episodesAvailable
+                    onContentReady: episodesReveal.restart()
+                }
                 Flow {
                     id: episodesFlow
+                    objectName: "animeEpisodesContent"
+                    visible: dialogRoot.episodesAvailable && ((dialogRoot.detail && dialogRoot.detail.episodes) || []).length > 0
                     Layout.fillWidth: true
                     spacing: 8
 
@@ -388,7 +400,7 @@ Dialog {
                 }
 
                 Label {
-                    visible: !dialogRoot.loading && ((dialogRoot.detail && dialogRoot.detail.episodes) || []).length === 0
+                    visible: dialogRoot.episodesAvailable && !dialogRoot.loadingEpisodes && ((dialogRoot.detail && dialogRoot.detail.episodes) || []).length === 0
                     text: I18n.home.noEpisodes
                     color: Ui.secondaryText
                     font.pixelSize: Ui.captionSize

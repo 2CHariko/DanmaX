@@ -136,7 +136,16 @@ ColumnLayout {
         }
 
         // 检索结果与剧集选择卡片
+        LoadingPlaceholder {
+            objectName: "onlineAnimeSkeleton"
+            loading: pane.library.searchingAnime
+            hasContent: pane.library.animes.length > 0
+            onContentReady: animeReveal.restart()
+        }
+        ContentReveal { id: animeReveal; target: onlineResults }
+        ContentReveal { id: episodeReveal; target: episodeBox }
         Control {
+            id: onlineResults
             visible: pane.library.animes.length > 0
             Layout.fillWidth: true
             leftPadding: Ui.cardPaddingX
@@ -191,8 +200,16 @@ ColumnLayout {
                         font.weight: Font.DemiBold
                         color: Ui.textColor
                     }
+                    LoadingPlaceholder {
+                        objectName: "onlineEpisodeSkeleton"
+                        appearance: "field"
+                        loading: pane.library.loadingEpisodes
+                        hasContent: pane.library.episodes.length > 0
+                        onContentReady: episodeReveal.restart()
+                    }
                     AppComboBox {
                         id: episodeBox
+                        visible: !pane.library.loadingEpisodes || pane.library.episodes.length > 0
                         objectName: "episodeChoice"
                         Layout.fillWidth: true
                         model: pane.library.episodes

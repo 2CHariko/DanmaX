@@ -67,8 +67,9 @@ void DanmakuLibrary::cancel() {
     if (wasBusy) status_ = QStringLiteral("已取消");
     emit changed();
 }
-void DanmakuLibrary::begin(const QString& status, bool sourceLoad) {
+void DanmakuLibrary::begin(const QString& status, bool sourceLoad, Operation operation) {
     invalidate();
+    operation_ = operation;
     busy_ = true; status_ = status; error_.clear();
     if (sourceLoad) emit sourceLoadStarted();
     emit changed();
@@ -185,7 +186,7 @@ void DanmakuLibrary::searchAnime(const QString& keyword) {
         emit searchKeywordChanged();
     }
     requestedEpisodeTitle_.clear(); requestedEpisodeNumber_ = 0;
-    begin(QStringLiteral("正在搜索动画…"));
+    begin(QStringLiteral("正在搜索动画…"), false, Operation::Search);
     animeId_.clear(); episodeId_.clear(); animes_.clear(); episodes_.clear(); emit changed(); emit cacheChanged();
     const auto trimmed = keyword.trimmed();
     if (trimmed.isEmpty()) { fail(QStringLiteral("请输入动画名称")); return; }
@@ -278,7 +279,7 @@ void DanmakuLibrary::selectAnime(const QString& id) {
     bool found{};
     for (const auto& entry : animes_) if (entry.toMap().value("id").toString() == id) found = true;
     if (!found) return;
-    begin(QStringLiteral("正在读取剧集…")); animeId_ = id; episodeId_.clear(); episodes_.clear();
+    begin(QStringLiteral("正在读取剧集…"), false, Operation::Episodes); animeId_ = id; episodeId_.clear(); episodes_.clear();
     emit changed(); emit cacheChanged();
     startAttempts([this, id] { request("/api/v2/bangumi/" + id, {}, [this](QByteArray bytes) {
         work([bytes = std::move(bytes)](std::stop_token stop) {

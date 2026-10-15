@@ -20,10 +20,11 @@ QByteArray imageFormat(const QByteArray& bytes) {
 CoverRequest::CoverRequest(CoverCache* service, QObject* parent) : QObject(parent), service_(service) {}
 CoverRequest::~CoverRequest() { if (service_) service_->detach(this); }
 void CoverRequest::setSource(const QUrl& url) { if (source_ != url) { source_ = url; emit sourceChanged(); } }
+void CoverRequest::setLoading(bool loading) { if (loading_ != loading) { loading_ = loading; emit loadingChanged(); } }
 void CoverRequest::setUrl(const QUrl& url) {
     if (url_ == url) return;
     if (service_) service_->detach(this);
-    url_ = url; setSource({}); emit urlChanged();
+    url_ = url; setLoading(false); setSource({}); emit urlChanged();
     if (service_) service_->attach(this);
 }
 void CoverRequest::retry() {
@@ -53,12 +54,13 @@ void CoverCache::attach(CoverRequest* request) {
     if (!url.isValid() || (url.scheme() != "http" && url.scheme() != "https") || url.host().isEmpty() || !url.userInfo().isEmpty()) return;
     const auto key = "cover|" + url.toString(QUrl::FullyEncoded);
     if (auto found = entries_.value(key)) {
-        found->watchers.append(request); request->setSource(found->cached.localUrl); pins();
+        found->watchers.append(request); request->setSource(found->cached.localUrl); request->setLoading(!found->finished); pins();
         refresh(request);
         return;
     }
     // Four active transfers plus a bounded pending set; rejected visible items retry on re-entry.
     if (entries_.size() >= 260) return;
+    request->setLoading(true);
     auto entry = std::make_shared<Entry>(); entry->key = key; entry->url = url; entry->watchers.append(request);
     entries_.insert(key, entry); pins();
     store_->read(key, true, [this, entry](MetadataCache::Record record) {
@@ -73,7 +75,7 @@ void CoverCache::attach(CoverRequest* request) {
                     entry->cached = record;
                     pins();
                     for (const auto& request : std::as_const(entry->watchers)) if (request) request->setSource(record.localUrl);
-                    if (store_->fresh(record, 30LL * 86400)) { entry->finished = true; return; }
+                    if (store_->fresh(record, 30LL * 86400)) { entry->finished = true; setLoading(entry, false); return; }
                 }
                 enqueue(entry);
             }, Qt::QueuedConnection);
@@ -101,9 +103,13 @@ void CoverCache::detach(CoverRequest* request) {
 void CoverCache::enqueue(const std::shared_ptr<Entry>& entry) {
     pending_.removeIf([](const auto& pending) { return !pending->active; });
     const auto age = failures_.value(entry->key).secsTo(store_->now());
-    if (failures_.contains(entry->key) && age >= 0 && age < 300) { entry->finished = true; return; }
-    if (pending_.size() >= 256) { entry->finished = true; return; }
+    if (failures_.contains(entry->key) && age >= 0 && age < 300) { entry->finished = true; setLoading(entry, false); return; }
+    if (pending_.size() >= 256) { entry->finished = true; setLoading(entry, false); return; }
+    setLoading(entry, true);
     pending_.enqueue(entry); pump();
+}
+void CoverCache::setLoading(const std::shared_ptr<Entry>& entry, bool loading) {
+    for (const auto& request : std::as_const(entry->watchers)) if (request) request->setLoading(loading);
 }
 void CoverCache::pump() {
     while (active_ < 4 && !pending_.isEmpty()) {
@@ -120,6 +126,7 @@ void CoverCache::complete(const std::shared_ptr<Entry>& entry, QUrl source, QDat
         for (const auto& request : std::as_const(entry->watchers)) if (request) request->setSource(source);
     }
     entry->finished = true;
+    setLoading(entry, false);
     if (entry->downloading) { --active_; entry->downloading = false; }
     pins(); store_->inspect();
     pump();
@@ -162,6 +169,6 @@ void CoverCache::reset() {
     }
     entries_.clear(); pending_.clear(); failures_.clear(); active_ = 0;
     requests_.removeIf([](const auto& request) { return !request; });
-    for (const auto& request : std::as_const(requests_)) if (request) request->setSource({});
+    for (const auto& request : std::as_const(requests_)) if (request) { request->setLoading(false); request->setSource({}); }
     pins();
 }

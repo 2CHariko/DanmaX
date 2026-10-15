@@ -212,6 +212,54 @@ QByteArray imageBytes(QColor color = Qt::red) {
 class AnimeMetadataTests : public QObject {
     Q_OBJECT
 private slots:
+    void coverLoadingStates() {
+        MockBangumiServer server; QTemporaryDir dir;
+        server.coverBody = imageBytes(); server.coverDelay = 180;
+        AnimeMetadataService service(dir.path());
+        auto* covers = qobject_cast<CoverCache*>(service.coverCache()); QObject owner;
+        auto* request = qobject_cast<CoverRequest*>(covers->createRequest(&owner));
+        QVERIFY(!request->loading());
+        request->setUrl(QUrl(server.url() + "/cover")); QVERIFY(request->loading());
+        QTRY_VERIFY(!request->loading()); QVERIFY(!request->source().isEmpty());
+        request->setUrl(QUrl(server.url() + "/cover-failure")); QVERIFY(request->loading());
+        server.coverStatus = 503;
+        QTRY_VERIFY(!request->loading()); QVERIFY(request->source().isEmpty());
+        const auto count = server.coverRequests;
+        request->retry(); QTRY_VERIFY(!request->loading()); QCOMPARE(server.coverRequests, count);
+        request->setUrl(QUrl()); QVERIFY(!request->loading());
+        request->setUrl(QUrl("file:///invalid.png")); QVERIFY(!request->loading());
+        request->setUrl(QUrl(server.url() + "/cover-reset")); QVERIFY(request->loading());
+        covers->reset(); QVERIFY(!request->loading());
+        QTest::qWait(220); QVERIFY(request->source().isEmpty());
+    }
+    void independentDetailLoadingStates() {
+        QTemporaryDir dir;
+        MockBangumiServer server;
+        server.episodeDelay = 350;
+        AnimeMetadataService service(dir.path()); service.setBaseUrl(server.url());
+        service.fetchDetail(101);
+        QVERIFY(service.loadingSubject()); QVERIFY(service.loadingEpisodes()); QVERIFY(!service.episodesAvailable());
+        QTRY_VERIFY(!service.loadingSubject());
+        QCOMPARE(service.currentDetail().value("id").toLongLong(), 101);
+        QVERIFY(service.loadingEpisodes()); QVERIFY(!service.episodesAvailable());
+        QTRY_VERIFY(!service.loadingDetail()); QVERIFY(service.episodesAvailable());
+        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 4);
+        service.fetchDetail(101, true);
+        QVERIFY(service.episodesAvailable());
+        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 4);
+        QTRY_VERIFY(!service.loadingDetail());
+        server.episodeCount = 0;
+        service.fetchDetail(202);
+        QVERIFY(!service.episodesAvailable());
+        QTRY_VERIFY(!service.loadingDetail()); QVERIFY(service.episodesAvailable());
+        QVERIFY(service.currentDetail().value("episodes").toList().isEmpty());
+        server.episodeStatus = 503;
+        service.fetchDetail(303);
+        QTRY_VERIFY(!service.loadingDetail()); QVERIFY(!service.episodesAvailable());
+        QVERIFY(!service.detailError().isEmpty());
+        service.clearDetail();
+        QVERIFY(!service.loadingSubject()); QVERIFY(!service.loadingEpisodes()); QVERIFY(!service.episodesAvailable());
+    }
     void calendarReentryRetainsSnapshotAndRefreshBoundaries() {
         MockBangumiServer server; QTemporaryDir dir;
         TestClock now(QDateTime(QDate(2026, 10, 15), QTime(10, 0), QTimeZone::systemTimeZone()).toUTC());

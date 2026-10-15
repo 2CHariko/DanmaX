@@ -89,6 +89,13 @@ ColumnLayout {
     }
 
     // 4. 独立微卡片式缓存列表
+    LoadingPlaceholder {
+        objectName: "cachedDanmakuSkeleton"
+        loading: pane.library.scanning
+        hasContent: pane.library.cachedEntries.length > 0
+        onContentReady: cacheReveal.restart()
+    }
+    ContentReveal { id: cacheReveal; target: cachedList }
     ListView {
         id: cachedList
         objectName: "cachedDanmakuList"

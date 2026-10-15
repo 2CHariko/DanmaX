@@ -1,8 +1,24 @@
 pragma Singleton
 import QtQuick
 QtObject {
+    id: ui
+    property int activeCoverPlaceholders: 0
+    property real coverPulse: 1
+    // All visible covers share one animation, regardless of list length.
+    property SequentialAnimation coverAnimation: SequentialAnimation {
+        running: ui.activeCoverPlaceholders > 0 && ui.motionEnabled
+        loops: Animation.Infinite
+        NumberAnimation { target: ui; property: "coverPulse"; from: 1; to: 0.55; duration: 800; easing.type: Easing.InOutSine }
+        NumberAnimation { target: ui; property: "coverPulse"; from: 0.55; to: 1; duration: 800; easing.type: Easing.InOutSine }
+    }
     readonly property SystemPalette colors: SystemPalette { colorGroup: SystemPalette.Active }
     property bool micaActive: false
+    property bool systemAnimationsEnabled: true
+    readonly property bool motionEnabled: systemAnimationsEnabled && !highContrast
+    readonly property int contentTransitionDuration: 180
+    readonly property int skeletonDelay: 150
+    readonly property color skeletonFill: highContrast ? colors.windowText
+        : (dark ? Qt.rgba(1, 1, 1, 0.10) : Qt.rgba(0, 0, 0, 0.08))
     readonly property color windowSurface: micaActive && !highContrast ? "transparent" : colors.window
     readonly property color contentAreaSurface: highContrast ? "transparent"
         : (micaActive ? (dark ? Qt.rgba(1, 1, 1, 0.035) : Qt.rgba(1, 1, 1, 0.75))

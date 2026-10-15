@@ -24,6 +24,9 @@ class AnimeMetadataService final : public QObject {
     Q_PROPERTY(QVariantMap heroAnime READ heroAnime NOTIFY calendarChanged)
     Q_PROPERTY(int todayWeekday READ todayWeekday NOTIFY calendarChanged)
     Q_PROPERTY(bool loadingDetail READ loadingDetail NOTIFY detailChanged)
+    Q_PROPERTY(bool loadingSubject READ loadingSubject NOTIFY detailChanged)
+    Q_PROPERTY(bool loadingEpisodes READ loadingEpisodes NOTIFY detailChanged)
+    Q_PROPERTY(bool episodesAvailable READ episodesAvailable NOTIFY detailChanged)
     Q_PROPERTY(QVariantMap currentDetail READ currentDetail NOTIFY detailChanged)
     Q_PROPERTY(QString detailError READ detailError NOTIFY detailChanged)
     Q_PROPERTY(bool searching READ searching NOTIFY searchChanged)
@@ -52,6 +55,9 @@ public:
     QVariantMap heroAnime() const { return heroAnime_; }
     int todayWeekday() const { return todayWeekday_; }
     bool loadingDetail() const { return loadingDetail_; }
+    bool loadingSubject() const { return detailSubjectLoading_; }
+    bool loadingEpisodes() const { return detailEpisodesLoading_; }
+    bool episodesAvailable() const { return episodesAvailable_; }
     QVariantMap currentDetail() const { return currentDetail_; }
     QString detailError() const { return detailError_; }
     bool searching() const { return searching_; }
@@ -139,6 +145,7 @@ private:
     QDateTime calendarFetchedAt_, heroFetchedAt_;
     bool loading_{}, loadingDetail_{}, searching_{}, calendarStale_{}, detailStale_{}, searchStale_{}, clearing_{}, cacheCleared_{};
     bool detailSubjectLoading_{}, detailEpisodesLoading_{}, detailSubjectStale_{}, detailEpisodesStale_{};
+    bool episodesAvailable_{};
     QString error_, detailError_, searchError_, searchKeyword_, cacheError_, subjectError_, episodesError_;
     QVariantList weeklyCalendar_, airingToday_, topRated_, searchResults_, detailEpisodes_;
     QVariantMap heroAnime_, currentDetail_, detailSubject_;

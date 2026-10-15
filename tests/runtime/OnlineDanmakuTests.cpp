@@ -89,6 +89,19 @@ void writeBytes(const QString& path, const QByteArray& bytes) {
 class OnlineDanmakuTests final : public QObject {
     Q_OBJECT
   private slots:
+    void distinctLoadingOperations() {
+        QTemporaryDir root;
+        FakeServer server;
+        const auto original = server.response;
+        server.response = [original](QByteArray target) { auto output = original(target); output.delay = 180; return output; };
+        DanmakuLibrary library(root.path()); library.setServers({server.base()});
+        library.searchAnime("测试"); QVERIFY(library.searchingAnime()); QVERIFY(!library.loadingEpisodes());
+        QTRY_VERIFY(!library.busy()); QVERIFY(!library.searchingAnime());
+        library.selectAnime("42"); QVERIFY(library.loadingEpisodes()); QVERIFY(!library.searchingAnime());
+        library.cancel(); QVERIFY(!library.loadingEpisodes());
+        library.selectAnime("42"); QTRY_VERIFY(!library.busy());
+        QVERIFY(!library.loadingEpisodes()); QCOMPARE(library.episodes().size(), 1);
+    }
     void commandLinePageRouting() {
         QTemporaryDir root;
         for (const auto& page : {"home", "player", "logs", "settings", "about"}) {

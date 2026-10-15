@@ -178,6 +178,199 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void coverPlaceholderWorkflow() {
+        QTemporaryDir directory;
+        const auto coverPath = directory.filePath("cover.png");
+        QImage cover(140, 210, QImage::Format_RGB32); cover.fill(Qt::darkCyan); QVERIFY(cover.save(coverPath));
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.loadData(
+            "import QtQuick\nimport QtQuick.Window\nimport \"components\"\nimport \"theme\"\n"
+            "Window { id: harness; width: 320; height: 300; visible: true\n"
+            "property bool ownerVisible: true\n"
+            "readonly property int animatedCovers: Ui.activeCoverPlaceholders\n"
+            "function motion(enabled: bool) { Ui.systemAnimationsEnabled = enabled }\n"
+            "QtObject { id: service; objectName: \"coverService\"\n"
+            "property url source: \"\"\nproperty url url: \"\"\nproperty bool loading: false\n"
+            "function createRequest(owner) { return service }\nfunction retry() {}\n}\n"
+            "AnimeCard { anchors.centerIn: parent; visible: harness.ownerVisible; coverCache: service\n"
+            "animeData: ({title: \"Missing cover\", cover: \"https://example.test/cover\", score: \"7.1\", airDate: \"2026-10-15\"})\n"
+            "}\n}", QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/CoverHarness.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* service = window->findChild<QObject*>("coverService"); QVERIFY(service);
+        auto* image = window->findChild<QQuickItem*>("cachedCoverImage"); QVERIFY(image);
+        auto* placeholder = image->findChild<QQuickItem*>("coverPlaceholder"); QVERIFY(placeholder);
+        QVERIFY(placeholder->isVisible()); QVERIFY(!placeholder->property("pulsing").toBool());
+        QVERIFY(QMetaObject::invokeMethod(window, "motion", Q_ARG(bool, true)));
+        service->setProperty("loading", true);
+        QTRY_VERIFY(placeholder->property("pulsing").toBool()); QCOMPARE(window->property("animatedCovers").toInt(), 1);
+        window->setProperty("ownerVisible", false); QCOMPARE(window->property("animatedCovers").toInt(), 0);
+        window->setProperty("ownerVisible", true); QTRY_VERIFY(placeholder->property("pulsing").toBool());
+        QVERIFY(QMetaObject::invokeMethod(window, "motion", Q_ARG(bool, false)));
+        QVERIFY(!placeholder->property("pulsing").toBool()); QCOMPARE(window->property("animatedCovers").toInt(), 0);
+        QVERIFY(QMetaObject::invokeMethod(window, "motion", Q_ARG(bool, true)));
+        service->setProperty("loading", false); QVERIFY(!placeholder->property("pulsing").toBool());
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/cover-placeholder/");
+        QVERIFY(QDir().mkpath(evidence));
+        QVERIFY(window->grabWindow().save(evidence + "missing-cover.png"));
+        service->setProperty("loading", true); QTRY_VERIFY(placeholder->property("pulsing").toBool());
+        service->setProperty("source", QUrl::fromLocalFile(coverPath)); service->setProperty("loading", false);
+        QTRY_COMPARE(image->property("status").toInt(), 1);
+        QTRY_COMPARE(image->property("revealProgress").toDouble(), 1.0);
+        QVERIFY(!placeholder->isVisible()); QCOMPARE(window->property("animatedCovers").toInt(), 0);
+        window->setProperty("ownerVisible", false); window->setProperty("ownerVisible", true);
+        QCOMPARE(image->property("revealProgress").toDouble(), 1.0);
+        service->setProperty("source", QUrl());
+        service->setProperty("loading", true); service->setProperty("source", QUrl::fromLocalFile(coverPath)); service->setProperty("loading", false);
+        QTRY_COMPARE(image->property("status").toInt(), 1);
+        QVERIFY(!placeholder->property("revealed").toBool());
+        QCOMPARE(window->property("animatedCovers").toInt(), 0);
+        QCOMPARE(warnings.count(), 0);
+    }
+    void loadingPlaceholderWorkflow() {
+        bool enabled = true;
+        SystemUiPreferences preferences(nullptr, [&] { return enabled; });
+        QSignalSpy changed(&preferences, &SystemUiPreferences::changed);
+        enabled = false; preferences.refresh(); QVERIFY(!preferences.animationsEnabled()); QCOMPARE(changed.count(), 1);
+        preferences.refresh(); QCOMPARE(changed.count(), 1);
+        enabled = true; preferences.refresh(); QVERIFY(preferences.animationsEnabled()); QCOMPARE(changed.count(), 2);
+
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.loadData(R"(
+import QtQuick
+import QtQuick.Window
+import QtQuick.Layouts
+import "components"
+import "theme"
+Window {
+    id: harness
+    width: 600; height: 400; visible: true
+    property bool busy: false
+    property bool available: false
+    property bool ownerVisible: true
+    function motion(enabled: bool) { Ui.systemAnimationsEnabled = enabled }
+    ColumnLayout {
+        anchors.fill: parent
+        visible: harness.ownerVisible
+        LoadingPlaceholder {
+            objectName: "placeholder"
+            loading: busy; hasContent: available; appearance: "episodes"
+            onContentReady: reveal.restart()
+        }
+        Rectangle { id: content; objectName: "content"; visible: available; Layout.fillWidth: true; implicitHeight: 80; color: Ui.cardBackground }
+        ContentReveal { id: reveal; target: content }
+        Item { Layout.fillHeight: true }
+    }
+})", QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/LoadingHarness.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* placeholder = window->findChild<QQuickItem*>("placeholder"); QVERIFY(placeholder);
+        auto* content = window->findChild<QQuickItem*>("content"); QVERIFY(content);
+        QSignalSpy ready(placeholder, SIGNAL(contentReady()));
+        QVERIFY(QMetaObject::invokeMethod(window, "motion", Q_ARG(bool, true)));
+        window->setProperty("busy", true);
+        QVERIFY(!placeholder->property("showing").toBool());
+        QTRY_VERIFY(placeholder->property("showing").toBool());
+        QTRY_VERIFY(placeholder->property("pulsing").toBool());
+        window->setProperty("available", true); window->setProperty("busy", false);
+        QTRY_COMPARE(ready.count(), 1);
+        QTRY_COMPARE(content->opacity(), 1.0);
+        QVERIFY(!placeholder->isVisible());
+        // Existing content remains visible and does not replay a reveal on refresh/re-entry.
+        window->setProperty("busy", true); QTest::qWait(200);
+        QVERIFY(!placeholder->isVisible()); QCOMPARE(content->opacity(), 1.0);
+        window->setProperty("ownerVisible", false); window->setProperty("ownerVisible", true);
+        window->setProperty("busy", false); QCOMPARE(ready.count(), 1);
+        // Fast completions skip the delayed placeholder and its transition.
+        window->setProperty("available", false); window->setProperty("busy", true);
+        window->setProperty("available", true); window->setProperty("busy", false);
+        QTest::qWait(200); QCOMPARE(ready.count(), 1);
+        // Hidden pages stop their placeholder animation, including mid-request navigation.
+        window->setProperty("available", false); window->setProperty("busy", true);
+        QTRY_VERIFY(placeholder->property("showing").toBool());
+        window->setProperty("ownerVisible", false);
+        QVERIFY(!placeholder->property("pulsing").toBool());
+        window->setProperty("busy", false); QCOMPARE(ready.count(), 1);
+        window->setProperty("ownerVisible", true);
+        QVERIFY(QMetaObject::invokeMethod(window, "motion", Q_ARG(bool, false)));
+        window->setProperty("busy", true);
+        QTRY_VERIFY(placeholder->property("showing").toBool());
+        QVERIFY(!placeholder->property("pulsing").toBool());
+        window->setProperty("available", true); window->setProperty("busy", false);
+        QTRY_COMPARE(content->opacity(), 1.0);
+        QCOMPARE(ready.count(), 2);
+        QVERIFY(QMetaObject::invokeMethod(window, "motion", Q_ARG(bool, true)));
+        QCOMPARE(warnings.count(), 0);
+    }
+    void onlineLoadingWorkflow() {
+        QTemporaryDir directory;
+        QTcpServer server; QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        connect(&server, &QTcpServer::newConnection, &server, [&] {
+            while (server.hasPendingConnections()) {
+                auto* socket = server.nextPendingConnection();
+                auto request = std::make_shared<QByteArray>();
+                connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+                connect(socket, &QTcpSocket::readyRead, &server, [&, socket, request] {
+                    request->append(socket->readAll());
+                    if (!request->contains("\r\n\r\n")) return;
+                    disconnect(socket, &QTcpSocket::readyRead, &server, nullptr);
+                    const auto target = request->split(' ').value(1);
+                    const QByteArray body = target.contains("search/anime")
+                        ? R"({"animes":[{"animeId":42,"animeTitle":"加载测试"}]})"
+                        : R"({"bangumi":{"episodes":[{"episodeId":42001,"episodeTitle":"第1话"}]}})";
+                    QTimer::singleShot(450, socket, [guard = QPointer<QTcpSocket>(socket), body] {
+                        if (!guard || guard->state() != QAbstractSocket::ConnectedState) return;
+                        guard->write("HTTP/1.1 200 OK\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                        guard->disconnectFromHost();
+                    });
+                });
+            }
+        });
+        DanmakuLibrary library(directory.path());
+        library.setServers({QString("http://127.0.0.1:%1").arg(server.serverPort())});
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"library", QVariant::fromValue(&library)}});
+        engine.loadData(R"(
+import QtQuick
+import QtQuick.Controls.FluentWinUI3
+import QtQuick.Layouts
+import "components"
+import "theme"
+ApplicationWindow {
+    id: harness
+    required property QtObject library
+    width: 600; height: 650; visible: true
+    ColumnLayout {
+        anchors.fill: parent; anchors.margins: 16
+        OnlineDanmakuPane { library: harness.library; Layout.fillWidth: true }
+        Item { Layout.fillHeight: true }
+    }
+})", QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/OnlineLoadingHarness.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* search = window->findChild<QQuickItem*>("onlineAnimeSkeleton"); QVERIFY(search);
+        auto* episodes = window->findChild<QQuickItem*>("onlineEpisodeSkeleton"); QVERIFY(episodes);
+        auto* box = window->findChild<QQuickItem*>("episodeChoice"); QVERIFY(box);
+        library.searchAnime("测试"); QTRY_VERIFY(search->property("showing").toBool());
+        QTRY_VERIFY(!library.busy()); QVERIFY(!search->isVisible());
+        library.selectAnime("42"); QTRY_VERIFY(episodes->property("showing").toBool());
+        QVERIFY(!box->isVisible());
+        library.cancel(); QVERIFY(!episodes->isVisible()); QVERIFY(box->isVisible());
+        library.selectAnime("42"); QTRY_VERIFY(episodes->property("showing").toBool());
+        QTRY_VERIFY(!library.busy()); QTRY_VERIFY(box->isVisible()); QTRY_COMPARE(box->opacity(), 1.0);
+        QCOMPARE(box->property("count").toInt(), 1);
+        box->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4);
+        auto* popup = box->property("popup").value<QObject*>(); QVERIFY(popup);
+        QTRY_VERIFY(popup->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_Down);
+        QTest::keyClick(window, Qt::Key_Return);
+        QTRY_COMPARE(library.selectedEpisode(), QString("42001"));
+        QCOMPARE(warnings.count(), 0);
+    }
     void metadataCacheOfflineWorkflow() {
         QTemporaryDir directory;
         QTcpServer server;
@@ -209,8 +402,13 @@ private slots:
                     else if (target.startsWith("/v0/search")) body = QJsonDocument(QJsonObject{{"data", QJsonArray{subject}}, {"total", 1}}).toJson();
                     else if (target.startsWith("/v0/episodes")) body = R"({"data":[{"id":901,"sort":1,"name_cn":"离线分集","type":0}],"total":1})";
                     else body = QJsonDocument(subject).toJson();
-                    socket->write("HTTP/1.1 200 OK\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
-                    socket->disconnectFromHost();
+                    const auto delay = target.startsWith("/v0/episodes") ? 800
+                        : target.startsWith("/calendar") || target.startsWith("/v0/search") ? 500 : 0;
+                    QTimer::singleShot(delay, socket, [guard = QPointer<QTcpSocket>(socket), body] {
+                        if (!guard || guard->state() != QAbstractSocket::ConnectedState) return;
+                        guard->write("HTTP/1.1 200 OK\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                        guard->disconnectFromHost();
+                    });
                 });
             }
         });
@@ -233,6 +431,11 @@ private slots:
             engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml"))); QVERIFY(!engine.rootObjects().isEmpty());
             auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window); window->show();
             QVERIFY(QTest::qWaitForWindowExposed(window));
+            if (!restart) {
+                auto* skeleton = window->findChild<QQuickItem*>("homeHeroSkeleton"); QVERIFY(skeleton);
+                QTRY_VERIFY(skeleton->property("showing").toBool());
+                QVERIFY(window->grabWindow().save(evidence + "/home-loading.png"));
+            }
             QTRY_VERIFY(!metadata->loading() && !metadata->weeklyCalendar().isEmpty());
             QTRY_VERIFY(metadata->heroAnime().contains("summary"));
             QTRY_VERIFY(metadata->coverCacheBytes() > 0);
@@ -278,9 +481,23 @@ private slots:
             QCOMPARE(calendarChanges.count(), 0); QCOMPARE(loadingChanges.count(), 0);
             auto* editor = field->property("contentItem").value<QQuickItem*>(); QVERIFY(editor);
             editor->setProperty("text", "cached"); editor->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Return);
+            if (!restart) {
+                auto* skeleton = window->findChild<QQuickItem*>("animeSearchSkeleton"); QVERIFY(skeleton);
+                QTRY_VERIFY(skeleton->property("showing").toBool());
+                QVERIFY(window->grabWindow().save(evidence + "/search-loading.png"));
+            }
             QTRY_VERIFY(!metadata->searching() && metadata->searchResults().size() == 1);
             auto* result = find(home, "animeSearchResult0"); QVERIFY(result); result->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
             auto* dialog = home->findChild<QObject*>("animeDetailDialog"); QVERIFY(dialog);
+            if (!restart) {
+                auto* content = dialog->property("contentItem").value<QQuickItem*>(); QVERIFY(content);
+                auto* skeleton = find(content, "animeEpisodesSkeleton"); QVERIFY(skeleton);
+                auto* count = find(content, "animeEpisodeCount"); QVERIFY(count);
+                QTRY_VERIFY(skeleton->property("showing").toBool());
+                QVERIFY(metadata->loadingEpisodes()); QVERIFY(!metadata->loadingSubject());
+                QVERIFY(count->property("text").toString().contains(QStringLiteral("加载")));
+                QVERIFY(window->grabWindow().save(evidence + "/episodes-loading.png"));
+            }
             QTRY_VERIFY(dialog->property("opened").toBool() && !metadata->loadingDetail());
             QCOMPARE(metadata->currentDetail().value("episodes").toList().size(), 1);
             QVERIFY(metadata->detailError().isEmpty() && metadata->searchError().isEmpty() && metadata->error().isEmpty());

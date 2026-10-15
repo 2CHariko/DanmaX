@@ -334,6 +334,7 @@ void AnimeMetadataService::fetchHeroDetails(bool force) {
 void AnimeMetadataService::clearDetail() {
     ++detailGeneration_; unsubscribe("detail"); cache_.setPins("detail", {});
     detailId_ = 0; loadingDetail_ = detailSubjectLoading_ = detailEpisodesLoading_ = false;
+    episodesAvailable_ = false;
     detailStale_ = detailSubjectStale_ = detailEpisodesStale_ = false;
     detailError_.clear(); subjectError_.clear(); episodesError_.clear(); detailSubject_.clear(); detailEpisodes_.clear(); currentDetail_.clear(); emit detailChanged();
 }
@@ -360,7 +361,8 @@ void AnimeMetadataService::fetchDetail(qint64 id, bool force) {
     request(Kind::Episodes, identity, "detail", force, [this, gen](Result result) {
         if (gen != detailGeneration_) return;
         detailEpisodesLoading_ = result.refreshing; detailEpisodesStale_ = result.stale; episodesError_ = result.error;
-        if (result.available) detailEpisodes_ = result.value.toList(); updateDetail();
+        if (result.available) { detailEpisodes_ = result.value.toList(); episodesAvailable_ = true; }
+        updateDetail();
     });
 }
 void AnimeMetadataService::clearSearch() {

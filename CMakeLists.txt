@@ -115,6 +115,7 @@ if(DANMAKU_BUILD_APP)
         src/platform/windows/MediaMonitor.cpp src/platform/windows/MediaMonitor.h
         src/platform/windows/SmtcReader.cpp src/platform/windows/SmtcReader.h
         src/platform/windows/WindowBackdropController.cpp src/platform/windows/WindowBackdropController.h
+        src/platform/windows/SystemUiPreferences.cpp src/platform/windows/SystemUiPreferences.h
         src/platform/windows/ToolbarInputFilter.cpp src/platform/windows/ToolbarInputFilter.h
         src/platform/windows/ToolbarPointerMonitor.cpp src/platform/windows/ToolbarPointerMonitor.h
         src/platform/windows/WindowLayerController.cpp src/platform/windows/WindowLayerController.h

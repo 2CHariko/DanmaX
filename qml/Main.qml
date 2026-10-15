@@ -12,6 +12,7 @@ ApplicationWindow {
     required property QtObject backend
     property QtObject backdrop: null
     Binding { target: Ui; property: "micaActive"; value: root.backdrop ? root.backdrop.effectiveMica : false }
+    Binding { target: Ui; property: "systemAnimationsEnabled"; value: root.backend.uiPreferences.animationsEnabled }
     property int selectedPage: 0
     property int sourceTab: 0
     readonly property string currentPageName: ["home", "player", "logs", "settings", "about"][selectedPage] || ""

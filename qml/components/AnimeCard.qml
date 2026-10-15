@@ -39,40 +39,6 @@ Item {
         border.color: cardRoot.activeFocus ? Ui.accentColor :
                       (hoverArea.containsMouse ? (Ui.dark ? Qt.rgba(1, 1, 1, 0.28) : Qt.rgba(0, 0, 0, 0.22)) : Ui.cardBorder)
 
-        // 海报加载占位背景（骨架屏 / 无封面时的质感卡片）
-        Rectangle {
-            anchors.fill: parent
-            color: Ui.dark ? Qt.rgba(1, 1, 1, 0.06) : Qt.rgba(0, 0, 0, 0.05)
-            visible: posterImg.status !== Image.Ready || cardCover.length === 0
-
-            ColumnLayout {
-                anchors.centerIn: parent
-                spacing: 6
-                width: parent.width - 24
-
-                Label {
-                    Layout.alignment: Qt.AlignHCenter
-                    text: cardTitle.length > 0 ? cardTitle.charAt(0) : "★"
-                    font.pixelSize: 28
-                    font.weight: Font.Bold
-                    color: Ui.accentColor
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    horizontalAlignment: Text.AlignHCenter
-                    text: cardTitle
-                    font.pixelSize: Ui.captionSize
-                    font.weight: Font.DemiBold
-                    color: Ui.textColor
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 2
-                    elide: Text.ElideRight
-                    visible: cardCover.length === 0
-                }
-            }
-        }
-
         // 海报大图（异步加载，限制解码宽度以节约纹理显存）
         CachedCoverImage {
             id: posterImg
@@ -83,7 +49,6 @@ Item {
             cache: true
             sourceSize.width: 280
             fillMode: Image.PreserveAspectCrop
-            opacity: status === Image.Ready ? 1.0 : 0.0
         }
 
         // 底部渐变半透明暗影遮罩，确保任意封面下的白色文字清晰可辨

@@ -12,21 +12,26 @@ class CoverRequest final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QUrl url READ url WRITE setUrl NOTIFY urlChanged)
     Q_PROPERTY(QUrl source READ source NOTIFY sourceChanged)
+    Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
 public:
     CoverRequest(CoverCache* service, QObject* parent);
     ~CoverRequest() override;
     QUrl url() const { return url_; }
     QUrl source() const { return source_; }
+    bool loading() const { return loading_; }
     void setUrl(const QUrl& url);
     Q_INVOKABLE void retry();
 signals:
     void urlChanged();
     void sourceChanged();
+    void loadingChanged();
 private:
     friend class CoverCache;
     void setSource(const QUrl& url);
+    void setLoading(bool loading);
     QPointer<CoverCache> service_;
     QUrl url_, source_;
+    bool loading_{};
 };
 
 class CoverCache final : public QObject {
@@ -51,6 +56,7 @@ private:
         bool downloading = false;
     };
     void pins();
+    void setLoading(const std::shared_ptr<Entry>& entry, bool loading);
     void enqueue(const std::shared_ptr<Entry>& entry);
     void pump();
     void download(const std::shared_ptr<Entry>& entry);

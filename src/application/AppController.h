@@ -6,6 +6,7 @@
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
 #include "platform/windows/MediaMonitor.h"
+#include "platform/windows/SystemUiPreferences.h"
 #include "infrastructure/ChineseConverter.h"
  #include "renderer/DanmakuItem.h"
  #include "platform/windows/ToolbarInputFilter.h"
@@ -25,6 +26,7 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* logs READ logs CONSTANT)
     Q_PROPERTY(QObject* library READ library CONSTANT)
     Q_PROPERTY(QObject* metadata READ metadata CONSTANT)
+    Q_PROPERTY(QObject* uiPreferences READ uiPreferences CONSTANT)
     Q_PROPERTY(QObject* toolbarPointer READ toolbarPointer CONSTANT)
     Q_PROPERTY(QString sourceTitle READ sourceTitle NOTIFY stateChanged)
     Q_PROPERTY(QVariantList sessions READ sessions NOTIFY sessionsChanged)
@@ -69,6 +71,7 @@ class AppController final : public QObject {
     }
     QObject* library() { return &library_; }
     QObject* metadata() { return &metadata_; }
+    QObject* uiPreferences() { return &uiPreferences_; }
     QObject* toolbarPointer() { return &toolbarPointer_; }
     QString sourceTitle() const { return sourceTitle_; }
     QVariantList sessions() const {
@@ -187,6 +190,7 @@ class AppController final : public QObject {
     LogModel logs_;
     DanmakuLibrary library_;
     AnimeMetadataService metadata_;
+    SystemUiPreferences uiPreferences_;
     MediaMonitor monitor_;
     ForegroundQuery foregroundQuery_;
     MainForegroundQuery mainForegroundQuery_;

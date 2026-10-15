@@ -20,6 +20,8 @@ class DanmakuLibrary final : public QObject {
     Q_PROPERTY(QString selectedEpisode READ selectedEpisode NOTIFY changed)
     Q_PROPERTY(bool selectedCached READ selectedCached NOTIFY cacheChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
+    Q_PROPERTY(bool searchingAnime READ searchingAnime NOTIFY changed)
+    Q_PROPERTY(bool loadingEpisodes READ loadingEpisodes NOTIFY changed)
     Q_PROPERTY(bool scanning READ scanning NOTIFY cacheChanged)
     Q_PROPERTY(int progress READ progress NOTIFY changed)
     Q_PROPERTY(QString status READ status NOTIFY changed)
@@ -38,6 +40,8 @@ class DanmakuLibrary final : public QObject {
     QString selectedEpisode() const { return episodeId_; }
     bool selectedCached() const;
     bool busy() const { return busy_; }
+    bool searchingAnime() const { return busy_ && operation_ == Operation::Search; }
+    bool loadingEpisodes() const { return busy_ && operation_ == Operation::Episodes; }
     bool scanning() const { return scanning_; }
     int progress() const { return progress_; }
     QString status() const { return status_; }
@@ -67,7 +71,9 @@ class DanmakuLibrary final : public QObject {
         std::shared_ptr<OnlineDanmakuResult> result;
         QString error;
     };
-    void begin(const QString& status, bool sourceLoad = false);
+    enum class Operation { Other, Search, Episodes };
+    Operation operation_{Operation::Other};
+    void begin(const QString& status, bool sourceLoad = false, Operation operation = Operation::Other);
     void fail(const QString& error);
     void startAttempts(std::function<void()> attempt);
     void nextAttempt(const QString& reason = {});

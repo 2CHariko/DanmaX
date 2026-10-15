@@ -40,7 +40,7 @@ Control {
             asynchronous: true
             cache: true
             fillMode: Image.PreserveAspectCrop
-            opacity: status === Image.Ready ? (Ui.dark ? 0.75 : 0.60) : 0.0
+            imageOpacity: Ui.dark ? 0.75 : 0.60
         }
 
         // 横向线性渐变蒙层：左侧纯色承托文字，右侧向海报透明过渡

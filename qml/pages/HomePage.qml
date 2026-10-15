@@ -23,6 +23,10 @@ PageFrame {
     headingVisible: !searchPane.showingResults
 
     property int activeWeekday: backend.metadata.todayWeekday
+    readonly property bool coldLoading: backend.metadata.loading && backend.metadata.weeklyCalendar.length === 0
+    ContentReveal { id: heroReveal; target: heroBanner }
+    ContentReveal { id: weeklyReveal; target: weeklyRail }
+    ContentReveal { id: topReveal; target: topRatedRail }
 
     // 计算当前所选星期的番剧列表
     readonly property var currentWeekdayList: {
@@ -103,9 +107,16 @@ PageFrame {
     }
 
     // 1. 顶部 Hero Banner 流媒体焦点推荐
+    LoadingPlaceholder {
+        objectName: "homeHeroSkeleton"
+        loading: page.coldLoading && !searchPane.showingResults
+        hasContent: page.backend.metadata.weeklyCalendar.length > 0
+        appearance: "hero"
+        onContentReady: heroReveal.restart()
+    }
     HeroBanner {
         id: heroBanner
-        visible: !searchPane.showingResults
+        visible: !searchPane.showingResults && !page.coldLoading
         anime: page.backend.metadata.heroAnime
         coverCache: page.backend.metadata.coverCache
         onWatchNowClicked: title => page.openDanmakuForAnime(title, "", 0)
@@ -129,10 +140,17 @@ PageFrame {
     }
 
     // 3. 轨道二：今日新番 / 追番周历（支持周一至周日 7 天 Tab 快速切换）
+    LoadingPlaceholder {
+        objectName: "homeCalendarSkeleton"
+        loading: page.coldLoading && !searchPane.showingResults
+        hasContent: page.backend.metadata.weeklyCalendar.length > 0
+        appearance: "cards"
+        onContentReady: weeklyReveal.restart()
+    }
     AnimeRail {
         id: weeklyRail
         coverCache: page.backend.metadata.coverCache
-        visible: !searchPane.showingResults
+        visible: !searchPane.showingResults && !page.coldLoading
         title: I18n.home.weeklyCalendar
         weekdayTabs: I18n.home.weekdays
         selectedWeekday: page.activeWeekday
@@ -146,10 +164,17 @@ PageFrame {
     }
 
     // 4. 轨道三：季度热门 / 评分榜单
+    LoadingPlaceholder {
+        objectName: "homeTopRatedSkeleton"
+        loading: page.coldLoading && !searchPane.showingResults
+        hasContent: page.backend.metadata.weeklyCalendar.length > 0
+        appearance: "cards"
+        onContentReady: topReveal.restart()
+    }
     AnimeRail {
         id: topRatedRail
         coverCache: page.backend.metadata.coverCache
-        visible: !searchPane.showingResults
+        visible: !searchPane.showingResults && !page.coldLoading
         title: I18n.home.topRated
         model: page.backend.metadata.topRated
         onCardClicked: anime => {
@@ -163,6 +188,9 @@ PageFrame {
         ownerVisible: page.visible
         detail: page.backend.metadata.currentDetail
         loading: page.backend.metadata.loadingDetail
+        loadingSubject: page.backend.metadata.loadingSubject
+        loadingEpisodes: page.backend.metadata.loadingEpisodes
+        episodesAvailable: page.backend.metadata.episodesAvailable
         stale: page.backend.metadata.detailStale
         coverCache: page.backend.metadata.coverCache
         error: page.backend.metadata.detailError
