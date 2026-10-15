@@ -214,6 +214,137 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void detailPreparationLifecycle() {
+        QQmlEngine engine; QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        QQmlComponent component(&engine);
+        component.setData(R"(
+import QtQuick
+import QtQuick.Controls.FluentWinUI3
+import "components"
+import "theme"
+ApplicationWindow {
+    id: harness; width: 1080; height: 760; visible: true
+    property var payload: ({})
+    property bool available: false
+    property int loads: 0
+    property bool loadedWhileOpened: false
+    function setMotion(enabled) { Ui.systemAnimationsEnabled = enabled }
+    QtObject {
+        id: covers
+        property url url: ""
+        property url source: ""
+        property bool loading: false
+        function createRequest(owner) { return covers }
+        function retry() {}
+    }
+    AnimeDetailDialog {
+        id: detail; objectName: "preparationDialog"
+        detail: harness.payload
+        loadingSubject: requested && !hasValidDetail
+        loading: loadingSubject
+        episodesAvailable: harness.available
+        episodeTotal: sourceEpisodes.length
+        coverCache: covers
+        onLoadRequested: { harness.loads++; harness.loadedWhileOpened = opened }
+        onCloseRequested: { requested = false; harness.available = false; harness.payload = ({}) }
+    }
+})", QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/DetailPreparationHarness.qml")));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        std::unique_ptr<QObject> root(component.create());
+        QVERIFY2(root, qPrintable(component.errorString()));
+        auto* window = qobject_cast<QQuickWindow*>(root.get()); QVERIFY(window);
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* dialog = root->findChild<QObject*>("preparationDialog"); QVERIFY(dialog);
+        auto* preparation = dialog->findChild<QObject*>("animeEpisodePreparation"); QVERIFY(preparation);
+        auto count = [&] { return dialog->property("preparedEpisodeCount").toInt(); };
+        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
+            if (parent->objectName() == name) return parent;
+            for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
+            return nullptr;
+        };
+        auto* content = dialog->property("contentItem").value<QQuickItem*>(); QVERIFY(content);
+        auto* skeleton = find(content, "animeDetailSkeleton"); QVERIFY(skeleton);
+        auto* flow = find(content, "animeEpisodesContent"); QVERIFY(flow);
+        auto setPage = [&](int first, int size) {
+            QVariantList episodes;
+            for (int i = first; i < first + size; ++i)
+                episodes.append(QVariantMap{{"id", 10000+i}, {"sort", i}, {"title", QString("Episode %1").arg(i)}, {"airDate", "2025-01-01"}});
+            root->setProperty("payload", QVariantMap{{"id", first}, {"title", "Preparation test"}, {"episodes", episodes}});
+            root->setProperty("available", true);
+        };
+        // Closing during enter must never start a request or a skeleton pulse.
+        QVERIFY(QMetaObject::invokeMethod(dialog, "present"));
+        QVERIFY(!dialog->property("opened").toBool());
+        QCOMPARE(root->property("loads").toInt(), 0);
+        QVERIFY(!skeleton->property("pulsing").toBool());
+        QVERIFY(QMetaObject::invokeMethod(dialog, "closeRequested"));
+        QTRY_VERIFY(!dialog->property("visible").toBool());
+        QCOMPARE(root->property("loads").toInt(), 0);
+
+        QVERIFY(QMetaObject::invokeMethod(dialog, "present"));
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QCOMPARE(root->property("loads").toInt(), 1);
+        QVERIFY(root->property("loadedWhileOpened").toBool());
+        QSignalSpy batches(dialog, SIGNAL(preparedEpisodeCountChanged())); QVERIFY(batches.isValid());
+        int lastFrameCount = 0, largestBatch = 0;
+        connect(window, &QQuickWindow::afterAnimating, this, [&] {
+            largestBatch = std::max(largestBatch, count() - lastFrameCount);
+            lastFrameCount = count();
+        });
+        setPage(1, 100);
+        QCOMPARE(count(), 0);
+        QTRY_VERIFY(count() > 0);
+        QVERIFY(count() < 100);
+        const auto reservedHeight = flow->parentItem()->height();
+        QVERIFY(flow->isVisible());
+        QTRY_COMPARE(count(), 100);
+        QCOMPARE(flow->parentItem()->height(), reservedHeight);
+        QVERIFY(!preparation->property("running").toBool());
+        QVERIFY(batches.count() >= 100);
+        QVERIFY(largestBatch <= 8);
+        QPointer<QQuickItem> firstButton(find(content, "animeEpisode1")); QVERIFY(firstButton);
+        root->setProperty("payload", dialog->property("detail"));
+        dialog->setProperty("loadingEpisodes", true);
+        QTest::qWait(40);
+        QCOMPARE(count(), 100); QVERIFY(firstButton);
+        dialog->setProperty("loadingEpisodes", false);
+
+        // Replacing a partially prepared page must discard the previous snapshot.
+        setPage(101, 100); QCOMPARE(count(), 0);
+        QTRY_VERIFY(count() > 0 && count() < 100);
+        setPage(201, 12); QCOMPARE(count(), 0);
+        QTRY_COMPARE(count(), 12);
+        QVERIFY(!find(content, "animeEpisode101"));
+        QVERIFY(find(content, "animeEpisode201")); QVERIFY(find(content, "animeEpisode212"));
+        QSignalSpy selected(dialog, SIGNAL(episodeSelected(QString,QString,double))); QVERIFY(selected.isValid());
+        auto* button = find(content, "animeEpisode201"); button->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        QCOMPARE(selected.count(), 1); QCOMPARE(selected.first().at(2).toDouble(), 201.0);
+
+        setPage(301, 100);
+        QTRY_VERIFY(count() > 0 && count() < 100);
+        QVERIFY(QMetaObject::invokeMethod(dialog, "closeRequested"));
+        QTRY_VERIFY(!dialog->property("visible").toBool());
+        QCOMPARE(count(), 0); QVERIFY(!preparation->property("running").toBool());
+        QVERIFY(!dialog->property("requested").toBool());
+        QVERIFY(QMetaObject::invokeMethod(root.get(), "setMotion", Q_ARG(QVariant, false)));
+        QVERIFY(QMetaObject::invokeMethod(dialog, "present"));
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QCOMPARE(root->property("loads").toInt(), 2);
+        setPage(401, 12); QTRY_COMPARE(count(), 12);
+        setPage(501, 0); QCOMPARE(count(), 0);
+        QVERIFY(!dialog->property("preparingEpisodes").toBool());
+        setPage(601, 100);
+        QTRY_VERIFY(count() > 0 && count() < 100);
+        dialog->setProperty("ownerVisible", false);
+        QTest::qWait(80);
+        QCOMPARE(count(), 0); QVERIFY(!preparation->property("running").toBool());
+        QVERIFY(!dialog->property("requested").toBool());
+        QVERIFY(QMetaObject::invokeMethod(dialog, "closeRequested"));
+        dialog->setProperty("ownerVisible", true);
+        QTRY_VERIFY(!dialog->property("visible").toBool());
+        QVERIFY(QMetaObject::invokeMethod(root.get(), "setMotion", Q_ARG(QVariant, true)));
+        QCOMPARE(warnings.count(), 0);
+    }
     void coverPlaceholderWorkflow() {
         QTemporaryDir directory;
         const auto coverPath = directory.filePath("cover.png");
@@ -1095,6 +1226,7 @@ ApplicationWindow {
         metadata->fetchDetail(123);
         QTRY_VERIFY(!metadata->loadingDetail());
         QTRY_VERIFY(dialog->property("opened").toBool());
+        QTRY_VERIFY(!dialog->property("preparingEpisodes").toBool());
         auto* content = dialog->property("contentItem").value<QQuickItem*>();
         QVERIFY(content);
         auto* episode = find(content, "animeEpisode9");
@@ -1119,6 +1251,7 @@ ApplicationWindow {
             QVariantMap{{"sort", 12}, {"airDate", ""}}};
         dialog->setProperty("currentDate", "2026-10-15");
         dialog->setProperty("detail", datedDetail);
+        QTRY_VERIFY(!dialog->property("preparingEpisodes").toBool());
         auto* futureEpisode = find(content, "animeEpisode10");
         QVERIFY(futureEpisode);
         QVERIFY(!futureEpisode->isEnabled());
@@ -1143,6 +1276,7 @@ ApplicationWindow {
         dialog->setProperty("currentDate", "2026-10-16");
         QVERIFY(futureEpisode->isEnabled());
         dialog->setProperty("detail", originalDetail);
+        QTRY_VERIFY(!dialog->property("preparingEpisodes").toBool());
         episode = find(content, "animeEpisode9");
         QVERIFY(episode);
         QSignalSpy selected(home, SIGNAL(openDanmakuForAnime(QString,QString,double)));
@@ -1405,7 +1539,8 @@ ApplicationWindow {
         auto* ranges = find(content, "animeEpisodeRange"); QVERIFY(ranges);
         auto* prev = find(content, "animeEpisodesPrevious"); QVERIFY(prev);
         auto* countLabel = find(content, "animeEpisodeCount"); QVERIFY(countLabel);
-        QVERIFY(ranges->width() < 180);
+        // Compactness follows the control's scaled implicit width, including large text.
+        QVERIFY(ranges->width() <= ranges->implicitWidth() + 1);
         QVERIFY(std::abs(prev->width() - prev->height()) < 1);
         QVERIFY(std::abs(next->width() - next->height()) < 1);
         QVERIFY(ranges->mapToItem(content, QPointF()).x() > countLabel->mapToItem(content, QPointF()).x());

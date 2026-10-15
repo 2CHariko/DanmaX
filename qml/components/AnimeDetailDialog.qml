@@ -19,6 +19,67 @@ Dialog {
     property bool stale: false
     property string error: ""
     property bool ownerVisible: true
+    property bool requested: false
+    function present() {
+        const ready = opened
+        requested = true
+        if (ready) loadRequested()
+    }
+    onOwnerVisibleChanged: if (!ownerVisible) {
+        requested = false
+        resetEpisodes()
+    }
+    onOpened: {
+        syncEpisodes()
+        if (requested) loadRequested()
+    }
+    onClosed: {
+        requested = false
+        resetEpisodes()
+    }
+
+    readonly property var sourceEpisodes: (detail && detail.episodes) || []
+    property var episodeSnapshot: []
+    readonly property int preparedEpisodeCount: episodeModel.count
+    readonly property bool preparingEpisodes: episodesAvailable && preparedEpisodeCount < sourceEpisodes.length
+    onSourceEpisodesChanged: syncEpisodes()
+    onEpisodesAvailableChanged: syncEpisodes()
+    function resetEpisodes() {
+        episodeSnapshot = []
+        episodeModel.clear()
+    }
+    function syncEpisodes() {
+        if (!opened || !ownerVisible || !episodesAvailable) {
+            resetEpisodes()
+            return
+        }
+        // detailChanged also updates status/subject fields: keep existing delegates
+        // when the episode page itself has not changed.
+        let same = episodeSnapshot.length === sourceEpisodes.length
+        for (let i = 0; same && i < sourceEpisodes.length; ++i) {
+            const a = episodeSnapshot[i], b = sourceEpisodes[i]
+            same = a.id === b.id && a.sort === b.sort && a.title === b.title && a.airDate === b.airDate
+        }
+        if (!same) {
+            episodeModel.clear()
+            episodeSnapshot = sourceEpisodes
+        }
+    }
+    ListModel { id: episodeModel }
+    FrameAnimation {
+        objectName: "animeEpisodePreparation"
+        running: dialogRoot.opened && dialogRoot.ownerVisible
+            && episodeModel.count < dialogRoot.episodeSnapshot.length
+        onTriggered: {
+            // Bound both the work count and its time. Appending preserves already
+            // created delegates instead of resetting the Repeater's whole model.
+            const start = Date.now()
+            for (let n = 0; n < 8 && episodeModel.count < dialogRoot.episodeSnapshot.length; ++n) {
+                episodeModel.append({ entry: dialogRoot.episodeSnapshot[episodeModel.count] })
+                if (Date.now() - start >= 2) break
+            }
+        }
+    }
     property bool tagsExpanded: false
     property real tagsSubjectId: 0
     onDetailChanged: {
@@ -48,6 +109,7 @@ Dialog {
     }
 
     signal closeRequested()
+    signal loadRequested()
     signal retryRequested()
     signal episodePageRequested(int page)
     signal watchNowRequested(string animeTitle)
@@ -61,7 +123,7 @@ Dialog {
     modal: true
     focus: true
     closePolicy: Popup.CloseOnEscape
-    visible: ownerVisible && (hasValidDetail || loading || error.length > 0)
+    visible: ownerVisible && (requested || hasValidDetail || loading || error.length > 0)
     title: (detail && detail.title) || I18n.home.heroDetails
     header: null
     // Keep the native scrollbar's full hit area inside the shared outer inset.
@@ -109,7 +171,7 @@ Dialog {
             LoadingPlaceholder {
                 objectName: "animeDetailSkeleton"
                 appearance: "detail"
-                loading: dialogRoot.loadingSubject
+                loading: dialogRoot.opened && dialogRoot.loadingSubject
                 hasContent: dialogRoot.hasValidDetail
                 onContentReady: headerReveal.restart()
             }
@@ -394,82 +456,97 @@ Dialog {
                     }
                 }
 
-                // 选集按钮网格
-                LoadingPlaceholder {
-                    objectName: "animeEpisodesSkeleton"
-                    appearance: "episodes"
-                    loading: dialogRoot.loadingEpisodes
-                    hasContent: dialogRoot.episodesAvailable
-                    onContentReady: episodesReveal.restart()
-                }
-                Flow {
-                    id: episodesFlow
-                    objectName: "animeEpisodesContent"
-                    visible: dialogRoot.episodesAvailable && ((dialogRoot.detail && dialogRoot.detail.episodes) || []).length > 0
+                // Reserve the complete grid height while its controls are prepared.
+                Item {
                     Layout.fillWidth: true
-                    spacing: 8
+                    visible: (dialogRoot.loadingEpisodes && !dialogRoot.episodesAvailable)
+                        || dialogRoot.sourceEpisodes.length > 0
+                    readonly property real cellWidth: Math.round(52 * Ui.textScale)
+                    readonly property real cellHeight: Math.round(36 * Ui.textScale)
+                    readonly property int columns: Math.max(1, Math.floor((width + 8) / (cellWidth + 8)))
+                    implicitHeight: dialogRoot.episodesAvailable && dialogRoot.sourceEpisodes.length > 0
+                        ? Math.ceil(dialogRoot.sourceEpisodes.length / columns) * (cellHeight + 8) - 8
+                        : episodesPlaceholder.implicitHeight
+                    LoadingPlaceholder {
+                        id: episodesPlaceholder
+                        anchors.fill: parent
+                        objectName: "animeEpisodesSkeleton"
+                        appearance: "episodes"
+                        loading: dialogRoot.opened && (dialogRoot.loadingEpisodes || dialogRoot.preparingEpisodes)
+                        hasContent: dialogRoot.preparedEpisodeCount > 0
+                            || (dialogRoot.episodesAvailable && !dialogRoot.preparingEpisodes)
+                        onContentReady: episodesReveal.restart()
+                    }
+                    Flow {
+                        id: episodesFlow
+                        objectName: "animeEpisodesContent"
+                        visible: dialogRoot.episodesAvailable && dialogRoot.preparedEpisodeCount > 0
+                        width: parent.width
+                        spacing: 8
 
-                    Repeater {
-                        model: (dialogRoot.detail && dialogRoot.detail.episodes) || []
-                        delegate: Item {
-                            id: episodeDelegate
-                            required property var modelData
-                            implicitWidth: epBtn.implicitWidth
-                            implicitHeight: epBtn.implicitHeight
-                            HoverHandler {
-                                id: episodeHover
-                                objectName: "animeEpisodeHover" + episodeDelegate.modelData.sort
-                            }
-                            // 悬停提示完整信息（集数 + 详细标题 + 播出时间）
-                            ToolTip.visible: episodeHover.hovered
-                            ToolTip.delay: 200
-                            ToolTip.text: {
-                                var numStr = I18n.format(I18n.home.episodeNumberFormat, modelData.sort)
-                                var titleStr = String(modelData.title || "").trim()
-                                var res = numStr
-                                if (titleStr.length > 0 && titleStr !== numStr) {
-                                    res += "  " + titleStr
+                        Repeater {
+                            model: episodeModel
+                            delegate: Item {
+                                id: episodeDelegate
+                                required property var entry
+                                readonly property var modelData: entry
+                                implicitWidth: epBtn.implicitWidth
+                                implicitHeight: epBtn.implicitHeight
+                                HoverHandler {
+                                    id: episodeHover
+                                    objectName: "animeEpisodeHover" + episodeDelegate.modelData.sort
                                 }
-                                if (modelData.airDate && modelData.airDate.length > 0) {
-                                    res += " (" + modelData.airDate + ")"
-                                }
-                                return res
-                            }
-
-                            Button {
-                                id: epBtn
-                                anchors.fill: parent
-                                readonly property var modelData: episodeDelegate.modelData
-                                objectName: "animeEpisode" + modelData.sort
-                                enabled: !dialogRoot.isFutureEpisode(modelData.airDate)
-
-                                readonly property real sortNum: Number(modelData.sort) || 0
-                                readonly property string displayNum: {
-                                    if (sortNum <= 0) return String(modelData.sort || "")
-                                    if (Math.floor(sortNum) === sortNum) {
-                                        return sortNum < 10 ? ("0" + sortNum) : String(sortNum)
+                                // 悬停提示完整信息（集数 + 详细标题 + 播出时间）
+                                ToolTip.visible: episodeHover.hovered
+                                ToolTip.delay: 200
+                                ToolTip.text: {
+                                    var numStr = I18n.format(I18n.home.episodeNumberFormat, modelData.sort)
+                                    var titleStr = String(modelData.title || "").trim()
+                                    var res = numStr
+                                    if (titleStr.length > 0 && titleStr !== numStr) {
+                                        res += "  " + titleStr
                                     }
-                                    return String(sortNum)
+                                    if (modelData.airDate && modelData.airDate.length > 0) {
+                                        res += " (" + modelData.airDate + ")"
+                                    }
+                                    return res
                                 }
 
-                                text: displayNum
-                                font.pixelSize: Math.round(13 * Ui.textScale)
-                                font.weight: Font.DemiBold
+                                Button {
+                                    id: epBtn
+                                    anchors.fill: parent
+                                    readonly property var modelData: episodeDelegate.modelData
+                                    objectName: "animeEpisode" + modelData.sort
+                                    enabled: !dialogRoot.isFutureEpisode(modelData.airDate)
 
-                                // 统一规整方块尺寸，内部居中对齐，彻底根除省略号截断
-                                implicitWidth: Math.round(52 * Ui.textScale)
-                                implicitHeight: Math.round(36 * Ui.textScale)
-                                leftPadding: 4
-                                rightPadding: 4
+                                    readonly property real sortNum: Number(modelData.sort) || 0
+                                    readonly property string displayNum: {
+                                        if (sortNum <= 0) return String(modelData.sort || "")
+                                        if (Math.floor(sortNum) === sortNum) {
+                                            return sortNum < 10 ? ("0" + sortNum) : String(sortNum)
+                                        }
+                                        return String(sortNum)
+                                    }
 
-                                Accessible.name: I18n.format(I18n.home.episodeLoadDanmaku, modelData.sort) +
-                                    (modelData.title && modelData.title.length > 0 ? (" · " + modelData.title) : "")
+                                    text: displayNum
+                                    font.pixelSize: Math.round(13 * Ui.textScale)
+                                    font.weight: Font.DemiBold
 
-                                onClicked: dialogRoot.episodeSelected(
-                                    (dialogRoot.detail && dialogRoot.detail.title) || "",
-                                    modelData.title || "",
-                                    Number(modelData.sort)
-                                )
+                                    // 统一规整方块尺寸，内部居中对齐，彻底根除省略号截断
+                                    implicitWidth: Math.round(52 * Ui.textScale)
+                                    implicitHeight: Math.round(36 * Ui.textScale)
+                                    leftPadding: 4
+                                    rightPadding: 4
+
+                                    Accessible.name: I18n.format(I18n.home.episodeLoadDanmaku, modelData.sort) +
+                                        (modelData.title && modelData.title.length > 0 ? (" · " + modelData.title) : "")
+
+                                    onClicked: dialogRoot.episodeSelected(
+                                        (dialogRoot.detail && dialogRoot.detail.title) || "",
+                                        modelData.title || "",
+                                        Number(modelData.sort)
+                                    )
+                                }
                             }
                         }
                     }

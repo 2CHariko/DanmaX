@@ -15,7 +15,8 @@ PageFrame {
     function showDetails(anime) {
         if (!anime || !(Number(anime.id) > 0)) return
         detailSubjectId = Number(anime.id)
-        backend.metadata.fetchDetail(detailSubjectId)
+        backend.metadata.clearDetail()
+        detailDialog.present()
     }
 
     title: I18n.home.title
@@ -201,14 +202,20 @@ PageFrame {
         stale: page.backend.metadata.detailStale
         coverCache: page.backend.metadata.coverCache
         error: page.backend.metadata.detailError
+        onLoadRequested: page.backend.metadata.fetchDetail(page.detailSubjectId)
         onRetryRequested: page.backend.metadata.fetchDetail(page.detailSubjectId, true)
         onEpisodePageRequested: index => page.backend.metadata.fetchEpisodePage(index)
-        onCloseRequested: page.backend.metadata.clearDetail()
+        onCloseRequested: {
+            detailDialog.requested = false
+            page.backend.metadata.clearDetail()
+        }
         onWatchNowRequested: animeTitle => {
+            detailDialog.requested = false
             page.backend.metadata.clearDetail()
             page.openDanmakuForAnime(animeTitle, "", 0)
         }
         onEpisodeSelected: (animeTitle, episodeTitle, episodeNumber) => {
+            detailDialog.requested = false
             page.backend.metadata.clearDetail()
             page.openDanmakuForAnime(animeTitle, episodeTitle, episodeNumber)
         }
