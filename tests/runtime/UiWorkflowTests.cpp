@@ -987,24 +987,83 @@ ApplicationWindow {
         auto* tagFlow = find(tagContent, "animeDetailTags"); QVERIFY(tagFlow);
         const auto tagCount = [&] {
             int count = 0;
-            for (auto* item : tagFlow->childItems()) if (item->property("modelData").isValid()) ++count;
+            for (auto* item : tagFlow->childItems()) if (item->property("modelData").isValid() && item->isVisible()) ++count;
             return count;
         };
-        QTRY_COMPARE(tagCount(), 12);
         auto* expandTags = find(tagContent, "animeDetailExpandTags"); QVERIFY(expandTags);
+        const auto checkCollapsedTags = [&] {
+            QVERIFY(tagCount() < 20);
+            QVERIFY(expandTags->isVisible());
+            QCOMPARE(expandTags->property("text").toString(), QStringLiteral("展开"));
+            QCOMPARE(expandTags->parentItem(), tagFlow);
+            QVERIFY(std::abs(expandTags->y()) < 1);
+            QVERIFY(expandTags->x() + expandTags->width() <= tagFlow->width() + 1);
+            qreal end = 0;
+            for (auto* item : tagFlow->childItems()) {
+                if (!item->property("modelData").isValid() || !item->isVisible()) continue;
+                QVERIFY(std::abs(item->y()) < 1);
+                QVERIFY(std::abs(item->height() - expandTags->height()) < 1);
+                end = std::max(end, item->x() + item->width());
+            }
+            QVERIFY(expandTags->x() >= end);
+            QVERIFY(tagFlow->height() <= expandTags->height() + 1);
+        };
+        QTest::qWait(80);
+        checkCollapsedTags();
+        for (const int width : {520, 800, 1080}) {
+            window->resize(width, 760); QTest::qWait(80);
+            checkCollapsedTags();
+            auto* flick = tagContent->property("contentItem").value<QObject*>(); QVERIFY(flick);
+            flick->setProperty("contentY", std::max(0.0, flick->property("contentY").toDouble() + tagFlow->mapToItem(tagContent, QPointF()).y() - 24));
+            QTest::qWait(50);
+            QVERIFY(window->grabWindow().save(evidence + QString("/tags-collapsed-%1.png").arg(width)));
+        }
         expandTags->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
         QTRY_COMPARE(tagCount(), 20);
+        QCOMPARE(expandTags->property("text").toString(), QStringLiteral("收起"));
         for (const auto& theme : {"light", "dark"}) {
             settings->setValue("theme", theme); window->resize(520, 600); QTest::qWait(80);
             for (auto* item : tagFlow->childItems()) if (item->property("modelData").isValid())
                 QVERIFY(item->x() + item->width() <= tagFlow->width() + 1);
+            QQuickItem* lastTag = nullptr;
+            for (auto* item : tagFlow->childItems())
+                if (item->property("modelData").isValid()) lastTag = item;
+            QVERIFY(lastTag);
+            QVERIFY(expandTags->y() > lastTag->y() || expandTags->x() >= lastTag->x() + lastTag->width());
             auto* flick = tagContent->property("contentItem").value<QObject*>(); QVERIFY(flick);
             flick->setProperty("contentY", std::max(0.0, flick->property("contentY").toDouble() + tagFlow->mapToItem(tagContent, QPointF()).y() - 24));
             QTest::qWait(50);
             QVERIFY(window->grabWindow().save(evidence + QString("/tags-%1-minimum.png").arg(theme)));
         }
         expandTags->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
-        QTRY_COMPARE(tagCount(), 12);
+        QTest::qWait(80);
+        checkCollapsedTags();
+        QVERIFY(expandTags->hasActiveFocus());
+        const auto setTags = [&](const QString& tags) {
+            QQmlExpression expression(qmlContext(dialog), dialog,
+                QStringLiteral("detail = Object.assign({}, detail, {tags: %1})").arg(tags));
+            expression.evaluate();
+            QVERIFY2(!expression.hasError(), qPrintable(expression.error().toString()));
+            QTest::qWait(80);
+        };
+        setTags(QStringLiteral("['TV', '日本']"));
+        QCOMPARE(tagCount(), 2);
+        QVERIFY(!expandTags->isVisible());
+        setTags(QStringLiteral("['超长标签'.repeat(100), 'TV', '日本']"));
+        checkCollapsedTags();
+        QCOMPARE(tagCount(), 0);
+        expandTags->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        QTRY_COMPARE(tagCount(), 3);
+        expandTags->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        QTRY_COMPARE(tagCount(), 0);
+        setTags(QStringLiteral("[]"));
+        QCOMPARE(tagCount(), 0);
+        QVERIFY(!expandTags->isVisible());
+        QQmlExpression restoreDetailBinding(qmlContext(dialog), dialog,
+            QStringLiteral("detail = Qt.binding(function() { return page.backend.metadata.currentDetail })"));
+        restoreDetailBinding.evaluate();
+        QVERIFY2(!restoreDetailBinding.hasError(), qPrintable(restoreDetailBinding.error().toString()));
+        QTest::qWait(80);
         window->resize(1080, 760); QTest::qWait(80);
         QVERIFY(window->grabWindow().save(evidence + "/detail.png"));
         QTest::keyClick(window, Qt::Key_Escape);

@@ -474,15 +474,38 @@ Dialog {
                     objectName: "animeDetailTags"
                     Layout.fillWidth: true
                     spacing: 6
-                    Repeater {
-                        model: {
-                            const tags = (dialogRoot.detail && dialogRoot.detail.tags) || []
-                            return dialogRoot.tagsExpanded ? tags : tags.slice(0, 12)
+                    readonly property var tags: (dialogRoot.detail && dialogRoot.detail.tags) || []
+                    readonly property real chipHeight: Math.ceil(tagMetrics.height) + 8
+                    // Reserve the trailing action before selecting a complete prefix.
+                    readonly property int collapsedCount: {
+                        let used = 0
+                        const widths = tags.map(tag => Math.min(Math.ceil(tagMetrics.advanceWidth(String(tag))) + 16, width))
+                        for (let i = 0; i < widths.length; ++i)
+                            used += widths[i] + (i > 0 ? spacing : 0)
+                        if (used <= width) return tags.length
+                        const available = Math.max(0, width - expandTagsButton.implicitWidth - spacing)
+                        used = 0
+                        let count = 0
+                        for (const chipWidth of widths) {
+                            const next = used + (count > 0 ? spacing : 0) + chipWidth
+                            if (next > available) break
+                            used = next
+                            ++count
                         }
+                        return count
+                    }
+                    FontMetrics {
+                        id: tagMetrics
+                        font: expandTagsButton.font
+                    }
+                    Repeater {
+                        model: tagsFlow.tags
                         delegate: Rectangle {
                             required property string modelData
-                            implicitWidth: Math.min(tagLabel.implicitWidth + 16, tagsFlow.width)
-                            implicitHeight: tagLabel.implicitHeight + 8
+                            required property int index
+                            visible: dialogRoot.tagsExpanded || index < tagsFlow.collapsedCount
+                            implicitWidth: Math.min(Math.ceil(tagMetrics.advanceWidth(modelData)) + 16, tagsFlow.width)
+                            implicitHeight: dialogRoot.tagsExpanded ? tagLabel.implicitHeight + 8 : tagsFlow.chipHeight
                             radius: Ui.cardRadius
                             color: Ui.cardBackground
                             border.width: 1
@@ -492,18 +515,29 @@ Dialog {
                                 anchors.centerIn: parent
                                 width: Math.max(0, parent.width - 16)
                                 text: modelData
-                                wrapMode: Text.WrapAnywhere
+                                wrapMode: dialogRoot.tagsExpanded ? Text.WrapAnywhere : Text.NoWrap
+                                elide: dialogRoot.tagsExpanded ? Text.ElideNone : Text.ElideRight
                                 font.pixelSize: Ui.captionSize
                                 color: Ui.secondaryText
                             }
                         }
                     }
-                }
-                Button {
-                    objectName: "animeDetailExpandTags"
-                    visible: Boolean(dialogRoot.detail && dialogRoot.detail.tags && dialogRoot.detail.tags.length > 12)
-                    text: dialogRoot.tagsExpanded ? I18n.home.collapseTags : I18n.home.expandTags
-                    onClicked: dialogRoot.tagsExpanded = !dialogRoot.tagsExpanded
+                    Button {
+                        id: expandTagsButton
+                        objectName: "animeDetailExpandTags"
+                        visible: tagsFlow.collapsedCount < tagsFlow.tags.length
+                        text: dialogRoot.tagsExpanded ? I18n.home.collapseTags : I18n.home.expandTags
+                        font.pixelSize: Ui.captionSize
+                        leftPadding: 8
+                        rightPadding: 8
+                        topPadding: 4
+                        bottomPadding: 4
+                        topInset: 0
+                        bottomInset: 0
+                        implicitWidth: Math.ceil(contentItem.implicitWidth) + leftPadding + rightPadding
+                        implicitHeight: tagsFlow.chipHeight
+                        onClicked: dialogRoot.tagsExpanded = !dialogRoot.tagsExpanded
+                    }
                 }
             }
 

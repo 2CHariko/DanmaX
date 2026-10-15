@@ -55,8 +55,8 @@ QtObject {
     readonly property var home: ({
         title: "首页",
         allTags: "标签",
-        expandTags: "展开全部标签",
-        collapseTags: "收起标签",
+        expandTags: "展开",
+        collapseTags: "收起",
         description: "浏览放送日历，查找番剧并匹配剧集弹幕。",
         heroWatchNow: "搜索弹幕",
         heroDetails: "番剧详情",
