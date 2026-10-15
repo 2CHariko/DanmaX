@@ -325,6 +325,7 @@ Dialog {
                         font.pixelSize: Ui.sectionHeaderSize
                         font.weight: Font.DemiBold
                         color: Ui.textColor
+                        Layout.alignment: Qt.AlignVCenter
                     }
 
                     Label {
@@ -334,40 +335,62 @@ Dialog {
                             : (dialogRoot.loadingEpisodes ? I18n.common.loading : "")
                         font.pixelSize: Ui.captionSize
                         color: Ui.secondaryText
+                        Layout.alignment: Qt.AlignVCenter
                     }
-                }
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    visible: dialogRoot.episodePageCount > 1
-                    spacing: 8
-                    Button {
-                        objectName: "animeEpisodesPrevious"
-                        icon.source: Ui.icon("chevron-left")
-                        Accessible.name: I18n.home.previousEpisodeRange
-                        enabled: dialogRoot.episodePage > 0
-                        onClicked: dialogRoot.episodePageRequested(dialogRoot.episodePage - 1)
-                    }
-                    AppComboBox {
-                        objectName: "animeEpisodeRange"
+                    Item {
                         Layout.fillWidth: true
-                        Accessible.name: I18n.home.episodeRange
-                        model: {
-                            const ranges = []
-                            for (let i = 0; i < dialogRoot.episodePageCount; ++i)
-                                ranges.push(I18n.format(I18n.home.episodeRangeFormat, i * 100 + 1,
-                                    Math.min((i + 1) * 100, dialogRoot.episodeTotal)))
-                            return ranges
-                        }
-                        currentIndex: dialogRoot.episodePage
-                        onActivated: index => dialogRoot.episodePageRequested(index)
                     }
-                    Button {
-                        objectName: "animeEpisodesNext"
-                        icon.source: Ui.icon("chevron-right")
-                        Accessible.name: I18n.home.nextEpisodeRange
-                        enabled: dialogRoot.episodePage + 1 < dialogRoot.episodePageCount
-                        onClicked: dialogRoot.episodePageRequested(dialogRoot.episodePage + 1)
+
+                    // 紧凑分页控制器（靠右对齐，与标题同行，消除纵向冗余与横向过度拉伸）
+                    RowLayout {
+                        visible: dialogRoot.episodePageCount > 1
+                        spacing: 4
+                        Layout.alignment: Qt.AlignVCenter
+
+                        Button {
+                            id: prevRangeBtn
+                            objectName: "animeEpisodesPrevious"
+                            icon.source: Ui.icon("chevron-left")
+                            icon.width: 16
+                            icon.height: 16
+                            display: AbstractButton.IconOnly
+                            Accessible.name: I18n.home.previousEpisodeRange
+                            enabled: dialogRoot.episodePage > 0
+                            implicitWidth: implicitHeight
+                            implicitHeight: episodeRangeCombo.implicitHeight
+                            onClicked: dialogRoot.episodePageRequested(dialogRoot.episodePage - 1)
+                        }
+
+                        AppComboBox {
+                            id: episodeRangeCombo
+                            objectName: "animeEpisodeRange"
+                            implicitWidth: Math.round(136 * Ui.textScale)
+                            Accessible.name: I18n.home.episodeRange
+                            model: {
+                                const ranges = []
+                                for (let i = 0; i < dialogRoot.episodePageCount; ++i)
+                                    ranges.push(I18n.format(I18n.home.episodeRangeFormat, i * 100 + 1,
+                                        Math.min((i + 1) * 100, dialogRoot.episodeTotal)))
+                                return ranges
+                            }
+                            currentIndex: dialogRoot.episodePage
+                            onActivated: index => dialogRoot.episodePageRequested(index)
+                        }
+
+                        Button {
+                            id: nextRangeBtn
+                            objectName: "animeEpisodesNext"
+                            icon.source: Ui.icon("chevron-right")
+                            icon.width: 16
+                            icon.height: 16
+                            display: AbstractButton.IconOnly
+                            Accessible.name: I18n.home.nextEpisodeRange
+                            enabled: dialogRoot.episodePage + 1 < dialogRoot.episodePageCount
+                            implicitWidth: implicitHeight
+                            implicitHeight: episodeRangeCombo.implicitHeight
+                            onClicked: dialogRoot.episodePageRequested(dialogRoot.episodePage + 1)
+                        }
                     }
                 }
 

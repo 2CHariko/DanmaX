@@ -1403,6 +1403,12 @@ ApplicationWindow {
         QTRY_VERIFY(!metadata.loadingEpisodes()); QTRY_COMPARE(countButtons(), 100);
         QCOMPARE(episodeRequests, 2); QVERIFY(find(content, "animeEpisode101"));
         auto* ranges = find(content, "animeEpisodeRange"); QVERIFY(ranges);
+        auto* prev = find(content, "animeEpisodesPrevious"); QVERIFY(prev);
+        auto* countLabel = find(content, "animeEpisodeCount"); QVERIFY(countLabel);
+        QVERIFY(ranges->width() < 180);
+        QVERIFY(std::abs(prev->width() - prev->height()) < 1);
+        QVERIFY(std::abs(next->width() - next->height()) < 1);
+        QVERIFY(ranges->mapToItem(content, QPointF()).x() > countLabel->mapToItem(content, QPointF()).x());
         ranges->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4);
         auto* popup = ranges->property("popup").value<QObject*>(); QVERIFY(popup);
         QTRY_VERIFY(popup->property("visible").toBool());

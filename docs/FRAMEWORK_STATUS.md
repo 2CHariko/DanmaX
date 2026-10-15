@@ -914,3 +914,10 @@ Windows 10/早期 Windows 11、系统透明开关与节能切换、高对比度�
 - 两种配置的 CTest application_smoke、application_image_smoke 各 **2/2** 通过。额外使用生产 AppComboBox 的临时字体探针验证 14／32／20px、动态字体族与字重、字体预览开关反复切换及行高，**0 项失败**；已目视检查浅深主题、长列表、字体预览及 32px 放大文字截图。报告与临时探针位于 `out/analysis/font-rendering/`，现有 UI 截图位于 `out/validation/scroll-popup/font-fix-native/`、`font-fix-scaled/` 与 `out/validation/ui-refresh/` 对应子目录。
 - 未执行全量 CTest、静态构建或正式发布打包，不新增真实触控板惯性、混合 DPI 跨屏、高对比度、Narrator、DWM 或性能验收结论。开发构建不等于已更新项目外的安装版本。
 - Debug、Release 开发运行目录均通过 `run.ps1 -NoBuild -SmokeTest` 更新并启动，EXE SHA-256 与对应最终构建产物一致；日志为 `out/analysis/font-rendering/run-debug.log`、`run-release.log`。修改尚未提交 Git。
+
+## 剧集选集分页布局内嵌与紧凑化（2026-10-16）
+
+- 消除原剧集选集分页控件独立占行、横向过度拉伸（数百像素空旷下拉框与过大翻页按钮）及割裂标题与集数网格的问题。
+- 将分页控制器重构为标题行右侧紧凑操作组：`AppComboBox` 采用固定自适应紧凑宽度（`136 * Ui.textScale`），前后翻页按钮紧贴两侧并采用等高正方形图标按钮（`32×32`），通过 `RowLayout` 弹性空白靠右对齐。多页时展示，单页（<= 100 集）自动隐藏，纵向直接省出一整行视口高度。
+- Debug、Release 主程序及 ui_workflow_tests 目标构建通过。Windows 默认图形后端运行 `railScrollingAndEpisodeRanges` 与 `homePageWorkflow`：Debug 下 **3 passed、0 failed、0 skipped，6.928 秒**（rail-range）与 **19.030 秒**（workflow）；Release 在 `QT_SCALE_FACTOR=1.5`、13.5pt 字体下 **3 passed、0 failed、0 skipped，3.989 秒**（rail-range）与 **10.596 秒**（workflow）。断言覆盖分页下拉框紧凑宽度（< 180px）、翻页按钮正方形几何、标题行右侧相对定位、F4 快捷键下拉展开、末页切换、Light/Dark 切换及原有滚动/弹幕流程；无 QML 引擎警告。
+- Debug、Release 开发运行目录已通过 `run.ps1 -NoBuild -SmokeTest` 更新并启动，日志为对应构建目录的 `pagination-run.log`。修改尚未提交 Git。
