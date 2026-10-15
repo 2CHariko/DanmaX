@@ -26,7 +26,11 @@ void CoverRequest::setUrl(const QUrl& url) {
     url_ = url; setSource({}); emit urlChanged();
     if (service_) service_->attach(this);
 }
-void CoverRequest::retry() { if (service_ && source_.isEmpty()) { service_->detach(this); service_->attach(this); } }
+void CoverRequest::retry() {
+    if (!service_) return;
+    if (source_.isEmpty()) { service_->detach(this); service_->attach(this); }
+    else service_->refresh(this);
+}
 CoverCache::CoverCache(MetadataCache* store, QObject* parent, int timeoutMs)
     : QObject(parent), store_(store), network_(this), timeoutMs_(timeoutMs) { worker_.setMaxThreadCount(4); }
 CoverCache::~CoverCache() { reset(); worker_.clear(); worker_.waitForDone(); }
@@ -50,7 +54,7 @@ void CoverCache::attach(CoverRequest* request) {
     const auto key = "cover|" + url.toString(QUrl::FullyEncoded);
     if (auto found = entries_.value(key)) {
         found->watchers.append(request); request->setSource(found->cached.localUrl); pins();
-        if (found->finished && !store_->fresh(found->cached, 30LL * 86400)) { found->finished = false; enqueue(found); }
+        refresh(request);
         return;
     }
     // Four active transfers plus a bounded pending set; rejected visible items retry on re-entry.
@@ -75,6 +79,13 @@ void CoverCache::attach(CoverRequest* request) {
             }, Qt::QueuedConnection);
         });
     });
+}
+void CoverCache::refresh(CoverRequest* request) {
+    const auto entry = entries_.value("cover|" + request->url().toString(QUrl::FullyEncoded));
+    if (entry && entry->finished && !store_->fresh(entry->cached, 30LL * 86400)) {
+        entry->finished = false;
+        enqueue(entry);
+    }
 }
 void CoverCache::detach(CoverRequest* request) {
     const auto key = "cover|" + request->url().toString(QUrl::FullyEncoded);

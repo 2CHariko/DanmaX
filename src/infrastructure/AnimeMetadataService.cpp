@@ -45,6 +45,7 @@ void AnimeMetadataService::setBaseUrl(const QString& url) {
     cancelAll(); baseUrl_ = normalized; failedAt_.clear();
     weeklyCalendar_.clear(); airingToday_.clear(); topRated_.clear(); heroAnime_.clear();
     loading_ = false; error_.clear(); calendarStale_ = false; calendarDate_ = {};
+    calendarFetchedAt_ = {}; heroFetchedAt_ = {};
     clearSearch(); clearDetail();
     cache_.setPins("calendar", {}); cache_.setPins("hero", {});
     emit calendarChanged(); emit stateChanged();
@@ -107,6 +108,7 @@ void AnimeMetadataService::cached(const std::shared_ptr<Job>& job, MetadataCache
             const bool fresh = cache_.fresh(record, job->ttl);
             const bool fetch = job->force || ((!result.available || !fresh) && !cooldown);
             if (result.available) {
+                result.fetchedAt = record.fetchedAt;
                 // Resume cleanup if the process exited after migration committed but before its callback.
                 if (!legacy && job->kind == Kind::Calendar && baseUrl_ == "https://api.bgm.tv") cache_.finishCalendarMigration();
                 result.stale = !fresh; result.refreshing = fetch;
@@ -202,7 +204,8 @@ void AnimeMetadataService::parseNetwork(const std::shared_ptr<Job>& job, QByteAr
                 publish(job, failure, true); return;
             }
             failedAt_.remove(job->key);
-            cache_.write(job->key, false, body, cache_.now());
+            result.fetchedAt = cache_.now();
+            cache_.write(job->key, false, body, result.fetchedAt);
             publish(job, result, true);
         }, Qt::QueuedConnection);
     });
@@ -269,30 +272,48 @@ AnimeMetadataService::Result AnimeMetadataService::parseResource(Kind kind, cons
 void AnimeMetadataService::applyCalendar(QVariantMap value) {
     const auto oldId = heroAnime_.value("id");
     const auto oldHero = heroAnime_;
+    const auto oldWeekly = weeklyCalendar_, oldToday = airingToday_, oldTop = topRated_;
+    const auto oldWeekday = todayWeekday_;
     weeklyCalendar_ = value.value("weekly").toList(); airingToday_ = value.value("today").toList();
     topRated_ = value.value("top").toList(); heroAnime_ = value.value("hero").toMap();
     if (oldId == heroAnime_.value("id")) {
         if (oldHero.contains("summary")) heroAnime_["summary"] = oldHero.value("summary");
         if (oldHero.contains("tags")) heroAnime_["tags"] = oldHero.value("tags");
-    }
+    } else heroFetchedAt_ = {};
     calendarDate_ = cache_.now().toLocalTime().date(); todayWeekday_ = calendarDate_.dayOfWeek();
-    emit calendarChanged();
+    if (weeklyCalendar_ != oldWeekly || airingToday_ != oldToday || topRated_ != oldTop
+        || heroAnime_ != oldHero || todayWeekday_ != oldWeekday) emit calendarChanged();
 }
 void AnimeMetadataService::refreshCalendar(bool force) {
     if (clearing_ || (loading_ && !force)) return;
-    refreshTimer_.start();
+    // Re-entering the page must not restart the timer or reload a fresh snapshot.
+    if (!refreshTimer_.isActive()) refreshTimer_.start();
+    const auto now = cache_.now();
+    const auto failed = failedAt_.value(resourceKey(Kind::Calendar, {}));
+    const auto failureAge = failed.secsTo(now);
+    const bool cooldown = failed.isValid() && failureAge >= 0 && failureAge < 300;
+    if (!force && calendarFetchedAt_.isValid() && calendarDate_ == now.toLocalTime().date()
+        && (cache_.fresh({.fetchedAt = calendarFetchedAt_, .valid = true}, 21600) || cooldown)) {
+        if (baseUrl_ == "https://api.bgm.tv") cache_.finishCalendarMigration();
+        fetchHeroDetails();
+        return;
+    }
     unsubscribe("calendar"); const auto gen = ++calendarGeneration_;
     cache_.setPins("calendar", {resourceKey(Kind::Calendar, {})});
     loading_ = true; error_.clear(); emit stateChanged();
     request(Kind::Calendar, {}, "calendar", force, [this, gen, force](Result result) {
         if (gen != calendarGeneration_) return;
         loading_ = result.refreshing; calendarStale_ = result.stale; error_ = result.error;
-        if (result.available) { applyCalendar(result.value.toMap()); fetchHeroDetails(force && !result.refreshing); }
+        if (result.available) {
+            calendarFetchedAt_ = result.fetchedAt;
+            applyCalendar(result.value.toMap()); fetchHeroDetails(force && !result.refreshing);
+        }
         emit stateChanged();
     });
 }
 void AnimeMetadataService::fetchHeroDetails(bool force) {
     const auto id = heroAnime_.value("id").toLongLong();
+    if (!force && cache_.fresh({.fetchedAt = heroFetchedAt_, .valid = heroFetchedAt_.isValid()}, 86400)) return;
     const auto pending = jobs_.value(resourceKey(Kind::Subject, QString::number(id)));
     if (pending && std::any_of(pending->watches.begin(), pending->watches.end(), [](const Watch& watch) { return watch.scope == "hero"; })) {
         pending->force |= force;
@@ -304,8 +325,10 @@ void AnimeMetadataService::fetchHeroDetails(bool force) {
     request(Kind::Subject, QString::number(id), "hero", force, [this, gen, id](Result result) {
         if (gen != heroGeneration_ || heroAnime_.value("id").toLongLong() != id || !result.available) return;
         const auto subject = result.value.toMap();
+        const auto previous = heroAnime_;
+        heroFetchedAt_ = result.fetchedAt;
         heroAnime_["summary"] = subject.value("summary"); heroAnime_["tags"] = subject.value("tags");
-        emit calendarChanged();
+        if (heroAnime_ != previous) emit calendarChanged();
     });
 }
 void AnimeMetadataService::clearDetail() {
@@ -367,6 +390,7 @@ void AnimeMetadataService::clearMetadataCache() {
     clearing_ = true; cacheCleared_ = false; cacheError_.clear(); cancelAll(); failedAt_.clear(); covers_->reset();
     clearSearch(); clearDetail(); weeklyCalendar_.clear(); airingToday_.clear(); topRated_.clear(); heroAnime_.clear();
     calendarDate_ = {}; loading_ = calendarStale_ = false; error_.clear();
+    calendarFetchedAt_ = {}; heroFetchedAt_ = {};
     cache_.setPins("calendar", {}); cache_.setPins("hero", {});
     emit calendarChanged(); emit stateChanged(); emit cacheChanged();
     cache_.clear([this](QString error) { clearing_ = false; cacheCleared_ = error.isEmpty(); cacheError_ = error; emit cacheChanged(); });

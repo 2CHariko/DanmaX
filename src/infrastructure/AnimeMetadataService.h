@@ -92,6 +92,7 @@ private:
     enum class Kind { Calendar, Subject, Episodes, Search };
     struct Result {
         QVariant value;
+        QDateTime fetchedAt;
         bool available = false;
         bool refreshing = false;
         bool stale = false;
@@ -135,6 +136,7 @@ private:
     QString baseUrl_{QStringLiteral("https://api.bgm.tv")};
     int timeoutMs_;
     QDate calendarDate_;
+    QDateTime calendarFetchedAt_, heroFetchedAt_;
     bool loading_{}, loadingDetail_{}, searching_{}, calendarStale_{}, detailStale_{}, searchStale_{}, clearing_{}, cacheCleared_{};
     bool detailSubjectLoading_{}, detailEpisodesLoading_{}, detailSubjectStale_{}, detailEpisodesStale_{};
     QString error_, detailError_, searchError_, searchKeyword_, cacheError_, subjectError_, episodesError_;

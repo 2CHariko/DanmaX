@@ -212,6 +212,64 @@ QByteArray imageBytes(QColor color = Qt::red) {
 class AnimeMetadataTests : public QObject {
     Q_OBJECT
 private slots:
+    void calendarReentryRetainsSnapshotAndRefreshBoundaries() {
+        MockBangumiServer server; QTemporaryDir dir;
+        TestClock now(QDateTime(QDate(2026, 10, 15), QTime(10, 0), QTimeZone::systemTimeZone()).toUTC());
+        MetadataCache::Policy policy; policy.now = [&] { return now.value(); };
+        AnimeMetadataService service(dir.path(), policy); service.setBaseUrl(server.url());
+        service.refreshCalendar();
+        QTRY_VERIFY(!service.loading() && service.heroAnime().contains("summary"));
+        const auto calendar = service.weeklyCalendar();
+        const auto hero = service.heroAnime();
+        const auto subjects = server.subjectRequests;
+        QSignalSpy models(&service, &AnimeMetadataService::calendarChanged);
+        QSignalSpy states(&service, &AnimeMetadataService::stateChanged);
+        for (int visit = 0; visit < 4; ++visit) { service.refreshCalendar(); QVERIFY(!service.loading()); }
+        QTest::qWait(60);
+        QCOMPARE(models.count(), 0); QCOMPARE(states.count(), 0);
+        QCOMPARE(server.calendarRequests, 1); QCOMPARE(server.subjectRequests, subjects);
+        QCOMPARE(service.weeklyCalendar(), calendar); QCOMPARE(service.heroAnime(), hero);
+
+        now = now.addSecs(21600); // Expiry at exactly six hours must still refresh.
+        server.status = 503; service.refreshCalendar();
+        QCOMPARE(service.weeklyCalendar(), calendar);
+        QTRY_VERIFY(!service.loading());
+        QCOMPARE(server.calendarRequests, 2); QVERIFY(service.calendarStale()); QVERIFY(!service.error().isEmpty());
+        QCOMPARE(models.count(), 0); // Identical stale content must not rebuild the page.
+        states.clear(); service.refreshCalendar(); QVERIFY(!service.loading());
+        QCOMPARE(states.count(), 0);
+        QCOMPARE(server.calendarRequests, 2); // Retain the failure cooldown.
+        server.status = 200; service.refreshCalendar(true); QTRY_VERIFY(!service.loading());
+        QCOMPARE(server.calendarRequests, 3); QVERIFY(!service.calendarStale()); QVERIFY(service.error().isEmpty());
+        QTRY_COMPARE(server.subjectRequests, subjects + 1); // Manual refresh also updates the hero.
+        QTRY_VERIFY(service.heroAnime().contains("summary"));
+        QCOMPARE(service.weeklyCalendar(), calendar); QCOMPARE(models.count(), 0);
+
+        service.clearMetadataCache(); QTRY_VERIFY(!service.clearingCache());
+        QVERIFY(service.weeklyCalendar().isEmpty());
+        service.refreshCalendar(); QTRY_VERIFY(!service.loading());
+        QCOMPARE(server.calendarRequests, 4); QCOMPARE(service.weeklyCalendar(), calendar);
+        MockBangumiServer other;
+        service.setBaseUrl(other.url()); QVERIFY(service.weeklyCalendar().isEmpty());
+        service.refreshCalendar(); QTRY_VERIFY(!service.loading());
+        QCOMPARE(other.calendarRequests, 1);
+    }
+    void freshCalendarRollsOverDateAndRejectsFutureTimestamp() {
+        MockBangumiServer server; QTemporaryDir dir;
+        TestClock now(QDateTime(QDate(2026, 10, 15), QTime(23, 30), QTimeZone::systemTimeZone()).toUTC());
+        MetadataCache::Policy policy; policy.now = [&] { return now.value(); };
+        AnimeMetadataService service(dir.path(), policy); service.setBaseUrl(server.url()); service.refreshCalendar();
+        QTRY_VERIFY(!service.loading() && service.heroAnime().contains("summary"));
+        const auto previousHero = service.heroAnime().value("id");
+        now = now.addSecs(3600); service.refreshCalendar();
+        QTRY_VERIFY(!service.loading() && service.heroAnime().contains("summary"));
+        QCOMPARE(service.todayWeekday(), now.toLocalTime().date().dayOfWeek());
+        QVERIFY(service.heroAnime().value("id") != previousHero);
+        QCOMPARE(server.calendarRequests, 1); // Derive the new day from the still-fresh disk snapshot.
+        QCOMPARE(server.subjectRequests, 2);
+        now = now.addSecs(-3601); service.refreshCalendar(); QTRY_VERIFY(!service.loading());
+        QCOMPARE(server.calendarRequests, 2); // A future fetchedAt cannot suppress refresh.
+    }
     void restartOfflineAndIndependentExpiry() {
         MockBangumiServer server;
         QTemporaryDir dir;
@@ -353,9 +411,13 @@ private slots:
         auto* covers = qobject_cast<CoverCache*>(service.coverCache()); QObject owner;
         auto* a = qobject_cast<CoverRequest*>(covers->createRequest(&owner)); a->setUrl(QUrl(server.url() + "/cover"));
         QTRY_VERIFY(!a->source().isEmpty()); QCOMPARE(server.coverRequests, 1); QCOMPARE(a->source(), first);
+        QSignalSpy changes(a, &CoverRequest::sourceChanged);
+        a->retry(); QTest::qWait(40); QCOMPARE(server.coverRequests, 1); QCOMPARE(changes.count(), 0);
         now = now.addDays(30); server.coverStatus = 503;
+        a->retry(); QCOMPARE(a->source(), first); QTRY_COMPARE(server.coverRequests, 2);
         auto* b = qobject_cast<CoverRequest*>(covers->createRequest(&owner)); b->setUrl(a->url());
         QTRY_COMPARE(server.coverRequests, 2); QTest::qWait(80); QCOMPARE(b->source(), first);
+        QCOMPARE(changes.count(), 0); // Expiry/failure preserves the already displayed image.
         now = now.addSecs(301); server.coverStatus = 200; server.coverBody = imageBytes(Qt::blue);
         auto* c = qobject_cast<CoverRequest*>(covers->createRequest(&owner)); c->setUrl(a->url());
         QTRY_VERIFY(!c->source().isEmpty() && c->source() != first); QCOMPARE(a->source(), c->source());

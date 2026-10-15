@@ -27,6 +27,7 @@
 #include <QScopeGuard>
 #include <cmath>
 #include <memory>
+#include <vector>
 #if defined(Q_OS_WIN)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -243,6 +244,38 @@ private slots:
             QTRY_VERIFY(coverReady());
             auto* home = window->findChild<QQuickItem*>("homePage"); auto* field = window->findChild<QQuickItem*>("homeAnimeSearch");
             QVERIFY(home && field);
+            // A retained StackLayout page must keep its pictures and metadata on re-entry.
+            QList<QPointer<QQuickItem>> readyCovers;
+            QList<QUrl> sources;
+            std::vector<std::unique_ptr<QSignalSpy>> sourceChanges;
+            for (auto* item : home->findChildren<QQuickItem*>("cachedCoverImage")) {
+                if (!item->isVisible()) continue;
+                QTRY_COMPARE(item->property("status").toInt(), 1);
+                readyCovers.append(item); sources.append(item->property("source").toUrl());
+                auto* request = item->property("request").value<QObject*>(); QVERIFY(request);
+                sourceChanges.push_back(std::make_unique<QSignalSpy>(request, SIGNAL(sourceChanged())));
+            }
+            QVERIFY(!readyCovers.isEmpty());
+            const auto requestCount = requests;
+            QSignalSpy calendarChanges(metadata, &AnimeMetadataService::calendarChanged);
+            QSignalSpy loadingChanges(metadata, &AnimeMetadataService::stateChanged);
+            for (int visit = 0; visit < 3; ++visit) {
+                auto* away = find(window->contentItem(), visit % 2 ? "navigation2" : "navigation1"); QVERIFY(away);
+                away->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space); QTRY_VERIFY(!home->isVisible());
+                for (qsizetype i = 0; i < readyCovers.size(); ++i) {
+                    QVERIFY(readyCovers[i]); QCOMPARE(readyCovers[i]->property("source").toUrl(), sources[i]);
+                }
+                auto* back = find(window->contentItem(), "navigation0"); QVERIFY(back);
+                back->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space); QTRY_VERIFY(home->isVisible());
+                QVERIFY(!metadata->loading());
+                for (qsizetype i = 0; i < readyCovers.size(); ++i) {
+                    QVERIFY(readyCovers[i]); QCOMPARE(readyCovers[i]->property("status").toInt(), 1);
+                    QCOMPARE(readyCovers[i]->property("source").toUrl(), sources[i]);
+                    QCOMPARE(sourceChanges[static_cast<size_t>(i)]->count(), 0);
+                }
+            }
+            QTest::qWait(60); QCOMPARE(requests, requestCount);
+            QCOMPARE(calendarChanges.count(), 0); QCOMPARE(loadingChanges.count(), 0);
             auto* editor = field->property("contentItem").value<QQuickItem*>(); QVERIFY(editor);
             editor->setProperty("text", "cached"); editor->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Return);
             QTRY_VERIFY(!metadata->searching() && metadata->searchResults().size() == 1);

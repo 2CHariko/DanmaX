@@ -89,7 +89,7 @@ PageFrame {
         Label {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
-            text: page.backend.metadata.loading ? (page.backend.metadata.calendarStale ? I18n.home.updatingCache : I18n.home.loadingCalendar) : page.backend.metadata.error
+            text: page.backend.metadata.loading ? (page.backend.metadata.weeklyCalendar.length > 0 ? I18n.home.updatingCache : I18n.home.loadingCalendar) : page.backend.metadata.error
             visible: text.length > 0
             color: Ui.secondaryText
             Accessible.role: Accessible.AlertMessage

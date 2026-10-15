@@ -791,3 +791,19 @@ Windows 10/早期 Windows 11、系统透明开关与节能切换、高对比度�
 - 实际动态部署完成 **11 项**检查：仅系统 PATH 冷启动且 Qt 模块来自运行目录，重启保留配置和缓存，真实缺失插件修复，中文／空格目录搬迁启动，缓存路径不可写时退出，以及正常窗口重启 Debug 不关闭 Release。旧 `.local/data/settings.ini` 哈希保持一致。报告：`out/validation/runtime-isolation/results.json`。
 - 通过正式 `package.ps1 -Format directory` 生成 `out/stage/DanmaX-20261015-152252-463/`，确认启动前没有开发配置；在仅系统 PATH 下直接烟雾启动成功，生成同级配置、日志与缓存。报告：`out/validation/runtime-package-smoke.json`；构建与专项 CTest 日志为 `out/validation/runtime-*-tests.log`，最终运行日志为 `runtime-debug-final.log`、`runtime-release-final.log`。
 - 本轮未运行完整 CTest、重新构建静态 Qt／静态应用或验证干净机器。静态预设目录与 NoBuild 分支通过脚本模拟回归，不计为静态部署实测；本轮不增加真实 SMTC、透明合成、混合 DPI 或性能验收结论。
+
+## 首页切页时保留内容（2026-10-15）
+
+### 已实现
+
+- 同次运行中记录周历与主推的成功获取时间，当天仍有效的周历和失败冷却期间已有的内容直接复用内存，切回首页不重新进入加载状态。每分钟有效期检查继续执行，切页不重启计时；跨日重新计算今日放送，过期、手动刷新、数据源切换及主动清空仍遵循既有规则。
+- 周历与主推内容没有变化时不重复发送模型变更通知；已有内容的更新过程保留画面并显示简短更新状态。主推简介按独立的 24 小时有效期检查。
+- 封面首次显示时请求，切页隐藏后保留图片来源及请求，组件销毁或主动清空时释放；沿用原有 4 个并发、256 个待处理及 260 个受管资源上限。重新显示时检查 30 天有效期，过期在旧图上后台更新，失败保留旧图及冷却规则。
+
+### 已验证与边界
+
+- Debug、Release 主程序及专项测试目标均构建成功，CTest `anime_metadata` 各通过；其中 Qt Test 各 **37 passed、0 failed、0 skipped**（含初始化与清理）。新增同进程重入不产生加载／模型通知、六小时到期、失败冷却、手动刷新、清空及来源切换、跨日和未来时间戳检查；封面专项补测持有原请求时的有效期检查、到期失败保留来源。
+- Debug、Release 在实际 Windows 窗口、software 渲染后端运行离线缓存、首页及搜索三个界面专项，各 **5 passed、0 failed、0 skipped**（含初始化与清理）。在线首次加载及重启后本地缓存命中各连续切页三次，验证已加载图片对象与来源保持、无新请求／加载状态／模型通知，并检查原有搜索、详情、键盘、浅深主题、宽度与滚动流程，无 QML 警告。
+- 最终 Release 默认图形后端重跑同一组三个界面专项，**5 passed、0 failed、0 skipped，23.448 秒**（含初始化与清理），无 QML 警告。两种预设通过 `run.ps1 -SmokeTest` 更新独立运行目录并启动成功，部署 EXE 与构建产物 SHA-256 一致；日志为 `out/validation/home-reentry/windows-*-run.log`，已目视复核离线首页截图。
+- 测试初次使用 offscreen 平台时，原有 Windows 标题栏命中检查返回 HTNOWHERE；改用 windows 平台验证后通过。该问题不通过修改产品代码或放宽断言处理。报告及构建日志位于 `out/validation/home-reentry/`，对应截图位于 `out/validation/metadata-cache/`。
+- 本轮未执行全量 CTest、静态版构建、真实网络服务、混合 DPI 或性能验收；不将模拟服务器及缓存命中检查描述为整机断网验收。

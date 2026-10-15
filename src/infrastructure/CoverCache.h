@@ -37,6 +37,7 @@ public:
     Q_INVOKABLE QObject* createRequest(QObject* owner);
     void attach(CoverRequest* request);
     void detach(CoverRequest* request);
+    void refresh(CoverRequest* request);
     void reset();
 private:
     struct Entry {
