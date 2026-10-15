@@ -39,6 +39,7 @@ QtObject {
     readonly property int subtitleSize: Math.round(20 * textScale)
     readonly property int comboPopupHeight: Math.round(360 * textScale)
     readonly property int scrollGap: 8
+    readonly property int wheelScrollStep: Math.round(108 * textScale)
     readonly property int scrollEdgeInset: 4
     function scrollInset(thickness, minimum = 0) {
         return Math.ceil(Math.max(minimum, thickness + scrollGap + scrollEdgeInset) / 4) * 4

@@ -97,6 +97,8 @@ Dialog {
             id: detailVerticalBar
             objectName: "animeDetailVerticalScrollBar"
             viewport: detailScroll
+            scrollTarget: detailScroll.contentItem
+            wheelBottom: dialogRoot.footer.y
             Accessible.name: I18n.common.pageScrollBarAccessible
         }
 

@@ -20,6 +20,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QWheelEvent>
+#include <QPointingDevice>
 #include <QUrlQuery>
 #include <QStyleHints>
 #include <QInputMethodEvent>
@@ -46,6 +47,39 @@
 class UiWorkflowTests : public QObject {
     Q_OBJECT
 private:
+    void checkWheelMargins(QQuickWindow* window, QQuickItem* bar, QObject* flick, QObject* outer = nullptr) {
+        QVERIFY(window && bar && flick);
+        auto* region = bar->property("wheelRegion").value<QQuickItem*>(); QVERIFY(region);
+        auto* viewport = bar->property("viewport").value<QQuickItem*>(); QVERIFY(viewport);
+        const auto regionLeft = region->mapToScene(QPointF()).x();
+        const auto regionRight = region->mapToScene(QPointF(region->width(), 0)).x();
+        const auto viewportLeft = viewport->mapToScene(QPointF()).x();
+        const auto viewportRight = viewport->mapToScene(QPointF(viewport->width(), 0)).x();
+        const auto barLeft = bar->mapToScene(QPointF()).x();
+        const auto y = viewport->mapToScene(QPointF(0, std::min(40.0, viewport->height() / 2))).y();
+        QList<qreal> positions{(viewportRight + barLeft) / 2, regionRight - 2};
+        if (viewportLeft > regionLeft + 3) positions.prepend(regionLeft + 2);
+        const auto cursor = QCursor::pos();
+        const auto restore = qScopeGuard([cursor] { QCursor::setPos(cursor); });
+        for (const auto source : {Qt::MouseEventNotSynthesized, Qt::MouseEventSynthesizedBySystem}) {
+            for (const auto x : positions) {
+                bar->setProperty("position", 0.0); QTest::qWait(15);
+                const auto start = flick->property("contentY").toReal();
+                const auto outerStart = outer ? outer->property("contentY").toReal() : 0;
+                const QPointF point(x, y);
+                QCursor::setPos(window->mapToGlobal(point.toPoint())); QTest::mouseMove(window, point.toPoint());
+                QWheelEvent pixels(point, window->mapToGlobal(point.toPoint()), QPoint(0, -17), QPoint(0, 120),
+                    Qt::NoButton, Qt::NoModifier, Qt::ScrollUpdate, false, source);
+                QCoreApplication::sendEvent(window, &pixels);
+                QTRY_COMPARE_WITH_TIMEOUT(flick->property("contentY").toReal(), start + 17, 1500);
+                QWheelEvent angle(point, window->mapToGlobal(point.toPoint()), {}, QPoint(0, -120),
+                    Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                QCoreApplication::sendEvent(window, &angle);
+                QTRY_VERIFY(flick->property("contentY").toReal() > start + 17);
+                if (outer) QCOMPARE(outer->property("contentY").toReal(), outerStart);
+            }
+        }
+    }
     void opacityDrag(bool realSession) {
         QTemporaryDir directory;
         AppController backend(directory.path(), nullptr, [](const QString&) { return true; }, directory.path(),
@@ -1140,8 +1174,10 @@ ApplicationWindow {
         QCOMPARE(qRound(railBar->parentItem()->height() - railBar->y() - railBar->height()), 4);
         QCOMPARE(qRound(railBar->width()), qRound(rail->width()));
         auto* flick = page->property("contentItem").value<QObject*>(); QVERIFY(flick);
-        auto wheel = [&](QPoint angle, Qt::KeyboardModifiers modifiers = Qt::NoModifier, QPoint pixels = {}) {
-            const auto pos = rail->mapToScene(QPointF(rail->width() / 2, rail->height() / 2));
+        auto wheel = [&](QPoint angle, Qt::KeyboardModifiers modifiers = Qt::NoModifier, QPoint pixels = {}, int area = 0) {
+            auto* target = area == 0 ? rail : railBar;
+            const auto pos = area == 2 ? rail->mapToScene(QPointF(rail->width() / 2, rail->height() + 2))
+                : target->mapToScene(QPointF(target->width() / 2, target->height() / 2));
             QWheelEvent event(pos, window->mapToGlobal(pos.toPoint()), pixels, angle, Qt::NoButton, modifiers, Qt::NoScrollPhase, false);
             QCoreApplication::sendEvent(window, &event);
         };
@@ -1158,6 +1194,27 @@ ApplicationWindow {
         flick->setProperty("contentY", 0);
         wheel(QPoint(0, -120), Qt::NoModifier, QPoint(-60, 0)); QTRY_VERIFY(rail->property("contentX").toDouble() > 0);
         QCOMPARE(flick->property("contentY").toDouble(), 0.0);
+        rail->setProperty("contentX", 0);
+        wheel(QPoint(0, -120), Qt::NoModifier, {}, true);
+        QTRY_VERIFY(flick->property("contentY").toDouble() > 0);
+        QCOMPARE(rail->property("contentX").toDouble(), 0.0);
+        flick->setProperty("contentY", 0);
+        wheel(QPoint(0, -120), Qt::ShiftModifier, {}, true);
+        QTRY_VERIFY(rail->property("contentX").toDouble() > 0);
+        QCOMPARE(flick->property("contentY").toDouble(), 0.0);
+        rail->setProperty("contentX", 0);
+        wheel(QPoint(0, -120), Qt::NoModifier, QPoint(-31, 0), true);
+        QTRY_COMPARE(rail->property("contentX").toDouble(), 31.0);
+        wheel(QPoint(-120, 0), Qt::NoModifier, QPoint(0, -41), true);
+        QTRY_COMPARE(flick->property("contentY").toDouble(), 41.0);
+        QCOMPARE(rail->property("contentX").toDouble(), 31.0);
+        flick->setProperty("contentY", 0);
+        wheel({}, Qt::NoModifier, QPoint(-100000, 0), true);
+        QTRY_VERIFY(rail->property("atXEnd").toBool());
+        wheel(QPoint(0, -120), Qt::ShiftModifier, {}, true);
+        QVERIFY(rail->property("atXEnd").toBool());
+        QCOMPARE(flick->property("contentY").toDouble(), 0.0);
+        rail->setProperty("contentX", 0);
         QTRY_VERIFY(coverRequests > 0);
         auto firstCover = [&]() -> QQuickItem* {
             auto* listContent = rail->property("contentItem").value<QQuickItem*>();
@@ -1179,6 +1236,24 @@ ApplicationWindow {
         QCOMPARE(firstCover()->property("source").toUrl(), firstSource);
         QCOMPARE(firstCover()->property("revealProgress").toDouble(), 1.0);
         QTest::qWait(200); QCOMPARE(coverRequests, loadedRequests);
+        // Check the footer after the cover revisit fixture, so rapid input here
+        // cannot cancel its unrelated asynchronous cover prefetch requests.
+        wheel(QPoint(0, -120), Qt::NoModifier, {}, 2);
+        QTRY_VERIFY(flick->property("contentY").toDouble() > 0);
+        QCOMPARE(rail->property("contentX").toDouble(), 0.0);
+        flick->setProperty("contentY", 0);
+        wheel(QPoint(-120, 0), Qt::NoModifier, QPoint(0, -29), 2);
+        QTRY_COMPARE(flick->property("contentY").toDouble(), 29.0);
+        QCOMPARE(rail->property("contentX").toDouble(), 0.0);
+        flick->setProperty("contentY", 0);
+        wheel(QPoint(0, -120), Qt::ShiftModifier, {}, 2);
+        QTRY_VERIFY(rail->property("contentX").toDouble() > 0);
+        QCOMPARE(flick->property("contentY").toDouble(), 0.0);
+        rail->setProperty("contentX", 0);
+        wheel(QPoint(0, -120), Qt::NoModifier, QPoint(-27, 0), 2);
+        QTRY_COMPARE(rail->property("contentX").toDouble(), 27.0);
+        QCOMPARE(flick->property("contentY").toDouble(), 0.0);
+        rail->setProperty("contentX", 0);
         const auto railCursor = QCursor::pos();
         const auto railCursorRestore = qScopeGuard([railCursor] { QCursor::setPos(railCursor); });
         const auto railThumb = railBar->mapToScene(QPointF(
@@ -1192,6 +1267,9 @@ ApplicationWindow {
         window->setProperty("cards", QVariantList{QVariantMap{{"id", 1}, {"title", "Single card"}}});
         QTRY_VERIFY(railBar->property("size").toReal() >= 1);
         QCOMPARE(rail->height(), railHeight);
+        wheel(QPoint(0, -120), Qt::ShiftModifier, {}, true);
+        QCOMPARE(rail->property("contentX").toDouble(), 0.0);
+        QCOMPARE(flick->property("contentY").toDouble(), 0.0);
         metadata.fetchDetail(123); QTRY_VERIFY(!metadata.loadingDetail());
         auto* dialog = window->findChild<QObject*>("testRangeDialog"); QVERIFY(dialog);
         QTRY_VERIFY(dialog->property("opened").toBool());
@@ -1217,6 +1295,22 @@ ApplicationWindow {
         QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, thumb);
         QTest::mouseMove(window, lower, 80); QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, lower);
         QTRY_VERIFY(detailFlick->property("contentY").toDouble() > 0);
+        const auto detailBeforeWheel = detailFlick->property("contentY").toDouble();
+        const auto detailWheelPoint = detailBar->mapToScene(QPointF(detailBar->width() / 2, 40));
+        QWheelEvent detailWheel(detailWheelPoint, window->mapToGlobal(detailWheelPoint.toPoint()),
+            QPoint(0, 23), QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(window, &detailWheel);
+        QTRY_COMPARE(detailFlick->property("contentY").toDouble(), std::max(0.0, detailBeforeWheel - 23));
+        checkWheelMargins(window, detailBar, detailFlick, flick);
+        auto* detailFooter = dialog->property("footer").value<QQuickItem*>(); QVERIFY(detailFooter);
+        const auto detailFooterPoint = detailFooter->mapToScene(QPointF(4, detailFooter->height() / 2));
+        const auto beforeFooterWheel = detailFlick->property("contentY").toReal();
+        const auto outerBeforeFooterWheel = flick->property("contentY").toReal();
+        QWheelEvent footerWheel(detailFooterPoint, window->mapToGlobal(detailFooterPoint.toPoint()), QPoint(0, -17), {},
+            Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(window, &footerWheel);
+        QCOMPARE(detailFlick->property("contentY").toReal(), beforeFooterWheel);
+        QCOMPARE(flick->property("contentY").toReal(), outerBeforeFooterWheel);
         detailFlick->setProperty("contentY", 0);
         auto* next = find(content, "animeEpisodesNext"); QVERIFY(next);
         next->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
@@ -2390,6 +2484,15 @@ ApplicationWindow {
         QWheelEvent wheel(local, window->mapToGlobal(local.toPoint()), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
         QGuiApplication::sendEvent(window, &wheel);
         QTRY_VERIFY(list->property("contentY").toReal() < beforeWheel);
+        const auto beforeBarWheel = list->property("contentY").toReal();
+        const auto barWheelPoint = bar->mapToScene(QPointF(bar->width() / 2, 40));
+        QWheelEvent barWheel(barWheelPoint, window->mapToGlobal(barWheelPoint.toPoint()), QPoint(0, 19), QPoint(0, -120),
+            Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(window, &barWheel);
+        QTRY_COMPARE(list->property("contentY").toReal(), std::max(0.0, beforeBarWheel - 19));
+        const auto selectedBeforeMargins = combo->property("currentIndex").toInt();
+        checkWheelMargins(window, bar, list);
+        QCOMPARE(combo->property("currentIndex").toInt(), selectedBeforeMargins);
         combo->setProperty("model", QVariantList{});
         QTest::qWait(80);
         QTRY_COMPARE(list->property("contentHeight").toReal(), 0.0);
@@ -2397,6 +2500,99 @@ ApplicationWindow {
         QTest::keyClick(window, Qt::Key_Escape);
         QTest::keyClick(window, Qt::Key_Tab);
         QVERIFY(!combo->hasActiveFocus());
+        QCOMPARE(warnings.count(), 0);
+    }
+    void marginWheelCoverageAndLifecycle() {
+        QPointingDevice pad("Margin regression touchpad", 7001, QInputDevice::DeviceType::TouchPad,
+            QPointingDevice::PointerType::Finger, QInputDevice::Capability::Position | QInputDevice::Capability::Scroll
+                | QInputDevice::Capability::PixelScroll, 5, 0);
+        QQmlEngine engine; QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        QQmlComponent component(&engine);
+        component.setData(R"(
+import QtQuick
+import QtQuick.Controls.FluentWinUI3
+import "components"
+ApplicationWindow {
+    id: root; visible: true; width: 640; height: 480
+    property bool overflow: true
+    property bool showBar: true
+    property int childWheels: 0
+    property var testBar: null
+    function rebuild() {
+        if (testBar) testBar.destroy()
+        testBar = showBar ? factory.createObject(region) : null
+    }
+    onShowBarChanged: rebuild()
+    Component.onCompleted: rebuild()
+    Item {
+        id: region; objectName: "marginRegion"; anchors.fill: parent
+        Flickable {
+            id: flick; objectName: "marginFlick"
+            x: 32; y: 24; width: parent.width - 64; height: parent.height - 48
+            contentWidth: width; contentHeight: root.overflow ? height * 4 : height
+            clip: true
+            MouseArea {
+                width: flick.width; height: flick.contentHeight
+                acceptedButtons: Qt.NoButton
+                onWheel: event => { root.childWheels++; event.accepted = true }
+            }
+        }
+    }
+    Component {
+        id: factory
+        AppScrollBar { viewport: flick; wheelRegion: region }
+    }
+})", QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/MarginLifecycleHarness.qml")));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        std::unique_ptr<QObject> root(component.create()); QVERIFY2(root, qPrintable(component.errorString()));
+        auto* window = qobject_cast<QQuickWindow*>(root.get()); QVERIFY(window);
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* flick = window->findChild<QQuickItem*>("marginFlick"); QVERIFY(flick);
+        auto* region = window->findChild<QQuickItem*>("marginRegion"); QVERIFY(region);
+        auto send = [&](QPointF point, QPoint pixels, QPoint angle, Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+                        const QPointingDevice* device = nullptr) {
+            QWheelEvent event(point, window->mapToGlobal(point.toPoint()), pixels, angle, Qt::NoButton, modifiers,
+                Qt::NoScrollPhase, false, device ? Qt::MouseEventSynthesizedBySystem : Qt::MouseEventNotSynthesized,
+                device ? device : QPointingDevice::primaryPointingDevice());
+            QCoreApplication::sendEvent(window, &event);
+        };
+        for (const int width : {360, 640}) {
+            window->resize(width, 480); QTest::qWait(40);
+            const QList<QPointF> points{{8, 120}, {width - 24.0, 120}, {width - 2.0, 120},
+                {width / 2.0, 8}, {width / 2.0, 476}};
+            for (const auto* device : {static_cast<const QPointingDevice*>(nullptr), static_cast<const QPointingDevice*>(&pad)}) {
+                for (const auto point : points) {
+                    flick->setProperty("contentY", 100.0);
+                    send(point, QPoint(0, -17), QPoint(0, 120), Qt::NoModifier, device);
+                    QTRY_COMPARE(flick->property("contentY").toReal(), 117.0);
+                    send(point, {}, QPoint(0, -120), Qt::ShiftModifier, device);
+                    QCOMPARE(flick->property("contentY").toReal(), 117.0);
+                    send(point, QPoint(-31, 0), QPoint(0, -120), Qt::NoModifier, device);
+                    QCOMPARE(flick->property("contentY").toReal(), 117.0);
+                }
+            }
+        }
+        flick->setProperty("contentY", 100.0);
+        const auto childBefore = root->property("childWheels").toInt();
+        send(QPointF(100, 120), QPoint(0, -17), {});
+        QCOMPARE(root->property("childWheels").toInt(), childBefore + 1);
+        QCOMPARE(flick->property("contentY").toReal(), 100.0);
+        root->setProperty("overflow", false); QTest::qWait(40); flick->setProperty("contentY", 0.0);
+        send(QPointF(8, 120), QPoint(0, -17), {}); QCOMPARE(flick->property("contentY").toReal(), 0.0);
+        root->setProperty("overflow", true); QTest::qWait(40);
+        for (int i = 0; i < 4; ++i) {
+            QPointer<QObject> bar = root->property("testBar").value<QObject*>(); QVERIFY(bar);
+            QCOMPARE(region->findChildren<QObject*>("scrollMarginVertical").size(), 1);
+            QCOMPARE(region->findChildren<QObject*>("scrollMarginHorizontal").size(), 1);
+            bar->setProperty("visible", false); flick->setProperty("contentY", 100.0);
+            send(QPointF(8, 120), QPoint(0, -17), {}); QCOMPARE(flick->property("contentY").toReal(), 100.0);
+            root->setProperty("showBar", false); QTRY_VERIFY(bar.isNull());
+            QTRY_COMPARE(region->findChildren<QObject*>("scrollMarginVertical").size(), 0);
+            QTRY_COMPARE(region->findChildren<QObject*>("scrollMarginHorizontal").size(), 0);
+            send(QPointF(8, 120), QPoint(0, -17), {}); QCOMPARE(flick->property("contentY").toReal(), 100.0);
+            root->setProperty("showBar", true); QTest::qWait(20);
+            send(QPointF(8, 120), QPoint(0, -17), {}); QCOMPARE(flick->property("contentY").toReal(), 117.0);
+        }
         QCOMPARE(warnings.count(), 0);
     }
     void globalScrollLayout() {
@@ -2458,6 +2654,40 @@ ApplicationWindow {
             QTest::mouseMove(window, end, 60); QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, end);
             QTRY_VERIFY(flick->property("contentY").toReal() > 0);
         };
+        auto wheelOnBar = [&](QQuickItem* bar, QObject* flick, QObject* outer = nullptr, bool overflowing = true) {
+            bar->setProperty("position", 0.0); QTest::qWait(40);
+            const auto start = flick->property("contentY").toReal();
+            const auto outerStart = outer ? outer->property("contentY").toReal() : 0;
+            const auto point = bar->mapToScene(QPointF(bar->width() / 2,
+                std::min(40.0, bar->height() * bar->property("size").toReal() / 2)));
+            QCursor::setPos(window->mapToGlobal(point.toPoint())); QTest::mouseMove(window, point.toPoint());
+            auto wheel = [&](QPoint pixels, QPoint angle, bool onTrack = false) {
+                const auto target = onTrack ? bar->mapToScene(QPointF(bar->width() / 2, bar->height() * 0.85)) : point;
+                QCursor::setPos(window->mapToGlobal(target.toPoint())); QTest::mouseMove(window, target.toPoint());
+                QWheelEvent event(target, window->mapToGlobal(target.toPoint()), pixels, angle,
+                    Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                QCoreApplication::sendEvent(window, &event);
+            };
+            wheel({}, QPoint(0, -120));
+            if (!overflowing) {
+                QCOMPARE(flick->property("contentY").toReal(), start);
+                if (outer) QCOMPARE(outer->property("contentY").toReal(), outerStart);
+                return;
+            }
+            QTRY_VERIFY(flick->property("contentY").toReal() > start);
+            const auto afterAngle = flick->property("contentY").toReal();
+            wheel(QPoint(0, 17), QPoint(0, -120), true);
+            QTRY_COMPARE(flick->property("contentY").toReal(), afterAngle - 17);
+            wheel(QPoint(0, -100000), {});
+            QTRY_VERIFY(flick->property("atYEnd").toBool());
+            const auto end = flick->property("contentY").toReal();
+            wheel({}, QPoint(0, -120)); QCOMPARE(flick->property("contentY").toReal(), end);
+            wheel(QPoint(0, 100000), {});
+            QTRY_VERIFY(flick->property("atYBeginning").toBool());
+            QCOMPARE(flick->property("contentY").toReal(), start);
+            wheel({}, QPoint(0, 120)); QCOMPARE(flick->property("contentY").toReal(), start);
+            if (outer) QCOMPARE(outer->property("contentY").toReal(), outerStart);
+        };
         for (const auto& theme : {QString("light"), QString("dark")}) {
             QVERIFY(settings->setValue("theme", theme));
             for (const int width : {800, 1080}) {
@@ -2472,6 +2702,10 @@ ApplicationWindow {
                     const auto viewportWidth = page->property("availableWidth").toReal();
                     bar->setProperty("active", true); QTest::qWait(10);
                     QCOMPARE(page->property("availableWidth").toReal(), viewportWidth);
+                    if (index == 3) {
+                        auto* pageFlick = page->property("contentItem").value<QObject*>(); QVERIFY(pageFlick);
+                        checkWheelMargins(window, bar, pageFlick); wheelOnBar(bar, pageFlick);
+                    }
                 }
                 window->setProperty("selectedPage", 1);
                 auto* page = findWindow("playerPage"); QVERIFY(page);
@@ -2487,7 +2721,9 @@ ApplicationWindow {
                 QVERIFY2(cacheBar->mapToScene(QPointF()).y() >= titleBar->height(),
                     qPrintable(QString("cache top: %1; title bar height: %2")
                         .arg(cacheBar->mapToScene(QPointF()).y()).arg(titleBar->height())));
-                drag(cacheBar, cacheList);
+                auto* outerFlick = page->property("contentItem").value<QObject*>(); QVERIFY(outerFlick);
+                checkWheelMargins(window, cacheBar, cacheList, outerFlick);
+                wheelOnBar(cacheBar, cacheList, outerFlick); drag(cacheBar, cacheList);
                 QVERIFY(window->grabWindow().save(output + QString("/cache-%1-%2.png").arg(theme).arg(width)));
                 const auto listWidth = cacheList->width();
                 auto* filter = findWindow("cachedDanmakuFilter"); QVERIFY(filter);
@@ -2495,6 +2731,10 @@ ApplicationWindow {
                 QTRY_COMPARE(cacheList->property("count").toInt(), 1);
                 QTRY_VERIFY(cacheBar->property("size").toReal() >= 1);
                 QCOMPARE(cacheList->width(), listWidth);
+                wheelOnBar(cacheBar, cacheList, outerFlick, false);
+                cacheList->setProperty("topMargin", 12.0); cacheList->setProperty("bottomMargin", 20.0);
+                QTest::qWait(40); wheelOnBar(cacheBar, cacheList, outerFlick);
+                cacheList->setProperty("topMargin", 0.0); cacheList->setProperty("bottomMargin", 0.0);
                 filter->setProperty("text", ""); QTRY_COMPARE(cacheList->property("count").toInt(), 24);
 
                 window->setProperty("selectedPage", 2);
@@ -2502,7 +2742,8 @@ ApplicationWindow {
                 for (int i = 0; i < 80; ++i) logs->append("INFO", QString("日志 %1：用于验证长文字换行和完整滚动条交互区域。").arg(i));
                 auto* logList = findWindow("logList"); QVERIFY(logList);
                 auto* logBar = findWindow("logVerticalScrollBar"); QVERIFY(logBar);
-                QTest::qWait(80); checkBar(logBar); drag(logBar, logList);
+                QTest::qWait(80); checkBar(logBar); checkWheelMargins(window, logBar, logList);
+                wheelOnBar(logBar, logList); drag(logBar, logList);
                 QVERIFY(window->grabWindow().save(output + QString("/logs-%1-%2.png").arg(theme).arg(width)));
                 const auto logWidth = logList->width();
                 logs->clear(); logs->append("INFO", "单条日志");
@@ -2517,7 +2758,19 @@ ApplicationWindow {
                 auto* serverScroll = findWindow("serverScrollView"); QVERIFY(serverScroll);
                 auto* serverBar = findWindow("serverVerticalScrollBar"); QVERIFY(serverBar);
                 auto* serverFlick = serverScroll->property("contentItem").value<QObject*>(); QVERIFY(serverFlick);
-                checkBar(serverBar); drag(serverBar, serverFlick);
+                checkBar(serverBar);
+                checkWheelMargins(window, serverBar, serverFlick, settingsPage->property("contentItem").value<QObject*>());
+                wheelOnBar(serverBar, serverFlick); drag(serverBar, serverFlick);
+                auto* serverFooter = serverDialog->property("footer").value<QQuickItem*>(); QVERIFY(serverFooter);
+                const auto footerPoint = serverFooter->mapToScene(QPointF(4, serverFooter->height() / 2));
+                const auto serverBeforeFooter = serverFlick->property("contentY").toReal();
+                auto* settingsFlick = settingsPage->property("contentItem").value<QObject*>(); QVERIFY(settingsFlick);
+                const auto settingsBeforeFooter = settingsFlick->property("contentY").toReal();
+                QWheelEvent footerEvent(footerPoint, window->mapToGlobal(footerPoint.toPoint()), QPoint(0, -17), {},
+                    Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                QCoreApplication::sendEvent(window, &footerEvent);
+                QCOMPARE(serverFlick->property("contentY").toReal(), serverBeforeFooter);
+                QCOMPARE(settingsFlick->property("contentY").toReal(), settingsBeforeFooter);
                 QVERIFY(window->grabWindow().save(output + QString("/servers-%1-%2.png").arg(theme).arg(width)));
                 QVERIFY(QMetaObject::invokeMethod(serverDialog, "close"));
                 QTRY_VERIFY(!serverDialog->property("visible").toBool());

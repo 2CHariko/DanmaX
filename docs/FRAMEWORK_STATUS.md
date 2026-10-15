@@ -876,3 +876,23 @@ Windows 10/早期 Windows 11、系统透明开关与节能切换、高对比度�
 - 两种配置的 CTest `application_smoke`、`application_image_smoke` 各 **2/2** 通过。界面报告为 `out/build/windows-debug/global-scroll-ui-final.txt`、`global-scroll-titlebar-ui.txt` 与 `out/build/windows-release/global-scroll-ui-scaled.txt`；启动报告为各构建目录的 `global-scroll-smoke.txt`。已目视复核浅深主题的滚动列表、服务弹窗、长下拉及放大文字截图，新增截图在 `out/validation/global-scroll/native/`、`scaled/`，原专项截图沿用各自目录。
 - 两个 `out/run/` 开发目录均通过 `run.ps1 -NoBuild -SmokeTest` 更新及启动，EXE 的 SHA-256 与对应最终构建产物一致；日志在各构建目录的 `global-scroll-run.log`。没有提交 Git 改动或生成正式发布包。
 - 本轮未执行全量 CTest、静态构建或正式发布打包，不新增高对比度、Narrator、真实触控板惯性、混合 DPI 跨屏、DWM 材质或性能实测验收结论；环境缩放不替代跨显示器验收。
+
+## 外置滚动条悬停滚轮修复（2026-10-15）
+
+- 已复现内容区域可滚动、悬停外置滚动条时内容不动的问题。滚动条的附加绑定只同步位置，移到视口外后没有自动把滚轮传给兄弟 Flickable；仅开启官方 ScrollBar 的 wheelEnabled 也不会产生滚动。
+- AppScrollBar 统一增加不接受鼠标按钮的滚轮处理区，明确关联真实 Flickable；详情与服务弹窗显式使用 ScrollView.contentItem。像素增量优先，角度步长与 PageFrame 共用 Ui.wheelScrollStep，按 origin、前后内容边距、内容长度和视口长度限制位置，并停止正在进行的 flick，避免两种驱动争用位置。官方外观、留白、命中尺寸、悬停与拖动保持。
+- 纵向滚动条的目标在上下边界或无溢出时仍接收所属轴向输入，避免缓存列表等内层通道误滚外层页面。横向番剧滚动条显式将普通纵向输入交给页面，横向输入与 Shift＋滚轮控制列表；混合输入保持像素方向优先。
+- 扩充 Qt Test 实际窗口事件回归：覆盖页面、缓存、日志、服务弹窗、详情、下拉滚动条的滑块／轨道滚轮、像素／角度混合、上下边界、无溢出、内容边距、嵌套目标隔离及既有拖动；横向专项覆盖页面转交、Shift、水平像素输入、末端与单卡无溢出。项目 UI 验收约束与设计规范同步补齐该场景。
+- Debug、Release 主程序与界面测试目标构建通过。Windows 默认图形后端运行全局滚动、长下拉、横向滚动／详情分页及原工作流四个专项：Debug **6 passed、0 failed、0 skipped，67.343 秒**，Release 在 1.5× 环境缩放、13.5pt 字体下 **6 passed、0 failed、0 skipped，36.343 秒**（均含初始化／清理）。没有 QML 引擎警告；Release 仍记录本机 MS Sans Serif 的 DirectWrite 字体诊断。
+- 两种配置的 CTest application_smoke、application_image_smoke 各 **2/2** 通过。报告位于 `out/build/windows-debug/scroll-wheel-ui-final.txt`、`out/build/windows-release/scroll-wheel-ui-scaled.txt` 与各构建目录的 `scroll-wheel-smoke.txt`。像素输入采用合成事件验证，不新增真实触控板惯性、混合 DPI 跨屏、高对比度、Narrator 或性能验收结论；本轮未执行全量 CTest、静态构建或正式发布打包。
+- 两个开发运行目录均通过 `run.ps1 -NoBuild -SmokeTest` 更新及启动，EXE 的 SHA-256 与对应最终构建产物一致，日志为各构建目录的 `scroll-wheel-run.log`。本轮修复尚未提交 Git。
+
+## 完整滚动容器留白与输入归属（2026-10-15）
+
+- 补齐上一轮仅覆盖滑块／轨道而遗漏两侧留白的问题：PageFrame 的原 WheelHandler 实际挂在内部 Flickable.contentItem，不能覆盖外侧 padding。保留该内容区处理以维持已有行为，并由 AppScrollBar 显式绑定完整 wheelRegion，为视口外未被子级消费的事件提供兜底。页面覆盖两侧与上下留白，日志覆盖整页及卡片留白，缓存和下拉覆盖列表外的通道，横向番剧列表覆盖底部间隔；详情排除底部动作区，服务弹窗仅覆盖列表高度范围。
+- 兜底使用公开 WheelHandler，接受 Mouse／TouchPad，按实际像素／角度主轴去重并复用既有滚动目标和边界计算。子控件和内容视口保留原生输入优先级，不铺盖交互控件的透明鼠标层，不重复滚动或误滚外层。外部父项上的处理器动态创建并在滚动条销毁时显式释放，隐藏组件不继续响应；未引入依赖或修改业务、时间轴与覆盖层渲染。
+- 新增 marginWheelCoverageAndLifecycle：检查左右、内侧通道、外侧边缘及上下留白，在 360／640 宽度下分别投递鼠标与带 TouchPad 设备标签的合成事件；验证像素优先、错误轴拒绝、子控件只接收一次、无溢出、隐藏停用，以及父容器保留期间四轮创建／销毁后处理器数量归零。生产界面专项另在浅深主题、800／1080 宽度逐点验证页面、缓存、日志、服务、详情及下拉的留白；横向列表增加底部空白输入，弹窗增加底部动作区不滚动自身或背后页面的检查。
+- AGENTS.md 与 UI_DESIGN_SYSTEM.md 已明确完整容器归属、显式事件父项、逐点留白验收和处理器生命周期要求。不能再以“内容区＋滚动条”两个位置的测试代替整个滚动范围。
+- Debug、Release 主程序与界面测试目标构建通过。Windows 默认图形后端运行上述新专项、全局布局、长下拉、横向滚动／详情分页及原工作流五个专项，Debug **7 passed、0 failed、0 skipped，71.343 秒**；Release 在 1.5× 环境缩放、13.5pt 字体下 **7 passed、0 failed、0 skipped，37.951 秒**（均含初始化／清理）。没有 QML 引擎警告；Release 仍记录既有 MS Sans Serif 的 DirectWrite 字体诊断。
+- 两种配置的 CTest application_smoke、application_image_smoke 各 **2/2** 通过。报告为 `out/build/windows-debug/margin-wheel-ui-final.txt`、`out/build/windows-release/margin-wheel-ui-scaled.txt` 及各构建目录的 `margin-wheel-smoke.txt`；截图沿用专项输出目录的 `margin-native/`、`margin-scaled/`。事件模拟覆盖 Mouse／TouchPad 分类及像素路径，不新增真实触控板惯性、混合 DPI 跨屏、高对比度、Narrator、DWM 或性能验收结论；本轮未执行全量 CTest、静态构建或正式发布打包。
+- 两个开发运行目录均通过 `run.ps1 -NoBuild -SmokeTest` 更新及启动，EXE 的 SHA-256 与对应最终构建产物一致，日志为各构建目录的 `margin-wheel-run.log`。修改尚未提交 Git。

@@ -355,6 +355,10 @@ PageFrame {
                     id: serverVerticalBar
                     objectName: "serverVerticalScrollBar"
                     viewport: serverScroll
+                    scrollTarget: serverScroll.contentItem
+                    wheelRegion: serverDialog.contentItem.parent
+                    wheelTop: serverDialog.contentItem.y + serverScroll.y
+                    wheelBottom: wheelTop + serverScroll.height
                     // Keep the bar outside the content ColumnLayout and its viewport.
                     parent: serverDialog.contentItem.parent
                     y: serverDialog.contentItem.y + serverScroll.y

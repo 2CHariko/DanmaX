@@ -115,6 +115,7 @@ ColumnLayout {
                     id: logScrollBar
                     objectName: "logVerticalScrollBar"
                     viewport: list
+                    wheelRegion: page
                     Accessible.name: I18n.logs.scrollBarAccessible
                 }
                 delegate: Item {

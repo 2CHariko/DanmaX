@@ -23,17 +23,21 @@ ScrollView {
         id: verticalBar
         objectName: "pageVerticalScrollBar"
         viewport: page.contentItem
+        wheelRegion: page
         Accessible.name: I18n.common.pageScrollBarAccessible
     }
     function focusHeading() { contentItem.contentY = 0; heading.forceActiveFocus() }
     function scrollVertical(pixels, angle) {
         const flick = page.contentItem
         if (!flick) return
-        const step = pixels || (angle / 120.0) * Math.round(108 * Ui.textScale)
+        const step = pixels || (angle / 120.0) * Ui.wheelScrollStep
         flick.contentY = Math.max(0, Math.min(Math.max(0, flick.contentHeight - page.availableHeight), flick.contentY - step))
     }
     WheelHandler {
         id: wheelHandler
+        // This handler intentionally preserves content-area mouse wheel behavior.
+        // AppScrollBar supplies the separate full-container padding fallback.
+        parent: page.contentItem ? page.contentItem.contentItem : null
         target: null
         acceptedDevices: PointerDevice.Mouse
         orientation: Qt.Vertical

@@ -107,6 +107,7 @@ ColumnLayout {
                 id: hbar
                 objectName: "animeRailHorizontalScrollBar"
                 viewport: cardList
+                verticalWheelHandler: (pixels, angle) => railRoot.verticalScrollRequested(pixels, angle)
                 Accessible.name: I18n.common.railScrollBarAccessible
             }
 
