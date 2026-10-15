@@ -54,8 +54,11 @@ private:
         bool active = true;
         bool finished = false;
         bool downloading = false;
+        quint64 lastUse{};
+        qint64 retainedBytes{};
     };
     void pins();
+    void trimIdle();
     void setLoading(const std::shared_ptr<Entry>& entry, bool loading);
     void enqueue(const std::shared_ptr<Entry>& entry);
     void pump();
@@ -69,5 +72,6 @@ private:
     QHash<QString, QDateTime> failures_;
     QList<QPointer<CoverRequest>> requests_;
     int active_ = 0;
+    quint64 useCounter_{};
     int timeoutMs_;
 };

@@ -23,6 +23,7 @@ struct Setting {
 };
 const QList<Setting>& schema() {
     static const QList<Setting> fields{
+        {"Home", "homeShowChineseAnime", false, "首页显示国漫：true=显示，false=隐藏已识别的国漫，默认：false。仅影响首页推荐、追番周历与高分榜，不影响搜索与本地缓存；地区未知或冲突时保留。"},
         {"Online", "danmakuServers", QStringList{"https://danmaku-api.152468.xyz"},
          "有序兼容服务地址列表，使用 JSON 数组字符串；空数组禁用在线服务。\n默认：https://danmaku-api.152468.xyz。失败或无结果时顺序回退，共享弹弹play ID。\n支持 http/https 和路径前缀，不包含 /api/v2、查询参数或账号密码。旧 danmakuServer 不读取。"},
         {"Appearance", "theme", "system",

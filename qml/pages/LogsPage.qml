@@ -9,7 +9,8 @@ import "../i18n"
 ColumnLayout {
     id: page
     required property QtObject backend
-    readonly property bool compact: width < Ui.expandedNavigationWidth
+    readonly property real contentInset: Ui.scrollInset(logScrollBar.implicitWidth,
+        Ui.pageMargin(Window.window ? Window.window.width : width))
     readonly property int matchingCount: {
         const revision = backend.logs.count
         return backend.logs.countForLevel(filter.currentIndex === 0 ? "" : filter.currentText)
@@ -19,6 +20,8 @@ ColumnLayout {
 
     Label {
         id: heading
+        Layout.leftMargin: page.contentInset
+        Layout.rightMargin: page.contentInset
         objectName: "pageHeading"
         text: I18n.logs.title
         font.pixelSize: Ui.titleSize
@@ -30,7 +33,8 @@ ColumnLayout {
     // 顶部过滤器与操作工具栏
     ColumnLayout {
         Layout.fillWidth: true
-        Layout.rightMargin: page.compact ? 16 : Ui.pagePadding
+        Layout.leftMargin: page.contentInset
+        Layout.rightMargin: page.contentInset
         spacing: 8
 
         GridLayout {
@@ -69,9 +73,13 @@ ColumnLayout {
 
     // 主日志列表容器（采用全站统一 Fluent 卡片规范，充满可用宽度并保持 32px 对称留白）
     Control {
+        id: logPanel
+        objectName: "logPanel"
+        readonly property real contentInset: Ui.scrollInset(logScrollBar.implicitWidth, 16)
         Layout.fillWidth: true
         Layout.fillHeight: true
-        Layout.rightMargin: page.compact ? 16 : Ui.pagePadding
+        Layout.leftMargin: page.contentInset
+        Layout.rightMargin: page.contentInset
         Layout.bottomMargin: 16
 
         background: Rectangle {
@@ -99,12 +107,14 @@ ColumnLayout {
             ListView {
                 id: list
                 anchors.fill: parent
-                anchors.margins: 16
-                anchors.rightMargin: Ui.scrollGap
+                anchors.margins: logPanel.contentInset
+                objectName: "logList"
                 clip: true
                 model: page.backend.logs
-                ScrollBar.vertical: ScrollBar {
+                ScrollBar.vertical: AppScrollBar {
                     id: logScrollBar
+                    objectName: "logVerticalScrollBar"
+                    viewport: list
                     Accessible.name: I18n.logs.scrollBarAccessible
                 }
                 delegate: Item {
@@ -112,7 +122,7 @@ ColumnLayout {
                     required property string time
                     required property string level
                     required property string message
-                    width: Math.max(0, list.width - logScrollBar.width - Ui.scrollGap)
+                    width: list.width
                     readonly property bool matched: filter.currentIndex === 0 || level === filter.currentText
                     visible: matched
                     height: matched ? line.implicitHeight + 16 : 0

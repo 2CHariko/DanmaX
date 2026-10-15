@@ -39,6 +39,13 @@ QtObject {
     readonly property int subtitleSize: Math.round(20 * textScale)
     readonly property int comboPopupHeight: Math.round(360 * textScale)
     readonly property int scrollGap: 8
+    readonly property int scrollEdgeInset: 4
+    function scrollInset(thickness, minimum = 0) {
+        return Math.ceil(Math.max(minimum, thickness + scrollGap + scrollEdgeInset) / 4) * 4
+    }
+    function pageMargin(windowWidth) {
+        return windowWidth < expandedNavigationWidth ? pageMarginNarrow : pageMarginWide
+    }
     readonly property int expandedNavigationWidth: 1008
     readonly property int minimalNavigationWidth: 640
     readonly property int settingsWidth: 1040

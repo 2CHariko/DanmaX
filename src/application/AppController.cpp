@@ -205,6 +205,7 @@ void AppController::clearError() {
 void AppController::configure() {
     const auto s = settings_.values();
     library_.setServers(s["danmakuServers"].toStringList());
+    metadata_.setShowChineseAnime(s["homeShowChineseAnime"].toBool());
     logs_.configure(s["logToFile"].toBool(), s["logLevel"].toString());
     if (lastSettings_.value("targetSession") != s["targetSession"]) {
         mediaGeneration_ = monitor_.select(s["targetSession"].toString(), true);

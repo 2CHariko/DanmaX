@@ -21,6 +21,8 @@ AnimeMetadataService::AnimeMetadataService(QString root, QObject* parent, int ti
 AnimeMetadataService::AnimeMetadataService(QString root, MetadataCache::Policy policy, QObject* parent, int timeoutMs)
     : QObject(parent), cache_(std::move(root), std::move(policy)), network_(this), timeoutMs_(timeoutMs) {
     covers_ = new CoverCache(&cache_, this, timeoutMs);
+    homePump_.setSingleShot(true);
+    connect(&homePump_, &QTimer::timeout, this, &AnimeMetadataService::pumpHome);
     worker_.setMaxThreadCount(1);
     todayWeekday_ = cache_.now().toLocalTime().date().dayOfWeek();
     refreshTimer_.setInterval(60000);
@@ -37,21 +39,25 @@ AnimeMetadataService::~AnimeMetadataService() {
 QObject* AnimeMetadataService::coverCache() { return covers_; }
 QString AnimeMetadataService::resourceKey(Kind kind, const QString& identity) const {
     return baseUrl_ + '|' + QString::number(static_cast<int>(kind)) + '|'
-        + (kind == Kind::Search ? QStringLiteral("/v0/search/subjects?limit=20&offset=0|") : QString()) + identity;
+        + (kind == Kind::Search ? QStringLiteral("/v0/search/subjects?limit=20&offset=0|")
+           : kind == Kind::Episodes ? QStringLiteral("episodes-page-v1|") : QString()) + identity;
 }
 void AnimeMetadataService::setBaseUrl(const QString& url) {
     auto normalized = url;
     while (normalized.endsWith('/')) normalized.chop(1);
     if (normalized == baseUrl_) return;
     cancelAll(); baseUrl_ = normalized; failedAt_.clear();
+    homeInfo_.clear();
     weeklyCalendar_.clear(); airingToday_.clear(); topRated_.clear(); heroAnime_.clear();
     loading_ = false; error_.clear(); calendarStale_ = false; calendarDate_ = {};
     calendarFetchedAt_ = {}; heroFetchedAt_ = {};
     clearSearch(); clearDetail();
     cache_.setPins("calendar", {}); cache_.setPins("hero", {});
+    rebuildHome();
     emit calendarChanged(); emit stateChanged();
 }
 void AnimeMetadataService::cancelAll() {
+    cancelHome();
     refreshTimer_.stop();
     for (const auto& job : std::as_const(jobs_)) {
         job->active = false;
@@ -132,7 +138,8 @@ void AnimeMetadataService::network(const std::shared_ptr<Job>& job) {
     if (job->kind == Kind::Calendar) path = "/calendar";
     else if (job->kind == Kind::Subject) path = "/v0/subjects/" + job->identity;
     else if (job->kind == Kind::Search) path = "/v0/search/subjects?limit=20&offset=0";
-    else path = "/v0/episodes?subject_id=" + job->identity + "&type=0&limit=100&offset=" + QString::number(job->episodes.size());
+    else path = "/v0/episodes?subject_id=" + job->identity.section(':', 0, 0)
+        + "&type=0&limit=100&offset=" + QString::number(job->identity.section(':', 1, 1).toInt() * 100);
     QNetworkRequest req(QUrl(baseUrl_ + path));
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral(DANMAX_HTTP_USER_AGENT));
     req.setRawHeader("Accept", "application/json");
@@ -166,38 +173,9 @@ void AnimeMetadataService::network(const std::shared_ptr<Job>& job) {
 void AnimeMetadataService::parseNetwork(const std::shared_ptr<Job>& job, QByteArray body) {
     const auto weekday = cache_.now().toLocalTime().date().dayOfWeek();
     worker_.start([this, job, body = std::move(body), weekday]() mutable {
-        auto result = parseResource(job->kind, job->identity, body, weekday, false);
-        bool more = false;
-        if (job->kind == Kind::Episodes && result.available) {
-            const auto page = QJsonDocument::fromJson(body).object();
-            const auto items = page.value("data").toArray();
-            const int total = page.value("total").toInt();
-            if ((job->expectedTotal >= 0 && total != job->expectedTotal) || items.size() > 100
-                || job->episodes.size() + items.size() > total || (items.isEmpty() && job->episodes.size() < total)) result.available = false;
-            job->expectedTotal = total;
-            for (const auto& item : items) {
-                const auto id = item.toObject().value("id").toInteger();
-                if (job->episodeIds.contains(id)) result.available = false;
-                job->episodeIds.insert(id);
-            }
-            if (result.available) {
-                for (const auto& item : items) job->episodes.append(item);
-                more = job->episodes.size() < total;
-                body = QJsonDocument(QJsonObject{{"data", job->episodes}, {"total", more ? static_cast<int>(job->episodes.size()) : total}}).toJson(QJsonDocument::Compact);
-                result = parseResource(Kind::Episodes, job->identity, body, weekday);
-            }
-        }
-        QMetaObject::invokeMethod(this, [this, job, body = std::move(body), result = std::move(result), more]() mutable {
+        auto result = parseResource(job->kind, job->identity, body, weekday);
+        QMetaObject::invokeMethod(this, [this, job, body = std::move(body), result = std::move(result)]() mutable {
             if (!job->active) return;
-            if (more && result.available) {
-                // Partial pages are session-only and cannot replace a cached complete list.
-                if (!job->cached.available) {
-                    result.refreshing = true;
-                    const auto watches = job->watches;
-                    for (const auto& watch : watches) watch.callback(result);
-                }
-                network(job); return;
-            }
             if (!result.available) {
                 failedAt_[job->key] = cache_.now();
                 auto failure = job->cached; failure.refreshing = false;
@@ -211,7 +189,7 @@ void AnimeMetadataService::parseNetwork(const std::shared_ptr<Job>& job, QByteAr
         }, Qt::QueuedConnection);
     });
 }
-AnimeMetadataService::Result AnimeMetadataService::parseResource(Kind kind, const QString& identity, const QByteArray& data, int weekday, bool completeEpisodes) {
+AnimeMetadataService::Result AnimeMetadataService::parseResource(Kind kind, const QString& identity, const QByteArray& data, int weekday) {
     Result result;
     if (data.size() > maxResponse) return result;
     if (kind == Kind::Calendar) {
@@ -229,7 +207,10 @@ AnimeMetadataService::Result AnimeMetadataService::parseResource(Kind kind, cons
         if (!doc.isObject() || !obj.value("data").isArray() || !totalValue.isDouble() || totalValue.toDouble() < 0
             || totalValue.toDouble() != std::floor(totalValue.toDouble()) || totalValue.toDouble() > 5000) return result;
         const auto values = obj.value("data").toArray();
-        if (values.size() > totalValue.toInt() || (completeEpisodes && values.size() != totalValue.toInt())) return result;
+        const int offset = identity.section(':', 1, 1).toInt() * 100;
+        if ((obj.contains("offset") && obj.value("offset").toDouble(-1) != offset)
+            || (obj.contains("limit") && obj.value("limit").toDouble(-1) != 100)) return result;
+        if (values.size() != std::clamp(totalValue.toInt() - offset, 0, 100)) return result;
         QVariantList episodes; QSet<qint64> ids;
         for (const auto& value : values) {
             const auto ep = value.toObject();
@@ -242,7 +223,7 @@ AnimeMetadataService::Result AnimeMetadataService::parseResource(Kind kind, cons
             if (title.isEmpty()) title = QStringLiteral("第 %1 话").arg(sort);
             episodes.append(QVariantMap{{"id", id}, {"sort", sort}, {"title", title}, {"airDate", ep.value("airdate").toString()}});
         }
-        result.value = episodes;
+        result.value = QVariantMap{{"episodes", episodes}, {"total", totalValue.toInt()}};
     } else {
         const auto doc = QJsonDocument::fromJson(data);
         const auto values = doc.object().value("data");
@@ -284,6 +265,98 @@ void AnimeMetadataService::applyCalendar(QVariantMap value) {
     calendarDate_ = cache_.now().toLocalTime().date(); todayWeekday_ = calendarDate_.dayOfWeek();
     if (weeklyCalendar_ != oldWeekly || airingToday_ != oldToday || topRated_ != oldTop
         || heroAnime_ != oldHero || todayWeekday_ != oldWeekday) emit calendarChanged();
+    prepareHome();
+}
+
+void AnimeMetadataService::cancelHome() {
+    ++homeGeneration_;
+    homePump_.stop(); homeQueue_.clear();
+    const auto active = homeActive_; homeActive_.clear();
+    for (const auto id : active) unsubscribe("home:" + QString::number(id));
+    cache_.setPins("home", {});
+}
+void AnimeMetadataService::setShowChineseAnime(bool show) {
+    if (homeEnabled_ && showChineseAnime_ == show) return;
+    homeEnabled_ = true; showChineseAnime_ = show;
+    prepareHome();
+}
+void AnimeMetadataService::prepareHome() {
+    cancelHome();
+    QSet<qint64> ids;
+    auto append = [&](const QVariantList& items) {
+        for (const auto& item : items) {
+            const auto id = item.toMap().value("id").toLongLong();
+            if (id <= 0 || ids.contains(id)) continue;
+            ids.insert(id);
+            const auto info = homeInfo_.value(id);
+            if (homeEnabled_ && !showChineseAnime_ && !clearing_
+                && !cache_.fresh({.fetchedAt = info.fetchedAt, .valid = info.fetchedAt.isValid()}, info.available ? 86400 : 300))
+                homeQueue_.append(id);
+        }
+    };
+    append(airingToday_); append(topRated_);
+    for (const auto& day : weeklyCalendar_) append(day.toMap().value("items").toList());
+    homeInfo_.removeIf([&](auto it) { return !ids.contains(it.key()); });
+    rebuildHome();
+    if (!homeQueue_.isEmpty()) homePump_.start();
+}
+void AnimeMetadataService::pumpHome() {
+    if (clearing_ || !homeEnabled_ || showChineseAnime_) return;
+    const auto gen = homeGeneration_;
+    while (homeActive_.size() < 3 && !homeQueue_.isEmpty()) {
+        const auto id = homeQueue_.takeFirst();
+        homeActive_.insert(id);
+        request(Kind::Subject, QString::number(id), "home:" + QString::number(id), false,
+            [this, gen, id](Result result) {
+                if (gen != homeGeneration_) return;
+                if (result.available) homeInfo_[id] = {result.value.toMap(), result.fetchedAt, true};
+                if (!result.refreshing) {
+                    if (!result.available && !homeInfo_.contains(id)) homeInfo_[id] = {{}, cache_.now(), false};
+                    homeActive_.remove(id);
+                    homePump_.start();
+                }
+                rebuildHome();
+            });
+    }
+    QSet<QString> pins;
+    for (auto id : homeActive_) pins.insert(resourceKey(Kind::Subject, QString::number(id)));
+    cache_.setPins("home", pins);
+    rebuildHome();
+}
+void AnimeMetadataService::rebuildHome() {
+    QVariantList weekly, today, all, top;
+    QSet<qint64> seen;
+    for (const auto& entry : weeklyCalendar_) {
+        auto day = entry.toMap(); QVariantList items;
+        for (const auto& value : day.value("items").toList()) {
+            auto item = value.toMap(); const auto id = item.value("id").toLongLong();
+            const auto info = homeInfo_.constFind(id);
+            if (homeEnabled_ && !showChineseAnime_
+                && (info == homeInfo_.cend() || info->subject.value("region").toString() == "china")) continue;
+            if (info != homeInfo_.cend() && info->available) {
+                item["summary"] = info->subject.value("summary");
+                item["tags"] = info->subject.value("tags");
+            } else if (id == heroAnime_.value("id").toLongLong()) {
+                item["summary"] = heroAnime_.value("summary"); item["tags"] = heroAnime_.value("tags");
+            }
+            items.append(item);
+            if (!seen.contains(id)) { all.append(item); seen.insert(id); }
+        }
+        if (day.value("weekdayId").toInt() == todayWeekday_) today = items;
+        day["items"] = items; weekly.append(day);
+    }
+    const auto byScore = [](const QVariant& a, const QVariant& b) {
+        return a.toMap().value("rawScore").toDouble() > b.toMap().value("rawScore").toDouble();
+    };
+    std::stable_sort(all.begin(), all.end(), byScore);
+    for (const auto& item : all) {
+        if (top.size() == 20) break;
+        if (item.toMap().value("rawScore").toDouble() > 0) top.append(item);
+    }
+    std::stable_sort(today.begin(), today.end(), byScore);
+    homeHeroAnime_ = !today.isEmpty() ? today.first().toMap() : !top.isEmpty() ? top.first().toMap() : QVariantMap{};
+    homeWeeklyCalendar_ = weekly; homeTopRated_ = top;
+    emit homeChanged();
 }
 void AnimeMetadataService::refreshCalendar(bool force) {
     if (clearing_ || (loading_ && !force)) return;
@@ -330,12 +403,15 @@ void AnimeMetadataService::fetchHeroDetails(bool force) {
         heroFetchedAt_ = result.fetchedAt;
         heroAnime_["summary"] = subject.value("summary"); heroAnime_["tags"] = subject.value("tags");
         if (heroAnime_ != previous) emit calendarChanged();
+        rebuildHome();
     });
 }
 void AnimeMetadataService::clearDetail() {
-    ++detailGeneration_; unsubscribe("detail"); cache_.setPins("detail", {});
+    ++detailGeneration_; ++episodeGeneration_; unsubscribe("detail"); unsubscribe("episodes"); cache_.setPins("detail", {});
     detailId_ = 0; loadingDetail_ = detailSubjectLoading_ = detailEpisodesLoading_ = false;
     episodesAvailable_ = false;
+    episodePage_ = episodeTotal_ = 0;
+    episodeTotalFetchedAt_ = {};
     detailStale_ = detailSubjectStale_ = detailEpisodesStale_ = false;
     detailError_.clear(); subjectError_.clear(); episodesError_.clear(); detailSubject_.clear(); detailEpisodes_.clear(); currentDetail_.clear(); emit detailChanged();
 }
@@ -351,18 +427,42 @@ void AnimeMetadataService::fetchDetail(qint64 id, bool force) {
     if (id <= 0 || clearing_) return;
     if (id != detailId_) clearDetail(); else { ++detailGeneration_; unsubscribe("detail"); }
     detailId_ = id; const auto gen = detailGeneration_;
-    detailSubjectLoading_ = detailEpisodesLoading_ = true; subjectError_.clear(); episodesError_.clear(); updateDetail();
+    detailSubjectLoading_ = true; subjectError_.clear(); updateDetail();
     const auto identity = QString::number(id);
-    cache_.setPins("detail", {resourceKey(Kind::Subject, identity), resourceKey(Kind::Episodes, identity)});
     request(Kind::Subject, identity, "detail", force, [this, gen](Result result) {
         if (gen != detailGeneration_) return;
         detailSubjectLoading_ = result.refreshing; detailSubjectStale_ = result.stale; subjectError_ = result.error;
         if (result.available) detailSubject_ = result.value.toMap(); updateDetail();
     });
-    request(Kind::Episodes, identity, "detail", force, [this, gen](Result result) {
-        if (gen != detailGeneration_) return;
+    fetchEpisodePage(episodePage_, force);
+}
+void AnimeMetadataService::fetchEpisodePage(int page, bool force) {
+    if (detailId_ <= 0 || clearing_ || page < 0 || page >= episodePageCount()) return;
+    const bool changed = page != episodePage_;
+    ++episodeGeneration_; unsubscribe("episodes");
+    const auto gen = episodeGeneration_;
+    episodePage_ = page;
+    if (changed) { detailEpisodes_.clear(); episodesAvailable_ = false; }
+    detailEpisodesLoading_ = true; detailEpisodesStale_ = false; episodesError_.clear(); updateDetail();
+    const auto identity = QString::number(detailId_) + ':' + QString::number(page);
+    cache_.setPins("detail", {resourceKey(Kind::Subject, QString::number(detailId_)), resourceKey(Kind::Episodes, identity)});
+    request(Kind::Episodes, identity, "episodes", force, [this, gen, force](Result result) {
+        if (gen != episodeGeneration_) return;
         detailEpisodesLoading_ = result.refreshing; detailEpisodesStale_ = result.stale; episodesError_ = result.error;
-        if (result.available) { detailEpisodes_ = result.value.toList(); episodesAvailable_ = true; }
+        if (result.available) {
+            const auto value = result.value.toMap();
+            // A cached older page must not undo a newer total learned on another page.
+            auto timestamp = result.fetchedAt;
+            if (timestamp > cache_.now()) timestamp = {};
+            if (!episodeTotalFetchedAt_.isValid() || (timestamp.isValid() && timestamp >= episodeTotalFetchedAt_)) {
+                episodeTotal_ = value.value("total").toInt(); episodeTotalFetchedAt_ = timestamp;
+            }
+            if (episodePage_ >= episodePageCount()) { fetchEpisodePage(episodePageCount() - 1, true); return; }
+            const auto episodes = value.value("episodes").toList();
+            const int expected = std::clamp(episodeTotal_ - episodePage_ * 100, 0, 100);
+            detailEpisodes_ = episodes.mid(0, expected); episodesAvailable_ = true;
+            if (episodes.size() != expected && !force && !result.refreshing) { fetchEpisodePage(episodePage_, true); return; }
+        }
         updateDetail();
     });
 }
@@ -392,6 +492,7 @@ void AnimeMetadataService::clearMetadataCache() {
     if (clearing_) return;
     clearing_ = true; cacheCleared_ = false; cacheError_.clear(); cancelAll(); failedAt_.clear(); covers_->reset();
     clearSearch(); clearDetail(); weeklyCalendar_.clear(); airingToday_.clear(); topRated_.clear(); heroAnime_.clear();
+    homeInfo_.clear(); rebuildHome();
     calendarDate_ = {}; loading_ = calendarStale_ = false; error_.clear();
     calendarFetchedAt_ = {}; heroFetchedAt_ = {};
     cache_.setPins("calendar", {}); cache_.setPins("hero", {});
@@ -529,12 +630,30 @@ QVariantMap AnimeMetadataService::parseSubjectDetail(
     const double score = ratingObj.value(QStringLiteral("score")).toDouble();
     const int total = ratingObj.value(QStringLiteral("total")).toInt();
 
-    QStringList tags;
+    QStringList metaTags, userTags;
+    for (const auto& value : obj.value("meta_tags").toArray()) {
+        const auto tag = value.toString().trimmed();
+        if (!tag.isEmpty() && !metaTags.contains(tag)) metaTags.append(tag);
+    }
     for (const auto& tagVal : obj.value(QStringLiteral("tags")).toArray()) {
         const auto tagObj = tagVal.toObject();
         const QString tag = tagObj.value(QStringLiteral("name")).toString().trimmed();
-        if (!tag.isEmpty() && tags.size() < 6) tags.append(tag);
+        if (!tag.isEmpty() && !userTags.contains(tag)) userTags.append(tag);
     }
+    const auto classify = [](const QStringList& values) {
+        QSet<QString> regions;
+        for (const auto& tag : values) {
+            if (tag.contains("合拍") || tag == "中日合作") return QString("unknown");
+            if (QStringList{"中国", "中国大陆", "国产", "国漫", "国创", "国产动画"}.contains(tag)) regions.insert("china");
+            else if (QStringList{"日本", "日漫", "日本动画"}.contains(tag)) regions.insert("japan");
+            else if (QStringList{"美国", "英国", "法国", "韩国", "加拿大", "德国", "俄罗斯", "中国香港", "中国台湾", "香港", "台湾"}.contains(tag)) regions.insert("other");
+        }
+        return regions.isEmpty() ? QString{} : regions.size() == 1 ? *regions.cbegin() : QString("unknown");
+    };
+    auto region = classify(metaTags);
+    if (region.isEmpty()) region = classify(userTags);
+    QStringList tags = metaTags;
+    for (const auto& tag : userTags) if (!tags.contains(tag)) tags.append(tag);
 
     res[QStringLiteral("id")] = id;
     res[QStringLiteral("title")] = nameCn;
@@ -547,6 +666,9 @@ QVariantMap AnimeMetadataService::parseSubjectDetail(
     res[QStringLiteral("score")] = score > 0.0 ? QString::number(score, 'f', 1) : QString();
     res[QStringLiteral("ratingCount")] = total;
     res[QStringLiteral("tags")] = tags;
+    res["metaTags"] = metaTags;
+    res["userTags"] = userTags;
+    res["region"] = region.isEmpty() ? "unknown" : region;
 
     // Episodes
     QVariantList epsList;

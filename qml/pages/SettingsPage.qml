@@ -37,6 +37,20 @@ PageFrame {
     }
 
     SettingsSection {
+        title: I18n.settings.homeSection; Layout.fillWidth: true
+        SettingsRow {
+            title: I18n.settings.homeShowChineseAnimeTitle
+            description: I18n.settings.homeShowChineseAnimeDesc
+            Switch {
+                objectName: "homeShowChineseAnimeSwitch"
+                checked: page.values.homeShowChineseAnime
+                Accessible.name: I18n.settings.homeShowChineseAnimeTitle
+                onToggled: page.put("homeShowChineseAnime", checked)
+            }
+        }
+    }
+
+    SettingsSection {
         title: I18n.settings.styleSection; Layout.fillWidth: true
         SettingsRow {
             title: I18n.settings.fontFamilyTitle
@@ -280,7 +294,10 @@ PageFrame {
         anchors.centerIn: parent
         modal: true
         width: Math.min(page.width - 32, 540)
+        height: Math.min(implicitHeight, Math.max(0, page.height - 2 * Ui.scrollGap))
         title: I18n.settings.serverDialogTitle
+        leftPadding: Ui.scrollInset(serverVerticalBar.implicitWidth, padding)
+        rightPadding: leftPadding
         closePolicy: Popup.CloseOnEscape
         standardButtons: Dialog.NoButton
         onRejected: serverEditor.reload()
@@ -325,11 +342,24 @@ PageFrame {
 
             ScrollView {
                 id: serverScroll
+                objectName: "serverScrollView"
                 Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumHeight: 0
                 Layout.maximumHeight: 280
                 contentWidth: availableWidth
                 clip: true
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                padding: 0
+                ScrollBar.vertical: AppScrollBar {
+                    id: serverVerticalBar
+                    objectName: "serverVerticalScrollBar"
+                    viewport: serverScroll
+                    // Keep the bar outside the content ColumnLayout and its viewport.
+                    parent: serverDialog.contentItem.parent
+                    y: serverDialog.contentItem.y + serverScroll.y
+                    Accessible.name: I18n.common.optionsScrollBarAccessible
+                }
 
                 ColumnLayout {
                     width: serverScroll.availableWidth

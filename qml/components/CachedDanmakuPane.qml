@@ -23,6 +23,7 @@ ColumnLayout {
 
         TextField {
             id: filter
+            objectName: "cachedDanmakuFilter"
             Layout.fillWidth: true
             placeholderText: I18n.cache.filterPlaceholder
             Accessible.name: I18n.cache.filterAccessible
@@ -96,120 +97,126 @@ ColumnLayout {
         onContentReady: cacheReveal.restart()
     }
     ContentReveal { id: cacheReveal; target: cachedList }
-    ListView {
-        id: cachedList
-        objectName: "cachedDanmakuList"
+    Item {
         Layout.fillWidth: true
-        Layout.preferredHeight: pane.filteredEntries.length > 0 ? Math.min(320 * Ui.textScale, contentHeight) : 0
-        clip: true
-        spacing: 6
-        model: pane.filteredEntries
-        keyNavigationEnabled: true
-        boundsBehavior: Flickable.StopAtBounds
+        Layout.preferredHeight: pane.filteredEntries.length > 0 ? Math.min(320 * Ui.textScale, cachedList.contentHeight) : 0
+        ListView {
+            id: cachedList
+            objectName: "cachedDanmakuList"
+            anchors.fill: parent
+            anchors.rightMargin: Ui.scrollInset(cacheScrollBar.implicitWidth)
+            clip: true
+            spacing: 6
+            model: pane.filteredEntries
+            keyNavigationEnabled: true
+            boundsBehavior: Flickable.StopAtBounds
 
-        ScrollBar.vertical: ScrollBar {
-            id: cacheScrollBar
-            Accessible.name: I18n.cache.scrollBarAccessible
-        }
-
-        delegate: Control {
-            id: itemDelegate
-            required property var modelData
-            required property int index
-            width: Math.max(0, cachedList.width - (cacheScrollBar.visible ? cacheScrollBar.width + Ui.scrollGap : 0))
-            leftPadding: Ui.cardPaddingX
-            rightPadding: Ui.cardPaddingX
-            topPadding: 10
-            bottomPadding: 10
-
-            background: Rectangle {
-                radius: Ui.cardRadius
-                color: itemDelegate.hovered ? Ui.cardBackgroundHover : Ui.cardBackground
-                border.width: 1
-                border.color: Ui.cardBorder
-                Behavior on color { ColorAnimation { duration: 100 } }
+            ScrollBar.vertical: AppScrollBar {
+                id: cacheScrollBar
+                objectName: "cacheVerticalScrollBar"
+                viewport: cachedList
+                Accessible.name: I18n.cache.scrollBarAccessible
             }
 
-            contentItem: RowLayout {
-                spacing: 12
+            delegate: Control {
+                id: itemDelegate
+                required property var modelData
+                required property int index
+                width: cachedList.width
+                leftPadding: Ui.cardPaddingX
+                rightPadding: Ui.cardPaddingX
+                topPadding: 10
+                bottomPadding: 10
 
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 4
+                background: Rectangle {
+                    radius: Ui.cardRadius
+                    color: itemDelegate.hovered ? Ui.cardBackgroundHover : Ui.cardBackground
+                    border.width: 1
+                    border.color: Ui.cardBorder
+                    Behavior on color { ColorAnimation { duration: 100 } }
+                }
 
-                    Label {
-                        text: itemDelegate.modelData.animeTitle + " · " + itemDelegate.modelData.episodeTitle
-                        font.weight: Font.DemiBold
-                        font.pixelSize: Ui.bodySize
-                        color: Ui.textColor
-                        wrapMode: Text.WordWrap
+                contentItem: RowLayout {
+                    spacing: 12
+
+                    ColumnLayout {
                         Layout.fillWidth: true
+                        spacing: 4
+
+                        Label {
+                            text: itemDelegate.modelData.animeTitle + " · " + itemDelegate.modelData.episodeTitle
+                            font.weight: Font.DemiBold
+                            font.pixelSize: Ui.bodySize
+                            color: Ui.textColor
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                        }
+
+                        RowLayout {
+                            spacing: 8
+
+                            Rectangle {
+                                radius: 9
+                                implicitHeight: 18
+                                implicitWidth: countBadge.implicitWidth + 12
+                                color: Ui.dark ? Qt.rgba(1, 1, 1, 0.06) : Qt.rgba(0, 0, 0, 0.05)
+                                border.width: 1
+                                border.color: Ui.cardBorder
+
+                                Label {
+                                    id: countBadge
+                                    anchors.centerIn: parent
+                                    text: I18n.format(I18n.cache.itemCountFormat, itemDelegate.modelData.count || 0)
+                                    font.pixelSize: Ui.captionSize - 1
+                                    color: Ui.secondaryText
+                                }
+                            }
+
+                            Label {
+                                text: (itemDelegate.modelData.server || I18n.cache.unknownServer) +
+                                      (itemDelegate.modelData.downloadedAt ? " · " + new Date(itemDelegate.modelData.downloadedAt).toLocaleString(Qt.locale(), Locale.ShortFormat) : "")
+                                font.pixelSize: Ui.captionSize
+                                color: Ui.secondaryText
+                                elide: Text.ElideMiddle
+                                Layout.fillWidth: true
+                            }
+                        }
+
+                        Label {
+                            visible: !itemDelegate.modelData.valid
+                            text: itemDelegate.modelData.error || I18n.cache.invalidHint
+                            font.pixelSize: Ui.captionSize
+                            color: Ui.dark ? "#FF99A4" : "#D13438"
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                            Accessible.name: I18n.cache.errorPrefix + text
+                        }
                     }
 
                     RowLayout {
                         spacing: 8
 
-                        Rectangle {
-                            radius: 9
-                            implicitHeight: 18
-                            implicitWidth: countBadge.implicitWidth + 12
-                            color: Ui.dark ? Qt.rgba(1, 1, 1, 0.06) : Qt.rgba(0, 0, 0, 0.05)
-                            border.width: 1
-                            border.color: Ui.cardBorder
-
-                            Label {
-                                id: countBadge
-                                anchors.centerIn: parent
-                                text: I18n.format(I18n.cache.itemCountFormat, itemDelegate.modelData.count || 0)
-                                font.pixelSize: Ui.captionSize - 1
-                                color: Ui.secondaryText
+                        Button {
+                            text: I18n.cache.loadBtn
+                            enabled: itemDelegate.modelData.valid && !pane.library.busy
+                            highlighted: true
+                            Accessible.name: I18n.format(I18n.cache.loadAccessibleFormat, itemDelegate.modelData.animeTitle, itemDelegate.modelData.episodeTitle)
+                            onClicked: {
+                                cachedList.currentIndex = itemDelegate.index
+                                pane.library.loadCached(itemDelegate.modelData.key)
                             }
                         }
 
-                        Label {
-                            text: (itemDelegate.modelData.server || I18n.cache.unknownServer) +
-                                  (itemDelegate.modelData.downloadedAt ? " · " + new Date(itemDelegate.modelData.downloadedAt).toLocaleString(Qt.locale(), Locale.ShortFormat) : "")
-                            font.pixelSize: Ui.captionSize
-                            color: Ui.secondaryText
-                            elide: Text.ElideMiddle
-                            Layout.fillWidth: true
-                        }
-                    }
-
-                    Label {
-                        visible: !itemDelegate.modelData.valid
-                        text: itemDelegate.modelData.error || I18n.cache.invalidHint
-                        font.pixelSize: Ui.captionSize
-                        color: Ui.dark ? "#FF99A4" : "#D13438"
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                        Accessible.name: I18n.cache.errorPrefix + text
-                    }
-                }
-
-                RowLayout {
-                    spacing: 8
-
-                    Button {
-                        text: I18n.cache.loadBtn
-                        enabled: itemDelegate.modelData.valid && !pane.library.busy
-                        highlighted: true
-                        Accessible.name: I18n.format(I18n.cache.loadAccessibleFormat, itemDelegate.modelData.animeTitle, itemDelegate.modelData.episodeTitle)
-                        onClicked: {
-                            cachedList.currentIndex = itemDelegate.index
-                            pane.library.loadCached(itemDelegate.modelData.key)
-                        }
-                    }
-
-                    Button {
-                        text: I18n.cache.deleteBtn
-                        enabled: !pane.library.busy
-                        Accessible.name: I18n.format(I18n.cache.deleteAccessibleFormat, itemDelegate.modelData.animeTitle, itemDelegate.modelData.episodeTitle)
-                        onClicked: {
-                            cachedList.currentIndex = itemDelegate.index
-                            pane.deleteKey = itemDelegate.modelData.key
-                            pane.deleteTitle = itemDelegate.modelData.animeTitle + " · " + itemDelegate.modelData.episodeTitle
-                            deleteDialog.open()
+                        Button {
+                            text: I18n.cache.deleteBtn
+                            enabled: !pane.library.busy
+                            Accessible.name: I18n.format(I18n.cache.deleteAccessibleFormat, itemDelegate.modelData.animeTitle, itemDelegate.modelData.episodeTitle)
+                            onClicked: {
+                                cachedList.currentIndex = itemDelegate.index
+                                pane.deleteKey = itemDelegate.modelData.key
+                                pane.deleteTitle = itemDelegate.modelData.animeTitle + " · " + itemDelegate.modelData.episodeTitle
+                                deleteDialog.open()
+                            }
                         }
                     }
                 }

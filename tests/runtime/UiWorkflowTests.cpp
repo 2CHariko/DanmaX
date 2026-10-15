@@ -20,6 +20,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QWheelEvent>
+#include <QUrlQuery>
 #include <QStyleHints>
 #include <QInputMethodEvent>
 #include <QElapsedTimer>
@@ -438,6 +439,7 @@ ApplicationWindow {
                 QVERIFY(window->grabWindow().save(evidence + "/home-loading.png"));
             }
             QTRY_VERIFY(!metadata->loading() && !metadata->weeklyCalendar().isEmpty());
+            QTRY_VERIFY(!metadata->homeClassifying());
             QTRY_VERIFY(metadata->heroAnime().contains("summary"));
             QTRY_VERIFY(metadata->coverCacheBytes() > 0);
             const auto coverReady = [&] {
@@ -844,9 +846,15 @@ ApplicationWindow {
                     QByteArray body;
                     if (bytes->contains("/calendar")) body = QJsonDocument(calendar).toJson();
                     else if (bytes->contains("/v0/episodes")) body = R"({"data":[{"id":901,"sort":9,"name_cn":"第9话 冒险","type":0}],"total":1})";
-                    else body = QJsonDocument(QJsonObject{{"id", 123}, {"name_cn", "回归番剧"},
+                    else {
+                        QJsonArray tags;
+                        for (int i = 0; i < 18; ++i) tags.append(QJsonObject{{"name", QString("Tag %1").arg(i)}});
+                        tags.append(QJsonObject{{"name", QStringLiteral("用于验证窄窗口与放大文字时自动换行的超长标签").repeated(5)}});
+                        body = QJsonDocument(QJsonObject{{"id", 123}, {"name_cn", "回归番剧"},
+                        {"meta_tags", QJsonArray{"日本"}}, {"tags", tags},
                         {"summary", QStringLiteral("用于验证详情滚动与键盘操作的剧情简介。\n").repeated(40)},
                         {"images", QJsonObject{{"large", cover}}}}).toJson();
+                    }
                     socket->write("HTTP/1.1 200 OK\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
                     socket->disconnectFromHost();
                 });
@@ -878,6 +886,15 @@ ApplicationWindow {
             for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
             return nullptr;
         };
+        QVERIFY(!settings->values()["homeShowChineseAnime"].toBool());
+        QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 3)));
+        auto* homeSwitch = find(window->contentItem(), "homeShowChineseAnimeSwitch"); QVERIFY(homeSwitch);
+        homeSwitch->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        QTRY_VERIFY(settings->values()["homeShowChineseAnime"].toBool());
+        homeSwitch->forceActiveFocus();
+        QTest::keyClick(window, Qt::Key_Space);
+        QTRY_VERIFY(!settings->values()["homeShowChineseAnime"].toBool());
+        QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 0)));
         QQuickItem* cachedCard = nullptr;
         QQuickItem* weeklyCard = nullptr;
         std::function<void(QQuickItem*)> collect = [&](QQuickItem* item) {
@@ -890,6 +907,7 @@ ApplicationWindow {
             for (auto* child : item->childItems()) collect(child);
         };
         QTest::qWait(100);
+        QTRY_VERIFY(!metadata->homeClassifying());
         collect(home);
         QVERIFY(cachedCard && weeklyCard);
         const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/home-fix/") +
@@ -931,6 +949,29 @@ ApplicationWindow {
         auto* dialog = home->findChild<QObject*>("animeDetailDialog");
         QVERIFY(dialog);
         QTRY_VERIFY(dialog->property("opened").toBool());
+        auto* tagContent = dialog->property("contentItem").value<QQuickItem*>(); QVERIFY(tagContent);
+        auto* tagFlow = find(tagContent, "animeDetailTags"); QVERIFY(tagFlow);
+        const auto tagCount = [&] {
+            int count = 0;
+            for (auto* item : tagFlow->childItems()) if (item->property("modelData").isValid()) ++count;
+            return count;
+        };
+        QTRY_COMPARE(tagCount(), 12);
+        auto* expandTags = find(tagContent, "animeDetailExpandTags"); QVERIFY(expandTags);
+        expandTags->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        QTRY_COMPARE(tagCount(), 20);
+        for (const auto& theme : {"light", "dark"}) {
+            settings->setValue("theme", theme); window->resize(520, 600); QTest::qWait(80);
+            for (auto* item : tagFlow->childItems()) if (item->property("modelData").isValid())
+                QVERIFY(item->x() + item->width() <= tagFlow->width() + 1);
+            auto* flick = tagContent->property("contentItem").value<QObject*>(); QVERIFY(flick);
+            flick->setProperty("contentY", std::max(0.0, flick->property("contentY").toDouble() + tagFlow->mapToItem(tagContent, QPointF()).y() - 24));
+            QTest::qWait(50);
+            QVERIFY(window->grabWindow().save(evidence + QString("/tags-%1-minimum.png").arg(theme)));
+        }
+        expandTags->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        QTRY_COMPARE(tagCount(), 12);
+        window->resize(1080, 760); QTest::qWait(80);
         QVERIFY(window->grabWindow().save(evidence + "/detail.png"));
         QTest::keyClick(window, Qt::Key_Escape);
         QTRY_VERIFY(!dialog->property("visible").toBool());
@@ -1000,6 +1041,209 @@ ApplicationWindow {
         backend.showOnlineDanmakuForAnime(QStringLiteral("回归番剧"));
         QCOMPARE(tabs->property("currentIndex").toInt(), 1);
         QCOMPARE(warnings.count(), 0);
+    }
+    void railScrollingAndEpisodeRanges() {
+        QTemporaryDir directory;
+        QTcpServer server; QVERIFY(server.listen(QHostAddress::LocalHost));
+        const QString base = "http://127.0.0.1:" + QString::number(server.serverPort());
+        int episodeRequests = 0, coverRequests = 0;
+        QImage poster(140, 210, QImage::Format_RGB32); poster.fill(QColor("#4488aa"));
+        QByteArray png; QBuffer buffer(&png); buffer.open(QIODevice::WriteOnly); QVERIFY(poster.save(&buffer, "PNG"));
+        connect(&server, &QTcpServer::newConnection, this, [&] {
+            while (server.hasPendingConnections()) {
+                auto* socket = server.nextPendingConnection(); auto bytes = std::make_shared<QByteArray>();
+                connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+                connect(socket, &QTcpSocket::readyRead, this, [&, socket, bytes] {
+                    bytes->append(socket->readAll()); if (!bytes->contains("\r\n\r\n")) return;
+                    disconnect(socket, &QTcpSocket::readyRead, this, nullptr);
+                    const auto target = bytes->split(' ').value(1);
+                    QByteArray body;
+                    if (target.startsWith("/cover")) { body = png; ++coverRequests; }
+                    else if (target.startsWith("/v0/subjects")) body = R"({"id":123,"name_cn":"长篇番剧","summary":"分页测试","images":{},"meta_tags":["日本"]})";
+                    else if (target.startsWith("/v0/episodes")) {
+                        ++episodeRequests;
+                        const int offset = QUrlQuery(QUrl(base + QString::fromUtf8(target))).queryItemValue("offset").toInt();
+                        QJsonArray values;
+                        for (int i = offset + 1; i <= std::min(offset + 100, 1234); ++i)
+                            values.append(QJsonObject{{"id", 10000 + i}, {"sort", i}, {"name_cn", QString("Episode %1").arg(i)}, {"type", 0}});
+                        body = QJsonDocument(QJsonObject{{"data", values}, {"total", 1234}}).toJson();
+                    }
+                    const int delay = target.startsWith("/v0/episodes") ? 350 : 0;
+                    QTimer::singleShot(delay, this, [guard = QPointer<QTcpSocket>(socket), body] {
+                        if (!guard || guard->state() != QAbstractSocket::ConnectedState) return;
+                        guard->write("HTTP/1.1 200 OK\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                        guard->disconnectFromHost();
+                    });
+                });
+            }
+        });
+        AnimeMetadataService metadata(directory.path()); metadata.setBaseUrl(base);
+        QQmlEngine engine; QSignalSpy warnings(&engine, &QQmlEngine::warnings);
+        QQmlComponent component(&engine);
+        component.setData(R"(
+import QtQuick
+import QtQuick.Controls.FluentWinUI3
+import QtQuick.Layouts
+import "components"
+import "theme"
+ApplicationWindow {
+    id: harness; width: 1080; height: 760; visible: true
+    required property QtObject metadata
+    required property string coverBase
+    property var cards: {
+        const items = []
+        for (let i = 0; i < 30; ++i) items.push({id: i + 1, title: "Card " + i, cover: coverBase + "/cover/" + i})
+        return items
+    }
+    PageFrame {
+        id: page; objectName: "testRailPage"; anchors.fill: parent; title: "首页"; description: ""
+        Repeater {
+            model: 3
+            AnimeRail {
+                title: "横向列表"; model: harness.cards; coverCache: harness.metadata.coverCache
+                onVerticalScrollRequested: (pixels, angle) => page.scrollVertical(pixels, angle)
+            }
+        }
+    }
+    AnimeDetailDialog {
+        objectName: "testRangeDialog"
+        detail: harness.metadata.currentDetail
+        loading: harness.metadata.loadingDetail
+        loadingSubject: harness.metadata.loadingSubject
+        loadingEpisodes: harness.metadata.loadingEpisodes
+        episodesAvailable: harness.metadata.episodesAvailable
+        episodePage: harness.metadata.episodePage
+        episodeTotal: harness.metadata.episodeTotal
+        episodePageCount: harness.metadata.episodePageCount
+        error: harness.metadata.detailError
+        coverCache: harness.metadata.coverCache
+        onEpisodePageRequested: index => harness.metadata.fetchEpisodePage(index)
+        onCloseRequested: harness.metadata.clearDetail()
+        onRetryRequested: harness.metadata.fetchDetail(123, true)
+    }
+})", QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/RailRangeHarness.qml")));
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        std::unique_ptr<QObject> root(component.createWithInitialProperties({{"metadata", QVariant::fromValue(&metadata)}, {"coverBase", base}}));
+        QVERIFY2(root, qPrintable(component.errorString()));
+        auto* window = qobject_cast<QQuickWindow*>(root.get()); QVERIFY(window); QVERIFY(QTest::qWaitForWindowExposed(window));
+        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
+            if (parent->objectName() == name) return parent;
+            for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
+            return nullptr;
+        };
+        auto* page = find(window->contentItem(), "testRailPage"); QVERIFY(page);
+        auto* rail = find(page, "animeRailList"); QVERIFY(rail);
+        auto* railBar = find(page, "animeRailHorizontalScrollBar"); QVERIFY(railBar);
+        QTRY_VERIFY(railBar->height() > 0);
+        const auto railBottom = rail->mapToScene(QPointF(0, rail->height())).y();
+        QVERIFY(railBar->mapToScene(QPointF()).y() >= railBottom + 8);
+        QCOMPARE(qRound(railBar->parentItem()->height() - railBar->y() - railBar->height()), 4);
+        QCOMPARE(qRound(railBar->width()), qRound(rail->width()));
+        auto* flick = page->property("contentItem").value<QObject*>(); QVERIFY(flick);
+        auto wheel = [&](QPoint angle, Qt::KeyboardModifiers modifiers = Qt::NoModifier, QPoint pixels = {}) {
+            const auto pos = rail->mapToScene(QPointF(rail->width() / 2, rail->height() / 2));
+            QWheelEvent event(pos, window->mapToGlobal(pos.toPoint()), pixels, angle, Qt::NoButton, modifiers, Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(window, &event);
+        };
+        QTest::qWait(200);
+        const auto x = rail->property("contentX").toDouble();
+        wheel(QPoint(0, -120)); QTRY_VERIFY(flick->property("contentY").toDouble() > 0);
+        QCOMPARE(rail->property("contentX").toDouble(), x);
+        flick->setProperty("contentY", 0);
+        wheel(QPoint(0, -120), Qt::ShiftModifier); QTRY_VERIFY(rail->property("contentX").toDouble() > x);
+        QCOMPARE(flick->property("contentY").toDouble(), 0.0);
+        flick->setProperty("contentY", 0); rail->setProperty("contentX", 0);
+        wheel({}, Qt::NoModifier, QPoint(0, -60)); QTRY_VERIFY(flick->property("contentY").toDouble() > 0);
+        QCOMPARE(rail->property("contentX").toDouble(), 0.0);
+        flick->setProperty("contentY", 0);
+        wheel(QPoint(0, -120), Qt::NoModifier, QPoint(-60, 0)); QTRY_VERIFY(rail->property("contentX").toDouble() > 0);
+        QCOMPARE(flick->property("contentY").toDouble(), 0.0);
+        QTRY_VERIFY(coverRequests > 0);
+        auto firstCover = [&]() -> QQuickItem* {
+            auto* listContent = rail->property("contentItem").value<QQuickItem*>();
+            if (!listContent) return nullptr;
+            for (auto* card : listContent->childItems())
+                if (card->property("cardTitle").toString() == "Card 0" && card->isVisible())
+                    return find(card, "cachedCoverImage");
+            return nullptr;
+        };
+        rail->setProperty("contentX", 0);
+        QTRY_VERIFY(firstCover() && firstCover()->property("status").toInt() == 1);
+        const auto firstSource = firstCover()->property("source").toUrl();
+        QTest::qWait(200);
+        rail->setProperty("contentX", rail->property("contentWidth").toDouble() - rail->width());
+        QTest::qWait(500);
+        const auto loadedRequests = coverRequests;
+        rail->setProperty("contentX", 0);
+        QTRY_VERIFY(firstCover() && firstCover()->property("status").toInt() == 1);
+        QCOMPARE(firstCover()->property("source").toUrl(), firstSource);
+        QCOMPARE(firstCover()->property("revealProgress").toDouble(), 1.0);
+        QTest::qWait(200); QCOMPARE(coverRequests, loadedRequests);
+        const auto railCursor = QCursor::pos();
+        const auto railCursorRestore = qScopeGuard([railCursor] { QCursor::setPos(railCursor); });
+        const auto railThumb = railBar->mapToScene(QPointF(
+            railBar->width() * railBar->property("size").toReal() / 2, railBar->height() / 2)).toPoint();
+        const auto railEnd = railBar->mapToScene(QPointF(railBar->width() * 0.85, railBar->height() / 2)).toPoint();
+        QCursor::setPos(window->mapToGlobal(railThumb)); QTest::mouseMove(window, railThumb);
+        QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, railThumb);
+        QTest::mouseMove(window, railEnd, 80); QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, railEnd);
+        QTRY_VERIFY(rail->property("contentX").toReal() > 0);
+        const auto railHeight = rail->height();
+        window->setProperty("cards", QVariantList{QVariantMap{{"id", 1}, {"title", "Single card"}}});
+        QTRY_VERIFY(railBar->property("size").toReal() >= 1);
+        QCOMPARE(rail->height(), railHeight);
+        metadata.fetchDetail(123); QTRY_VERIFY(!metadata.loadingDetail());
+        auto* dialog = window->findChild<QObject*>("testRangeDialog"); QVERIFY(dialog);
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        QCOMPARE(episodeRequests, 1); QVERIFY(!dialog->property("header").value<QObject*>());
+        auto* content = dialog->property("contentItem").value<QQuickItem*>(); QVERIFY(content);
+        auto* flow = find(content, "animeEpisodesContent"); QVERIFY(flow);
+        auto countButtons = [&] {
+            int count = 0; for (auto* item : flow->childItems()) if (item->property("modelData").isValid()) ++count; return count;
+        };
+        QTRY_COMPARE(countButtons(), 100);
+        QVERIFY(!find(window->contentItem(), "refreshAnimeDetail"));
+        auto* detailBar = find(window->contentItem(), "animeDetailVerticalScrollBar"); QVERIFY(detailBar);
+        auto* detailFlick = content->property("contentItem").value<QObject*>(); QVERIFY(detailFlick);
+        const auto contentRight = content->mapToScene(QPointF(content->width(), 0)).x();
+        QVERIFY(detailBar->mapToScene(QPointF()).x() >= contentRight + 8);
+        QTRY_VERIFY(detailBar->property("size").toDouble() < 1);
+        const auto cursor = QCursor::pos();
+        const auto cursorRestore = qScopeGuard([cursor] { QCursor::setPos(cursor); });
+        const auto thumb = detailBar->mapToScene(QPointF(detailBar->width() / 2,
+            detailBar->height() * detailBar->property("size").toDouble() / 2)).toPoint();
+        const auto lower = detailBar->mapToScene(QPointF(detailBar->width() / 2, detailBar->height() * 0.85)).toPoint();
+        QCursor::setPos(window->mapToGlobal(thumb)); QTest::mouseMove(window, thumb);
+        QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, thumb);
+        QTest::mouseMove(window, lower, 80); QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, lower);
+        QTRY_VERIFY(detailFlick->property("contentY").toDouble() > 0);
+        detailFlick->setProperty("contentY", 0);
+        auto* next = find(content, "animeEpisodesNext"); QVERIFY(next);
+        next->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        QTRY_COMPARE(metadata.episodePage(), 1); QTRY_COMPARE(countButtons(), 0);
+        auto* skeleton = find(content, "animeEpisodesSkeleton"); QVERIFY(skeleton);
+        QTRY_VERIFY(skeleton->property("showing").toBool());
+        QCOMPARE(find(content, "animeEpisodeCount")->property("text").toString(), QStringLiteral("共 1234 话"));
+        QTRY_VERIFY(!metadata.loadingEpisodes()); QTRY_COMPARE(countButtons(), 100);
+        QCOMPARE(episodeRequests, 2); QVERIFY(find(content, "animeEpisode101"));
+        auto* ranges = find(content, "animeEpisodeRange"); QVERIFY(ranges);
+        ranges->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4);
+        auto* popup = ranges->property("popup").value<QObject*>(); QVERIFY(popup);
+        QTRY_VERIFY(popup->property("visible").toBool());
+        QTest::keyClick(window, Qt::Key_End); QTest::keyClick(window, Qt::Key_Return);
+        QTRY_COMPARE(metadata.episodePage(), 12); QTRY_VERIFY(!metadata.loadingEpisodes());
+        QTRY_COMPARE(countButtons(), 34); QCOMPARE(episodeRequests, 3);
+        QVERIFY(find(content, "animeEpisode1234"));
+        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/rail-range/"); QDir().mkpath(evidence);
+        for (const auto scheme : {Qt::ColorScheme::Light, Qt::ColorScheme::Dark}) {
+            QGuiApplication::styleHints()->setColorScheme(scheme);
+            window->resize(800, 600); QTest::qWait(100);
+            ranges->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4); QTRY_VERIFY(popup->property("visible").toBool());
+            QVERIFY(window->grabWindow().save(evidence + (scheme == Qt::ColorScheme::Light ? "ranges-light.png" : "ranges-dark.png")));
+            QTest::keyClick(window, Qt::Key_Escape);
+        }
+        QTest::keyClick(window, Qt::Key_Escape); QTRY_VERIFY(!dialog->property("visible").toBool());
+        QVERIFY(metadata.currentDetail().isEmpty()); QCOMPARE(warnings.count(), 0);
     }
     void toolbarSingleLineTips() {
         QTemporaryDir directory;
@@ -2052,6 +2296,8 @@ ApplicationWindow {
             QVERIFY(point.x() + list->width() <= window->width() - 7);
             QVERIFY(point.y() + list->height() <= window->height() - 7);
             QVERIFY(popup->property("height").toReal() <= combo->property("popupLimit").toReal() + 1);
+            QVERIFY(bar->mapToScene(QPointF()).x() >= point.x() + list->width() + 8 - 0.01);
+            QCOMPARE(qRound(bar->parentItem()->width() - bar->x() - bar->width()), 4);
         };
         QVariantList rows;
         for (int i = 0; i < 60; ++i)
@@ -2152,6 +2398,133 @@ ApplicationWindow {
         QTest::keyClick(window, Qt::Key_Tab);
         QVERIFY(!combo->hasActiveFocus());
         QCOMPARE(warnings.count(), 0);
+    }
+    void globalScrollLayout() {
+        const QString output = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/global-scroll")
+            + qEnvironmentVariable("DANMAKU_UI_CAPTURE_SUFFIX");
+        QDir().mkpath(output);
+        QTemporaryDir directory;
+        auto cached = parseOnlineDanmaku(R"({"comments":[{"p":"1,1,16777215,user","m":"hello"}]})");
+        for (int i = 0; i < 24; ++i) {
+            cached.metadata = {{"server", "https://example.test"}, {"animeId", "42"},
+                {"episodeId", QString::number(i + 1)}, {"animeTitle", QString("缓存番剧 %1").arg(i, 2, 10, QChar('0'))},
+                {"episodeTitle", "用于检查换行与滚动的剧集名称"}, {"downloadedAt", "2026-10-15T00:00:00.000Z"}};
+            QVERIFY(saveCachedDanmaku(directory.filePath("cache/danmaku"), cached).isEmpty());
+        }
+        AppController backend(directory.filePath("data"), nullptr, {}, directory.filePath("cache"));
+        // This layout fixture never uses public network services.
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
+        QVERIFY(settings->setValue("micaEnabled", false));
+        QStringList servers;
+        for (int i = 0; i < 8; ++i) servers.append(QString("https://server%1.example.test").arg(i));
+        QVERIFY(settings->setDanmakuServers(servers));
+        auto* logs = qobject_cast<LogModel*>(backend.logs());
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
+        window->requestActivate(); QVERIFY(QTest::qWaitForWindowActive(window));
+        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
+            if (parent->objectName() == name) return parent;
+            for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
+            return nullptr;
+        };
+        auto findWindow = [&](const QString& name) { return find(window->contentItem(), name); };
+        auto checkBar = [&](QQuickItem* bar) {
+            auto* viewport = bar->property("viewport").value<QQuickItem*>(); QVERIFY(viewport);
+            QCOMPARE(qRound(bar->property("trailingEdge").toReal() - bar->x() - bar->width()), 4);
+            const auto viewportRight = viewport->mapToScene(QPointF(viewport->width(), 0)).x();
+            QVERIFY(bar->mapToScene(QPointF()).x() >= viewportRight + 8 - 0.01);
+            QCOMPARE(qRound(bar->height()), qRound(viewport->height()));
+            QCOMPARE(qRound(bar->mapToScene(QPointF()).y()), qRound(viewport->mapToScene(QPointF()).y()));
+        };
+        const auto cursor = QCursor::pos();
+        const auto cursorRestore = qScopeGuard([cursor] { QCursor::setPos(cursor); });
+        auto drag = [&](QQuickItem* bar, QObject* flick) {
+            bar->setProperty("position", 0.0);
+            QTest::qWait(40);
+            QVERIFY(bar->property("size").toReal() < 1);
+            const auto start = bar->mapToScene(QPointF(bar->width() / 2,
+                bar->height() * bar->property("size").toReal() / 2)).toPoint();
+            const auto end = bar->mapToScene(QPointF(bar->width() / 2, bar->height() * 0.85)).toPoint();
+            QVERIFY(start.x() >= 0 && start.x() < window->width() && start.y() >= 0 && start.y() < window->height());
+            QVERIFY(end.x() >= 0 && end.x() < window->width() && end.y() >= 0 && end.y() < window->height());
+            QCursor::setPos(window->mapToGlobal(start)); QTest::mouseMove(window, start);
+            QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, start);
+            QTest::mouseMove(window, end, 60); QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, end);
+            QTRY_VERIFY(flick->property("contentY").toReal() > 0);
+        };
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            QVERIFY(settings->setValue("theme", theme));
+            for (const int width : {800, 1080}) {
+                window->resize(width, width == 800 ? 600 : 760);
+                for (const int index : {0, 1, 3, 4}) {
+                    QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, index)));
+                    QTest::qWait(80);
+                    const QString name = QStringList{"homePage", "playerPage", "", "settingsPage", "aboutPage"}.at(index);
+                    auto* page = findWindow(name); QVERIFY(page);
+                    auto* bar = find(page, "pageVerticalScrollBar"); QVERIFY(bar); checkBar(bar);
+                    QCOMPARE(page->property("leftPadding").toReal(), page->property("rightPadding").toReal());
+                    const auto viewportWidth = page->property("availableWidth").toReal();
+                    bar->setProperty("active", true); QTest::qWait(10);
+                    QCOMPARE(page->property("availableWidth").toReal(), viewportWidth);
+                }
+                window->setProperty("selectedPage", 1);
+                auto* page = findWindow("playerPage"); QVERIFY(page);
+                auto* tabs = findWindow("danmakuSourceTabs"); QVERIFY(tabs); tabs->setProperty("currentIndex", 2);
+                auto* cacheList = findWindow("cachedDanmakuList"); QVERIFY(cacheList);
+                QTRY_COMPARE(cacheList->property("count").toInt(), 24);
+                QTest::qWait(80); // Let the source tab's new content height reach PageFrame.
+                QVERIFY(QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(cacheList))));
+                auto* cacheBar = findWindow("cacheVerticalScrollBar"); QVERIFY(cacheBar);
+                QTest::qWait(80); checkBar(cacheBar);
+                auto* titleBar = findWindow("mainTitleBar"); QVERIFY(titleBar);
+                QVERIFY2(titleBar->height() >= 44, qPrintable(QString("title bar height: %1").arg(titleBar->height())));
+                QVERIFY2(cacheBar->mapToScene(QPointF()).y() >= titleBar->height(),
+                    qPrintable(QString("cache top: %1; title bar height: %2")
+                        .arg(cacheBar->mapToScene(QPointF()).y()).arg(titleBar->height())));
+                drag(cacheBar, cacheList);
+                QVERIFY(window->grabWindow().save(output + QString("/cache-%1-%2.png").arg(theme).arg(width)));
+                const auto listWidth = cacheList->width();
+                auto* filter = findWindow("cachedDanmakuFilter"); QVERIFY(filter);
+                filter->setProperty("text", "缓存番剧 00");
+                QTRY_COMPARE(cacheList->property("count").toInt(), 1);
+                QTRY_VERIFY(cacheBar->property("size").toReal() >= 1);
+                QCOMPARE(cacheList->width(), listWidth);
+                filter->setProperty("text", ""); QTRY_COMPARE(cacheList->property("count").toInt(), 24);
+
+                window->setProperty("selectedPage", 2);
+                logs->clear();
+                for (int i = 0; i < 80; ++i) logs->append("INFO", QString("日志 %1：用于验证长文字换行和完整滚动条交互区域。").arg(i));
+                auto* logList = findWindow("logList"); QVERIFY(logList);
+                auto* logBar = findWindow("logVerticalScrollBar"); QVERIFY(logBar);
+                QTest::qWait(80); checkBar(logBar); drag(logBar, logList);
+                QVERIFY(window->grabWindow().save(output + QString("/logs-%1-%2.png").arg(theme).arg(width)));
+                const auto logWidth = logList->width();
+                logs->clear(); logs->append("INFO", "单条日志");
+                QTRY_VERIFY(logBar->property("size").toReal() >= 1);
+                QCOMPARE(logList->width(), logWidth);
+
+                window->setProperty("selectedPage", 3);
+                auto* settingsPage = findWindow("settingsPage"); QVERIFY(settingsPage);
+                QVERIFY(QMetaObject::invokeMethod(settingsPage, "focusOnlineSettings"));
+                auto* serverDialog = window->findChild<QObject*>("danmakuServerDialog"); QVERIFY(serverDialog);
+                QTRY_VERIFY(serverDialog->property("opened").toBool());
+                auto* serverScroll = findWindow("serverScrollView"); QVERIFY(serverScroll);
+                auto* serverBar = findWindow("serverVerticalScrollBar"); QVERIFY(serverBar);
+                auto* serverFlick = serverScroll->property("contentItem").value<QObject*>(); QVERIFY(serverFlick);
+                checkBar(serverBar); drag(serverBar, serverFlick);
+                QVERIFY(window->grabWindow().save(output + QString("/servers-%1-%2.png").arg(theme).arg(width)));
+                QVERIFY(QMetaObject::invokeMethod(serverDialog, "close"));
+                QTRY_VERIFY(!serverDialog->property("visible").toBool());
+            }
+        }
+        QCOMPARE(warnings.count(), 0);
+        backend.stop();
     }
     void workflow() {
         const QString output = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/ui-refresh")
@@ -2369,7 +2742,7 @@ ApplicationWindow {
                 const auto bodyRight = body->mapToScene(QPointF(body->width(), 0)).x();
                 const auto barLeft = bar->mapToScene(QPointF()).x();
                 QVERIFY(bodyRight + 7 <= barLeft);
-                QCOMPARE(qRound(frame->width() - bar->x() - bar->width()), 8);
+                QCOMPARE(qRound(frame->width() - bar->x() - bar->width()), 4);
                 const auto bodyWidth = body->width();
                 for (qreal position : {0.0, 0.4, 1.0}) {
                     bar->setProperty("position", std::min(position, 1 - bar->property("size").toReal()));

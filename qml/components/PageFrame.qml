@@ -12,20 +12,26 @@ ScrollView {
     default property alias entries: contentArea.data
     readonly property alias verticalBar: verticalBar
     readonly property alias bodyItem: body
+    readonly property real contentInset: Ui.scrollInset(verticalBar.implicitWidth,
+        Ui.pageMargin(Window.window ? Window.window.width : width))
     clip: true
-    rightPadding: verticalBar.width + 2 * Ui.scrollGap
+    leftPadding: contentInset
+    rightPadding: contentInset
     contentWidth: availableWidth
     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-    ScrollBar.vertical: ScrollBar {
+    ScrollBar.vertical: AppScrollBar {
         id: verticalBar
         objectName: "pageVerticalScrollBar"
-        parent: page
-        x: page.width - width - Ui.scrollGap
-        y: page.topPadding
-        height: page.availableHeight
+        viewport: page.contentItem
         Accessible.name: I18n.common.pageScrollBarAccessible
     }
     function focusHeading() { contentItem.contentY = 0; heading.forceActiveFocus() }
+    function scrollVertical(pixels, angle) {
+        const flick = page.contentItem
+        if (!flick) return
+        const step = pixels || (angle / 120.0) * Math.round(108 * Ui.textScale)
+        flick.contentY = Math.max(0, Math.min(Math.max(0, flick.contentHeight - page.availableHeight), flick.contentY - step))
+    }
     WheelHandler {
         id: wheelHandler
         target: null
@@ -33,13 +39,9 @@ ScrollView {
         orientation: Qt.Vertical
         blocking: true
         onWheel: (event) => {
-            if (event.pixelDelta.y === 0 && event.angleDelta.y !== 0) {
-                const flick = page.contentItem
-                if (flick && flick.contentHeight > page.availableHeight) {
-                    const step = (event.angleDelta.y / 120.0) * Math.round(108 * Ui.textScale)
-                    const maxContentY = flick.contentHeight - page.availableHeight
-                    flick.contentY = Math.max(0, Math.min(maxContentY, flick.contentY - step))
-                }
+            if (!(event.modifiers & Qt.ShiftModifier) && event.pixelDelta.x === 0 && event.pixelDelta.y === 0
+                    && event.angleDelta.y !== 0 && Math.abs(event.angleDelta.y) >= Math.abs(event.angleDelta.x)) {
+                page.scrollVertical(0, event.angleDelta.y)
                 event.accepted = true
             } else {
                 event.accepted = false
@@ -69,7 +71,7 @@ ScrollView {
         }
         Item {
             Layout.fillWidth: true
-            Layout.preferredHeight: page.width < Ui.expandedNavigationWidth ? Ui.pageMarginNarrow : Ui.pagePadding
+            Layout.preferredHeight: page.contentInset
         }
     }
 }

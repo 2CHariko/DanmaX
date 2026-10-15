@@ -110,7 +110,8 @@ public:
     bool emptySummary{};
     QJsonObject searchPayload;
     QByteArray searchTarget, searchMethod, searchBody;
-    QByteArray calendarBody, coverBody;
+    QByteArray calendarBody, coverBody, episodesBody;
+    QHash<qint64, QByteArray> subjects;
     explicit MockBangumiServer() {
         connect(this, &QTcpServer::newConnection, this, [this] {
             while (hasPendingConnections()) {
@@ -150,12 +151,14 @@ public:
                     } else if (target.startsWith("/calendar")) {
                         body = calendarBody.isEmpty() ? mockCalendarJson() : calendarBody;
                     } else if (target.startsWith("/v0/subjects/")) {
-                        body = mockSubjectJson(target.mid(QByteArray("/v0/subjects/").size()).toLongLong());
+                        const auto id = target.mid(QByteArray("/v0/subjects/").size()).toLongLong();
+                        body = subjects.value(id, mockSubjectJson(id));
                         if (emptySummary) { auto obj = QJsonDocument::fromJson(body).object(); obj["summary"] = ""; body = QJsonDocument(obj).toJson(); }
                         delay = detailDelay;
                     } else if (target.startsWith("/v0/episodes")) {
                         const QUrlQuery query(QUrl(QStringLiteral("http://localhost") + QString::fromUtf8(target)));
                         body = mockEpisodesJson(query.queryItemValue("subject_id").toLongLong(), episodeCount, query.queryItemValue("offset").toInt());
+                        if (!episodesBody.isEmpty()) body = episodesBody;
                         delay = episodeDelay;
                         responseStatus = episodeStatus;
                         if (query.queryItemValue("offset").toInt() == failEpisodeOffset) responseStatus = 503;
@@ -212,6 +215,94 @@ QByteArray imageBytes(QColor color = Qt::red) {
 class AnimeMetadataTests : public QObject {
     Q_OBJECT
 private slots:
+    void homeClassificationCancellationAndFailure() {
+        QTemporaryDir directory; MockBangumiServer slow, failed;
+        const auto calendar = QJsonDocument::fromJson(mockCalendarJson()).array();
+        slow.calendarBody = failed.calendarBody = QJsonDocument(QJsonArray{calendar.first()}).toJson();
+        slow.detailDelay = 500;
+        AnimeMetadataService service(directory.path()); service.setBaseUrl(slow.url());
+        service.setShowChineseAnime(false); service.refreshCalendar();
+        QTRY_VERIFY(!service.loading() && service.homeClassifying());
+        QTRY_COMPARE(slow.subjectRequests, 3);
+        service.setBaseUrl(failed.url());
+        QVERIFY(service.homeTopRated().isEmpty()); QVERIFY(!service.homeClassifying());
+        // Calendar succeeds first; unavailable detail metadata must remain unknown, not be hidden forever.
+        failed.detailDelay = 30;
+        for (qint64 id : {101, 102, 103}) failed.subjects[id] = "{}";
+        service.refreshCalendar();
+        QTRY_VERIFY(!service.loading() && !service.weeklyCalendar().isEmpty());
+        QTRY_VERIFY(!service.homeClassifying());
+        QCOMPARE(service.homeTopRated().size(), 3);
+        QTest::qWait(550);
+        QCOMPARE(service.homeTopRated().size(), 3);
+        QVERIFY(!service.homeClassifying());
+    }
+
+    void homeRegionsAndCompleteTags() {
+        QTemporaryDir directory; MockBangumiServer server;
+        auto calendar = QJsonDocument::fromJson(mockCalendarJson()).array();
+        auto day = calendar.first().toObject(); auto items = day["items"].toArray();
+        auto first = items[0].toObject(); first["rating"] = QJsonObject{{"score", 9.9}}; items[0] = first;
+        day["items"] = items; server.calendarBody = QJsonDocument(QJsonArray{day}).toJson();
+        server.detailDelay = 50;
+        auto coproduction = QJsonDocument::fromJson(mockSubjectJson(104)).object();
+        coproduction["meta_tags"] = QJsonArray{"中国", "中日合拍"};
+        server.subjects[104] = QJsonDocument(coproduction).toJson();
+        for (qint64 id : {101, 102, 103}) {
+            auto subject = QJsonDocument::fromJson(mockSubjectJson(id)).object();
+            subject["meta_tags"] = id == 101 ? QJsonArray{"中国", "中国", " "}
+                : id == 102 ? QJsonArray{"日本"} : QJsonArray{"中国", "日本"};
+            QJsonArray tags;
+            for (int i = 0; i < 18; ++i) tags.append(QJsonObject{{"name", QString("tag%1").arg(i)}});
+            tags.append(QJsonObject{{"name", "tag0"}}); tags.append(QJsonObject{{"name", "日本"}});
+            subject["tags"] = tags; server.subjects[id] = QJsonDocument(subject).toJson();
+        }
+        {
+            AnimeMetadataService service(directory.path()); service.setBaseUrl(server.url());
+            service.setShowChineseAnime(false);
+            bool leakedChinese = false;
+            connect(&service, &AnimeMetadataService::homeChanged, &service, [&] {
+                for (const auto& item : service.homeTopRated())
+                    if (item.toMap().value("id").toLongLong() == 101) leakedChinese = true;
+            });
+            service.refreshCalendar();
+            QTRY_VERIFY(!service.loading() && !service.weeklyCalendar().isEmpty());
+            QTRY_VERIFY(!service.homeClassifying());
+            QVERIFY(!leakedChinese);
+            QCOMPARE(service.homeWeeklyCalendar().first().toMap()["items"].toList().size(), 2);
+            QCOMPARE(service.homeTopRated().size(), 2);
+            QVERIFY(service.homeHeroAnime()["id"].toLongLong() != 101);
+            const auto requests = server.subjectRequests;
+            service.setShowChineseAnime(true);
+            QCOMPARE(service.homeTopRated().size(), 3);
+            QCOMPARE(service.homeHeroAnime()["id"].toLongLong(), 101);
+            service.setShowChineseAnime(false);
+            QCOMPARE(service.homeTopRated().size(), 2);
+            QTest::qWait(100); QCOMPARE(server.subjectRequests, requests);
+            service.fetchDetail(101); QTRY_VERIFY(!service.loadingDetail());
+            const auto detail = service.currentDetail();
+            QCOMPARE(detail.value("region").toString(), QString("china"));
+            QCOMPARE(detail.value("metaTags").toStringList(), QStringList{"中国"});
+            QCOMPARE(detail.value("userTags").toStringList().size(), 19);
+            QCOMPARE(detail.value("tags").toStringList().size(), 20);
+            QCOMPARE(detail.value("tags").toStringList().first(), QString("中国"));
+            service.fetchDetail(103); QTRY_VERIFY(!service.loadingDetail());
+            QCOMPARE(service.currentDetail().value("region").toString(), QString("unknown"));
+            service.fetchDetail(104); QTRY_VERIFY(!service.loadingDetail());
+            QCOMPARE(service.currentDetail().value("region").toString(), QString("unknown"));
+        }
+        const auto requests = server.subjectRequests;
+        server.status = 503;
+        AnimeMetadataService offline(directory.path()); offline.setBaseUrl(server.url());
+        offline.setShowChineseAnime(false); offline.refreshCalendar();
+        QTRY_VERIFY(!offline.loading() && !offline.weeklyCalendar().isEmpty());
+        QTRY_VERIFY(!offline.homeClassifying());
+        QCOMPARE(offline.homeTopRated().size(), 2);
+        QCOMPARE(server.subjectRequests, requests);
+        offline.clearMetadataCache(); QTRY_VERIFY(!offline.clearingCache());
+        QVERIFY(offline.homeTopRated().isEmpty()); QVERIFY(!offline.homeClassifying());
+    }
+
     void coverLoadingStates() {
         MockBangumiServer server; QTemporaryDir dir;
         server.coverBody = imageBytes(); server.coverDelay = 180;
@@ -328,7 +419,7 @@ private slots:
             service.fetchDetail(101); service.searchBangumi("cached"); service.refreshCalendar();
             QTRY_VERIFY(!service.loadingDetail() && !service.searching() && !service.loading());
             QTRY_VERIFY(service.heroAnime().contains("summary"));
-            QVERIFY(readRecord(service.cacheStore(), server.url() + "|2|101").valid);
+            QVERIFY(readRecord(service.cacheStore(), server.url() + "|2|episodes-page-v1|101:0").valid);
         }
         const int subjects = server.subjectRequests, episodes = server.episodeRequests, searches = server.searchRequests, calendars = server.calendarRequests;
         server.status = 503;
@@ -356,22 +447,30 @@ private slots:
         QCOMPARE(server.subjectRequests, subjects + 2);
         QVERIFY(!service.currentDetail().isEmpty());
     }
-    void completeEpisodesSurviveLaterPageFailure() {
+    void episodePagesRemainIndependentOnFailure() {
         MockBangumiServer server; QTemporaryDir dir;
         server.episodeCount = 205;
         AnimeMetadataService service(dir.path()); service.setBaseUrl(server.url()); service.fetchDetail(101);
         QTRY_VERIFY(!service.loadingDetail());
-        const auto key = server.url() + "|2|101";
+        QCOMPARE(service.episodeTotal(), 205);
+        QCOMPARE(server.episodeRequests, 1);
+        const auto key = server.url() + "|2|episodes-page-v1|101:0";
         const auto original = readRecord(service.cacheStore(), key);
         QVERIFY(original.valid);
         server.episodeCount = 250; server.failEpisodeOffset = 100;
-        service.fetchDetail(101, true); QTRY_VERIFY(!service.loadingDetail());
+        service.fetchEpisodePage(1); QTRY_VERIFY(!service.loadingDetail());
         QVERIFY(!service.detailError().isEmpty());
-        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 205);
+        QVERIFY(!service.episodesAvailable());
+        QVERIFY(service.currentDetail().value("episodes").toList().isEmpty());
         QCOMPARE(readRecord(service.cacheStore(), key).data, original.data);
-        service.fetchDetail(202, true); QTRY_VERIFY(!service.loadingDetail());
+        QVERIFY(!readRecord(service.cacheStore(), server.url() + "|2|episodes-page-v1|101:1").valid);
+        service.fetchEpisodePage(0); QTRY_VERIFY(!service.loadingDetail());
         QCOMPARE(service.currentDetail().value("episodes").toList().size(), 100);
-        QVERIFY(!readRecord(service.cacheStore(), server.url() + "|2|202").valid);
+        QCOMPARE(service.episodeTotal(), 205);
+        server.failEpisodeOffset = -1;
+        service.fetchEpisodePage(1, true); QTRY_VERIFY(!service.loadingDetail());
+        QCOMPARE(service.episodeTotal(), 250);
+        QCOMPARE(service.currentDetail().value("episodes").toList().first().toMap().value("sort").toInt(), 101);
     }
     void sharedHeroSubjectAndEmptySummary() {
         MockBangumiServer server; QTemporaryDir dir; server.emptySummary = true; server.detailDelay = 100;
@@ -506,6 +605,12 @@ private slots:
             QVERIFY(!readRecord(service.cacheStore(), "cover|" + handle->url().toString(QUrl::FullyEncoded), true).valid);
         }
         QCOMPARE(service.coverCacheBytes(), 0);
+        const auto warmSource = handles.first()->source();
+        const auto warmUrl = handles.first()->url();
+        delete handles.takeFirst();
+        auto* warm = qobject_cast<CoverRequest*>(covers->createRequest(&owner)); warm->setUrl(warmUrl);
+        QCOMPARE(warm->source(), warmSource); QVERIFY(!warm->loading());
+        QTest::qWait(40); QCOMPARE(server.coverRequests, 8);
     }
     void coverRejectsInvalidAndOversized() {
         QFETCH(QByteArray, bytes); MockBangumiServer server; QTemporaryDir dir; server.coverBody = bytes;
@@ -705,8 +810,12 @@ private slots:
         server.episodeCount = 205;
         service.fetchDetail(101);
         QTRY_VERIFY(!service.loadingDetail());
-        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 205);
-        QCOMPARE(server.episodeRequests, 3);
+        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 100);
+        QCOMPARE(service.episodeTotal(), 205); QCOMPARE(service.episodePageCount(), 3);
+        QCOMPARE(server.episodeRequests, 1);
+        service.fetchEpisodePage(2); QTRY_VERIFY(!service.loadingDetail());
+        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 5);
+        QCOMPARE(server.episodeRequests, 2);
         server.episodeStatus = 503;
         service.fetchDetail(101, true);
         QTRY_VERIFY(!service.loadingDetail());
@@ -716,7 +825,97 @@ private slots:
         service.fetchDetail(101, true);
         QTRY_VERIFY(!service.loadingDetail());
         QVERIFY(service.detailError().isEmpty());
-        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 205);
+        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 5);
+        QCOMPARE(service.episodePage(), 2);
+    }
+    void longEpisodePagesCancellationOfflineAndShrinking() {
+        MockBangumiServer server; QTemporaryDir dir; server.episodeCount = 2345;
+        TestClock now(QDateTime::currentDateTimeUtc()); MetadataCache::Policy policy; policy.now = [&] { return now.value(); };
+        {
+            AnimeMetadataService service(dir.path(), policy); service.setBaseUrl(server.url()); service.fetchDetail(101);
+            QTRY_VERIFY(!service.loadingDetail());
+            QCOMPARE(server.episodeRequests, 1); QCOMPARE(service.episodePageCount(), 24);
+            QCOMPARE(service.currentDetail().value("episodes").toList().size(), 100);
+            service.fetchEpisodePage(23); QTRY_VERIFY(!service.loadingDetail());
+            QCOMPARE(service.currentDetail().value("episodes").toList().size(), 45);
+            QCOMPARE(server.episodeRequests, 2);
+            server.episodeDelay = 200;
+            service.fetchEpisodePage(5); QTRY_COMPARE(server.episodeRequests, 3);
+            service.fetchEpisodePage(0); QTRY_VERIFY(!service.loadingDetail()); QTest::qWait(250);
+            QCOMPARE(service.episodePage(), 0);
+            QCOMPARE(service.currentDetail().value("episodes").toList().first().toMap().value("sort").toInt(), 1);
+            QCOMPARE(server.episodeRequests, 3);
+            service.fetchEpisodePage(24); QCOMPARE(service.episodePage(), 0);
+        }
+        server.status = 503;
+        AnimeMetadataService service(dir.path(), policy); service.setBaseUrl(server.url()); service.fetchDetail(101);
+        QTRY_VERIFY(!service.loadingDetail());
+        service.fetchEpisodePage(23); QTRY_VERIFY(!service.loadingDetail());
+        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 45);
+        QCOMPARE(server.episodeRequests, 3); // Only previously visited pages are cached.
+        now = now.addSecs(1);
+        server.status = 200; server.episodeDelay = 0; server.episodeCount = 105;
+        service.fetchEpisodePage(23, true); QTRY_VERIFY(!service.loadingDetail());
+        QCOMPARE(service.episodePage(), 1); QCOMPARE(service.episodeTotal(), 105);
+        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 5);
+        service.fetchEpisodePage(0); QTRY_VERIFY(!service.loadingDetail());
+        QCOMPARE(service.episodeTotal(), 105); // The older first page cannot restore 2345.
+        service.clearMetadataCache(); QTRY_VERIFY(!service.clearingCache());
+        QCOMPARE(service.episodePage(), 0); QCOMPARE(service.episodeTotal(), 0);
+    }
+    void growingEpisodeTotalRefreshesOlderLastPage() {
+        MockBangumiServer server; QTemporaryDir dir; server.episodeCount = 1001;
+        TestClock now(QDateTime::currentDateTimeUtc()); MetadataCache::Policy policy; policy.now = [&] { return now.value(); };
+        AnimeMetadataService service(dir.path(), policy); service.setBaseUrl(server.url()); service.fetchDetail(101);
+        QTRY_VERIFY(!service.loadingDetail());
+        service.fetchEpisodePage(10); QTRY_VERIFY(!service.loadingDetail());
+        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 1);
+        now = now.addSecs(1); server.episodeCount = 1010;
+        service.fetchEpisodePage(0, true); QTRY_VERIFY(!service.loadingDetail());
+        QCOMPARE(service.episodeTotal(), 1010);
+        service.fetchEpisodePage(10); QTRY_VERIFY(!service.loadingDetail());
+        QCOMPARE(service.episodeTotal(), 1010);
+        QCOMPARE(service.currentDetail().value("episodes").toList().size(), 10);
+        QCOMPARE(server.episodeRequests, 4);
+    }
+    void invalidEpisodePagePreservesCache() {
+        MockBangumiServer server; QTemporaryDir dir; server.episodeCount = 205;
+        AnimeMetadataService service(dir.path()); service.setBaseUrl(server.url()); service.fetchDetail(101);
+        QTRY_VERIFY(!service.loadingDetail());
+        const auto key = server.url() + "|2|episodes-page-v1|101:0";
+        const auto original = readRecord(service.cacheStore(), key); QVERIFY(original.valid);
+        auto value = QJsonDocument::fromJson(original.data).object();
+        for (const auto field : {"offset", "limit", "data"}) {
+            auto invalid = value;
+            if (QString(field) == "data") invalid["data"] = QJsonArray{};
+            else invalid[field] = 17;
+            server.episodesBody = QJsonDocument(invalid).toJson();
+            service.fetchEpisodePage(0, true); QTRY_VERIFY(!service.loadingEpisodes());
+            QVERIFY(!service.detailError().isEmpty()); QCOMPARE(service.currentDetail().value("episodes").toList().size(), 100);
+            QCOMPARE(readRecord(service.cacheStore(), key).data, original.data);
+        }
+    }
+    void warmCoverReentryAndBoundedIdleCache() {
+        MockBangumiServer server; QTemporaryDir dir; server.coverBody = imageBytes();
+        AnimeMetadataService service(dir.path()); auto* covers = qobject_cast<CoverCache*>(service.coverCache());
+        QObject owner;
+        auto create = [&](int index) {
+            auto* handle = qobject_cast<CoverRequest*>(covers->createRequest(&owner));
+            handle->setUrl(QUrl(server.url() + "/cover/" + QString::number(index))); return handle;
+        };
+        auto* first = create(0); QTRY_VERIFY(!first->source().isEmpty()); const auto source = first->source(); delete first;
+        auto* again = create(0);
+        QCOMPARE(again->source(), source); QVERIFY(!again->loading()); QCOMPARE(server.coverRequests, 1); delete again;
+        for (int i = 1; i <= 65; ++i) {
+            auto* handle = create(i); QTRY_VERIFY(!handle->source().isEmpty()); delete handle;
+        }
+        auto* recent = create(65); QVERIFY(!recent->source().isEmpty()); QVERIFY(!recent->loading()); delete recent;
+        auto* evicted = create(0); QVERIFY(evicted->source().isEmpty());
+        QTRY_COMPARE(evicted->source(), source); QCOMPARE(server.coverRequests, 66);
+        delete evicted;
+        QFile::remove(source.toLocalFile()); // External deletion invalidates the warm index.
+        auto* missing = create(0); QTRY_VERIFY(!missing->source().isEmpty()); QCOMPARE(server.coverRequests, 67);
+        covers->reset(); QVERIFY(missing->source().isEmpty());
     }
     void cacheFreshnessAndInvalidResponsePreservation() {
         MockBangumiServer server;

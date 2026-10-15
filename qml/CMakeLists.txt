@@ -11,7 +11,7 @@ endif()
 set_source_files_properties(theme/Ui.qml i18n/I18n.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(danmaku_app URI DanmaX VERSION 1.0
     QML_FILES Main.qml OverlayWindow.qml ToolbarWindow.qml theme/Ui.qml i18n/I18n.qml
-    components/PageFrame.qml components/Disclosure.qml
+    components/PageFrame.qml components/Disclosure.qml components/AppScrollBar.qml
     components/LoadingPlaceholder.qml components/ContentReveal.qml components/CoverPlaceholder.qml
     components/AppComboBox.qml components/AnimeSearchPane.qml components/AnimeSearchField.qml
     components/SettingsSection.qml components/SettingsRow.qml components/NavigationPane.qml components/FontSelector.qml

@@ -70,7 +70,7 @@ ComboBox {
     popup.topPadding: 4
     popup.bottomPadding: 4
     popup.leftPadding: 4
-    popup.rightPadding: (listScrollBar ? listScrollBar.width : 0) + 2 * Ui.scrollGap
+    popup.rightPadding: Ui.scrollInset(listScrollBar ? listScrollBar.implicitWidth : 0)
 
     popup.background: Rectangle {
         radius: 8
@@ -129,12 +129,9 @@ ComboBox {
 
     Component {
         id: scrollComponent
-        ScrollBar {
+        AppScrollBar {
             objectName: "comboPopupScrollBar"
-            parent: control.popupList.parent
-            x: control.popupList.x + control.popupList.width + Ui.scrollGap
-            y: control.popupList.y
-            height: control.popupList.height
+            viewport: control.popupList
             Accessible.name: I18n.common.optionsScrollBarAccessible
         }
     }

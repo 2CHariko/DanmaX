@@ -30,6 +30,7 @@ QtObject {
         percentSuffix: "%",
         errorPrefix: "错误：",
         pageScrollBarAccessible: "页面滚动条",
+        railScrollBarAccessible: "番剧横向列表滚动条",
         optionsScrollBarAccessible: "选项列表滚动条",
         disclosureExpanded: "已展开",
         disclosureCollapsed: "已收起",
@@ -53,6 +54,9 @@ QtObject {
     // 首页流媒体媒体库
     readonly property var home: ({
         title: "首页",
+        allTags: "标签",
+        expandTags: "展开全部标签",
+        collapseTags: "收起标签",
         description: "浏览放送日历，查找番剧并匹配剧集弹幕。",
         heroWatchNow: "搜索弹幕",
         heroDetails: "番剧详情",
@@ -64,6 +68,10 @@ QtObject {
         noSummary: "暂无剧情简介",
         noEpisodes: "暂无剧集列表",
         episodesCountFormat: "共 %1 话",
+        episodeRange: "剧集范围",
+        episodeRangeFormat: "%1 ～ %2",
+        previousEpisodeRange: "上一组剧集",
+        nextEpisodeRange: "下一组剧集",
         episodeLoadDanmaku: "载入第 %1 话弹幕",
         airDatePrefix: "首播：",
         ratingPrefix: "评分：",
@@ -255,6 +263,9 @@ QtObject {
 
         // 外观
         appearanceSection: "应用外观",
+        homeSection: "首页内容",
+        homeShowChineseAnimeTitle: "首页显示国漫",
+        homeShowChineseAnimeDesc: "在首页推荐、追番周历和高分榜中显示国漫；搜索和最近在看不受影响。",
         themeTitle: "应用主题",
         themeOptions: ["跟随系统", "浅色", "深色"],
         themeAccessible: "应用主题",

@@ -101,6 +101,9 @@ int main(int argc, char** argv) {
     check(readDanmakuXml(path, source.get_token()).cancelled, "Cooperative XML cancellation");
     {
         SettingsStore settings(dir.path());
+        check(!settings.values()["homeShowChineseAnime"].toBool(), "Home hides confirmed Chinese anime by default");
+        check(settings.setValue("homeShowChineseAnime", true) && !settings.setValue("homeShowChineseAnime", "yes"),
+              "Home visibility setting validates booleans");
         QFile initial(dir.filePath("settings.ini"));
         check(initial.open(QIODevice::ReadOnly), "Create INI on first launch");
         const auto annotated = initial.readAll();
@@ -122,6 +125,7 @@ int main(int argc, char** argv) {
               "Reject invalid setting without mutation");
         check(settings.retrySave(), "Flush numeric edits");
         SettingsStore restored(dir.path());
+        check(restored.values()["homeShowChineseAnime"].toBool(), "Restore home visibility preference");
         check(restored.error().isEmpty() && restored.values()["speed"].toInt() == 300,
               "Restore persisted INI settings");
         check(!restored.values()["textureBudgetAuto"].toBool() && restored.values()["textureBudgetMiB"] == 96,

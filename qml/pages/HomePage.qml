@@ -23,21 +23,22 @@ PageFrame {
     headingVisible: !searchPane.showingResults
 
     property int activeWeekday: backend.metadata.todayWeekday
-    readonly property bool coldLoading: backend.metadata.loading && backend.metadata.weeklyCalendar.length === 0
+    readonly property bool coldLoading: (backend.metadata.loading && backend.metadata.weeklyCalendar.length === 0)
+        || (backend.metadata.homeClassifying && !backend.metadata.homeHeroAnime.id)
     ContentReveal { id: heroReveal; target: heroBanner }
     ContentReveal { id: weeklyReveal; target: weeklyRail }
     ContentReveal { id: topReveal; target: topRatedRail }
 
     // 计算当前所选星期的番剧列表
     readonly property var currentWeekdayList: {
-        const cal = page.backend.metadata.weeklyCalendar
-        if (!cal || cal.length === 0) return page.backend.metadata.airingToday
+        const cal = page.backend.metadata.homeWeeklyCalendar
+        if (!cal || cal.length === 0) return []
         for (let i = 0; i < cal.length; ++i) {
             if (cal[i].weekdayId === page.activeWeekday) {
                 return cal[i].items || []
             }
         }
-        return page.backend.metadata.airingToday
+        return []
     }
 
     // 格式化本地弹幕缓存为最近在看卡片列表
@@ -110,14 +111,14 @@ PageFrame {
     LoadingPlaceholder {
         objectName: "homeHeroSkeleton"
         loading: page.coldLoading && !searchPane.showingResults
-        hasContent: page.backend.metadata.weeklyCalendar.length > 0
+        hasContent: Boolean(page.backend.metadata.homeHeroAnime.id)
         appearance: "hero"
         onContentReady: heroReveal.restart()
     }
     HeroBanner {
         id: heroBanner
-        visible: !searchPane.showingResults && !page.coldLoading
-        anime: page.backend.metadata.heroAnime
+        visible: !searchPane.showingResults && !page.coldLoading && Boolean(page.backend.metadata.homeHeroAnime.id)
+        anime: page.backend.metadata.homeHeroAnime
         coverCache: page.backend.metadata.coverCache
         onWatchNowClicked: title => page.openDanmakuForAnime(title, "", 0)
         onDetailsClicked: anime => page.showDetails(anime)
@@ -128,6 +129,7 @@ PageFrame {
         coverCache: page.backend.metadata.coverCache
         visible: !searchPane.showingResults && Boolean(page.recentWatchedList && page.recentWatchedList.length > 0)
         title: I18n.home.continueWatching
+        onVerticalScrollRequested: (pixels, angle) => page.scrollVertical(pixels, angle)
         model: page.recentWatchedList
         onCardClicked: anime => {
             if (!anime) return
@@ -142,8 +144,8 @@ PageFrame {
     // 3. 轨道二：今日新番 / 追番周历（支持周一至周日 7 天 Tab 快速切换）
     LoadingPlaceholder {
         objectName: "homeCalendarSkeleton"
-        loading: page.coldLoading && !searchPane.showingResults
-        hasContent: page.backend.metadata.weeklyCalendar.length > 0
+        loading: !searchPane.showingResults && (page.coldLoading || (page.backend.metadata.homeClassifying && page.currentWeekdayList.length === 0))
+        hasContent: page.currentWeekdayList.length > 0
         appearance: "cards"
         onContentReady: weeklyReveal.restart()
     }
@@ -152,6 +154,7 @@ PageFrame {
         coverCache: page.backend.metadata.coverCache
         visible: !searchPane.showingResults && !page.coldLoading
         title: I18n.home.weeklyCalendar
+        onVerticalScrollRequested: (pixels, angle) => page.scrollVertical(pixels, angle)
         weekdayTabs: I18n.home.weekdays
         selectedWeekday: page.activeWeekday
         model: page.currentWeekdayList
@@ -167,7 +170,7 @@ PageFrame {
     LoadingPlaceholder {
         objectName: "homeTopRatedSkeleton"
         loading: page.coldLoading && !searchPane.showingResults
-        hasContent: page.backend.metadata.weeklyCalendar.length > 0
+        hasContent: page.backend.metadata.homeTopRated.length > 0
         appearance: "cards"
         onContentReady: topReveal.restart()
     }
@@ -176,7 +179,8 @@ PageFrame {
         coverCache: page.backend.metadata.coverCache
         visible: !searchPane.showingResults && !page.coldLoading
         title: I18n.home.topRated
-        model: page.backend.metadata.topRated
+        onVerticalScrollRequested: (pixels, angle) => page.scrollVertical(pixels, angle)
+        model: page.backend.metadata.homeTopRated
         onCardClicked: anime => {
             page.showDetails(anime)
         }
@@ -191,10 +195,14 @@ PageFrame {
         loadingSubject: page.backend.metadata.loadingSubject
         loadingEpisodes: page.backend.metadata.loadingEpisodes
         episodesAvailable: page.backend.metadata.episodesAvailable
+        episodePage: page.backend.metadata.episodePage
+        episodeTotal: page.backend.metadata.episodeTotal
+        episodePageCount: page.backend.metadata.episodePageCount
         stale: page.backend.metadata.detailStale
         coverCache: page.backend.metadata.coverCache
         error: page.backend.metadata.detailError
         onRetryRequested: page.backend.metadata.fetchDetail(page.detailSubjectId, true)
+        onEpisodePageRequested: index => page.backend.metadata.fetchEpisodePage(index)
         onCloseRequested: page.backend.metadata.clearDetail()
         onWatchNowRequested: animeTitle => {
             page.backend.metadata.clearDetail()

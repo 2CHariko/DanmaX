@@ -11,6 +11,7 @@
 #include <QJsonArray>
 #include <QDate>
 #include <memory>
+#include <algorithm>
 #include <stop_token>
 
 class CoverCache;
@@ -23,10 +24,17 @@ class AnimeMetadataService final : public QObject {
     Q_PROPERTY(QVariantList topRated READ topRated NOTIFY calendarChanged)
     Q_PROPERTY(QVariantMap heroAnime READ heroAnime NOTIFY calendarChanged)
     Q_PROPERTY(int todayWeekday READ todayWeekday NOTIFY calendarChanged)
+    Q_PROPERTY(QVariantList homeWeeklyCalendar READ homeWeeklyCalendar NOTIFY homeChanged)
+    Q_PROPERTY(QVariantList homeTopRated READ homeTopRated NOTIFY homeChanged)
+    Q_PROPERTY(QVariantMap homeHeroAnime READ homeHeroAnime NOTIFY homeChanged)
+    Q_PROPERTY(bool homeClassifying READ homeClassifying NOTIFY homeChanged)
     Q_PROPERTY(bool loadingDetail READ loadingDetail NOTIFY detailChanged)
     Q_PROPERTY(bool loadingSubject READ loadingSubject NOTIFY detailChanged)
     Q_PROPERTY(bool loadingEpisodes READ loadingEpisodes NOTIFY detailChanged)
     Q_PROPERTY(bool episodesAvailable READ episodesAvailable NOTIFY detailChanged)
+    Q_PROPERTY(int episodePage READ episodePage NOTIFY detailChanged)
+    Q_PROPERTY(int episodeTotal READ episodeTotal NOTIFY detailChanged)
+    Q_PROPERTY(int episodePageCount READ episodePageCount NOTIFY detailChanged)
     Q_PROPERTY(QVariantMap currentDetail READ currentDetail NOTIFY detailChanged)
     Q_PROPERTY(QString detailError READ detailError NOTIFY detailChanged)
     Q_PROPERTY(bool searching READ searching NOTIFY searchChanged)
@@ -54,10 +62,18 @@ public:
     QVariantList topRated() const { return topRated_; }
     QVariantMap heroAnime() const { return heroAnime_; }
     int todayWeekday() const { return todayWeekday_; }
+    QVariantList homeWeeklyCalendar() const { return homeWeeklyCalendar_; }
+    QVariantList homeTopRated() const { return homeTopRated_; }
+    QVariantMap homeHeroAnime() const { return homeHeroAnime_; }
+    bool homeClassifying() const { return !homeQueue_.isEmpty() || !homeActive_.isEmpty(); }
+    void setShowChineseAnime(bool show);
     bool loadingDetail() const { return loadingDetail_; }
     bool loadingSubject() const { return detailSubjectLoading_; }
     bool loadingEpisodes() const { return detailEpisodesLoading_; }
     bool episodesAvailable() const { return episodesAvailable_; }
+    int episodePage() const { return episodePage_; }
+    int episodeTotal() const { return episodeTotal_; }
+    int episodePageCount() const { return std::max(1, (episodeTotal_ + 99) / 100); }
     QVariantMap currentDetail() const { return currentDetail_; }
     QString detailError() const { return detailError_; }
     bool searching() const { return searching_; }
@@ -79,11 +95,13 @@ public:
     QString baseUrl() const { return baseUrl_; }
     Q_INVOKABLE void refreshCalendar(bool force = false);
     Q_INVOKABLE void fetchDetail(qint64 subjectId, bool force = false);
+    Q_INVOKABLE void fetchEpisodePage(int page, bool force = false);
     Q_INVOKABLE void searchBangumi(const QString& keyword, bool force = false);
     Q_INVOKABLE void clearSearch();
     Q_INVOKABLE void clearDetail();
     Q_INVOKABLE void clearMetadataCache();
 signals:
+    void homeChanged();
     void stateChanged();
     void calendarChanged();
     void detailChanged();
@@ -112,15 +130,12 @@ private:
         QList<Watch> watches;
         QPointer<QNetworkReply> reply;
         Result cached;
-        QJsonArray episodes;
-        int expectedTotal = -1;
-        QSet<qint64> episodeIds;
         bool active = true;
         bool force = false;
     };
     static CalendarParsed parseCalendarJson(const QByteArray&, int weekday, std::stop_token stop = {});
     static QVariantMap parseSubjectDetail(const QByteArray&, const QByteArray& episodes = {}, std::stop_token stop = {});
-    static Result parseResource(Kind kind, const QString& identity, const QByteArray& data, int weekday, bool completeEpisodes = true);
+    static Result parseResource(Kind kind, const QString& identity, const QByteArray& data, int weekday);
     QString resourceKey(Kind kind, const QString& identity) const;
     void request(Kind kind, QString identity, QString scope, bool force, std::function<void(Result)> callback);
     void cached(const std::shared_ptr<Job>& job, MetadataCache::Record record, bool legacy = false);
@@ -132,6 +147,19 @@ private:
     void applyCalendar(QVariantMap value);
     void fetchHeroDetails(bool force = false);
     void updateDetail();
+    void rebuildHome();
+    void prepareHome();
+    void pumpHome();
+    void cancelHome();
+    struct HomeInfo { QVariantMap subject; QDateTime fetchedAt; bool available{}; };
+    QHash<qint64, HomeInfo> homeInfo_;
+    QList<qint64> homeQueue_;
+    QSet<qint64> homeActive_;
+    QVariantList homeWeeklyCalendar_, homeTopRated_;
+    QVariantMap homeHeroAnime_;
+    bool homeEnabled_{}, showChineseAnime_{};
+    quint64 homeGeneration_{};
+    QTimer homePump_;
     MetadataCache cache_;
     CoverCache* covers_{};
     QNetworkAccessManager network_;
@@ -146,6 +174,9 @@ private:
     bool loading_{}, loadingDetail_{}, searching_{}, calendarStale_{}, detailStale_{}, searchStale_{}, clearing_{}, cacheCleared_{};
     bool detailSubjectLoading_{}, detailEpisodesLoading_{}, detailSubjectStale_{}, detailEpisodesStale_{};
     bool episodesAvailable_{};
+    int episodePage_{}, episodeTotal_{};
+    QDateTime episodeTotalFetchedAt_;
+    quint64 episodeGeneration_{};
     QString error_, detailError_, searchError_, searchKeyword_, cacheError_, subjectError_, episodesError_;
     QVariantList weeklyCalendar_, airingToday_, topRated_, searchResults_, detailEpisodes_;
     QVariantMap heroAnime_, currentDetail_, detailSubject_;

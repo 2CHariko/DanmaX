@@ -17,6 +17,7 @@ ApplicationWindow {
     property int sourceTab: 0
     readonly property string currentPageName: ["home", "player", "logs", "settings", "about"][selectedPage] || ""
     readonly property bool compact: width < Ui.expandedNavigationWidth
+    readonly property real pageContentInset: pages.children[selectedPage].contentInset
     visible: false
     width: 1080; height: 760
     readonly property QtObject sizingScreen: backend.screenForName(screen ? screen.name : "")
@@ -114,11 +115,12 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 // Keep every page heading aligned with the homepage search layout.
                 Layout.preferredHeight: Math.max(44, homeSearch.height + 2 * Ui.titleBarVerticalPadding)
+                Layout.minimumHeight: Layout.preferredHeight
 
                 Item {
                     id: searchHost
                     anchors.left: parent.left
-                    anchors.leftMargin: root.compact ? 16 : Ui.pagePadding
+                    anchors.leftMargin: root.pageContentInset
                     anchors.right: captionButtons.left
                     anchors.rightMargin: 48
                     height: parent.height
@@ -145,7 +147,7 @@ ApplicationWindow {
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.leftMargin: root.compact ? 16 : Ui.pagePadding
+                Layout.leftMargin: 0
                 Layout.rightMargin: 0
                 Layout.bottomMargin: 0
                 Layout.topMargin: Ui.pageHeaderGap
@@ -154,7 +156,8 @@ ApplicationWindow {
             RowLayout {
                 visible: root.backend.error.length > 0 || root.backend.settings.error.length > 0
                 Layout.fillWidth: true
-                Layout.rightMargin: root.compact ? 16 : Ui.pagePadding
+                Layout.leftMargin: root.pageContentInset
+                Layout.rightMargin: root.pageContentInset
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap

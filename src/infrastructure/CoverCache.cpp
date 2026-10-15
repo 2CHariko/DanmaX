@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QNetworkRequest>
 #include <QTimer>
+#include <algorithm>
 
 namespace {
 constexpr qint64 maxBytes = 8LL * 1024 * 1024;
@@ -43,37 +44,60 @@ QObject* CoverCache::createRequest(QObject* owner) {
 }
 void CoverCache::pins() {
     QSet<QString> keys, files;
-    for (const auto& entry : std::as_const(entries_)) if (entry->active && !entry->watchers.isEmpty()) {
+    for (const auto& entry : std::as_const(entries_)) if (entry->active) {
         keys.insert(entry->key);
         if (entry->cached.localUrl.isLocalFile()) files.insert(QFileInfo(entry->cached.localUrl.toLocalFile()).fileName());
     }
     store_->setPins("covers", keys);
     store_->setCoverFiles(files);
 }
+void CoverCache::trimIdle() {
+    QList<std::shared_ptr<Entry>> idle;
+    qint64 bytes = 0;
+    for (const auto& entry : std::as_const(entries_)) if (entry->watchers.isEmpty()) {
+        idle.append(entry); bytes += entry->retainedBytes;
+    }
+    std::sort(idle.begin(), idle.end(), [](const auto& a, const auto& b) { return a->lastUse < b->lastUse; });
+    int count = idle.size();
+    for (const auto& entry : idle) {
+        if (count <= 64 && bytes <= 32LL * 1024 * 1024 && entries_.size() < 260) break;
+        entry->active = false; entries_.remove(entry->key);
+        bytes -= entry->retainedBytes; --count;
+    }
+}
 void CoverCache::attach(CoverRequest* request) {
     const auto url = request->url();
     if (!url.isValid() || (url.scheme() != "http" && url.scheme() != "https") || url.host().isEmpty() || !url.userInfo().isEmpty()) return;
     const auto key = "cover|" + url.toString(QUrl::FullyEncoded);
+    if (auto found = entries_.value(key); found && found->cached.localUrl.isLocalFile()
+        && !QFileInfo::exists(found->cached.localUrl.toLocalFile()) && found->watchers.isEmpty()) {
+        found->active = false; entries_.remove(key);
+    }
     if (auto found = entries_.value(key)) {
+        found->lastUse = ++useCounter_;
         found->watchers.append(request); request->setSource(found->cached.localUrl); request->setLoading(!found->finished); pins();
         refresh(request);
         return;
     }
     // Four active transfers plus a bounded pending set; rejected visible items retry on re-entry.
+    trimIdle();
     if (entries_.size() >= 260) return;
     request->setLoading(true);
     auto entry = std::make_shared<Entry>(); entry->key = key; entry->url = url; entry->watchers.append(request);
+    entry->lastUse = ++useCounter_;
     entries_.insert(key, entry); pins();
     store_->read(key, true, [this, entry](MetadataCache::Record record) {
         if (!entry->active) return;
         if (!record.valid) { enqueue(entry); return; }
         worker_.start([this, entry, record = std::move(record)]() mutable {
             const bool valid = !imageFormat(record.data).isEmpty();
+            const auto bytes = record.data.size();
             record.data.clear();
-            QMetaObject::invokeMethod(this, [this, entry, record, valid] {
+            QMetaObject::invokeMethod(this, [this, entry, record, valid, bytes] {
                 if (!entry->active) return;
                 if (valid) {
                     entry->cached = record;
+                    entry->retainedBytes = bytes;
                     pins();
                     for (const auto& request : std::as_const(entry->watchers)) if (request) request->setSource(record.localUrl);
                     if (store_->fresh(record, 30LL * 86400)) { entry->finished = true; setLoading(entry, false); return; }
@@ -96,6 +120,10 @@ void CoverCache::detach(CoverRequest* request) {
     if (!entry) return;
     entry->watchers.removeIf([request](const auto& watcher) { return !watcher || watcher == request; });
     if (!entry->watchers.isEmpty()) return;
+    if (entry->finished && !entry->cached.localUrl.isEmpty()) {
+        entry->lastUse = ++useCounter_;
+        trimIdle(); pins(); return;
+    }
     entry->active = false; entries_.remove(key);
     if (entry->downloading) { --active_; entry->downloading = false; }
     if (auto* reply = entry->reply.data()) { entry->reply = nullptr; reply->abort(); reply->deleteLater(); }
@@ -129,7 +157,7 @@ void CoverCache::complete(const std::shared_ptr<Entry>& entry, QUrl source, QDat
     entry->finished = true;
     setLoading(entry, false);
     if (entry->downloading) { --active_; entry->downloading = false; }
-    pins(); store_->inspect();
+    trimIdle(); pins(); store_->inspect();
     pump();
 }
 void CoverCache::download(const std::shared_ptr<Entry>& entry) {
@@ -156,8 +184,10 @@ void CoverCache::download(const std::shared_ptr<Entry>& entry) {
                     if (!entry->active) return;
                     // Budget/write failures still permit the current session to display the image.
                     auto source = saved.localUrl;
+                    entry->retainedBytes = bytes.size();
                     if (source.isEmpty()) source = QUrl(QStringLiteral("data:image/") + QString::fromLatin1(format) + ";base64," + QString::fromLatin1(bytes.toBase64()));
-                    complete(entry, source, saved.fetchedAt);
+                    if (!source.isLocalFile()) entry->retainedBytes = source.toString().size() * 2;
+                    complete(entry, source, saved.fetchedAt.isValid() ? saved.fetchedAt : store_->now());
                 });
             }, Qt::QueuedConnection);
         });

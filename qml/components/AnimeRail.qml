@@ -13,6 +13,7 @@ ColumnLayout {
     property int selectedWeekday: 0
     signal cardClicked(var anime)
     signal weekdaySelected(int day)
+    signal verticalScrollRequested(real pixels, real angle)
 
     spacing: 8
     Layout.fillWidth: true
@@ -78,16 +79,20 @@ ColumnLayout {
     // 横向卡片列表（支持视图复用与触控板横向平滑惯性滚动）
     Item {
         Layout.fillWidth: true
-        Layout.preferredHeight: Math.round(218 * Ui.textScale)
+        Layout.preferredHeight: Math.round(210 * Ui.textScale) + Ui.scrollInset(hbar.implicitHeight)
 
         ListView {
             id: cardList
+            objectName: "animeRailList"
             anchors.fill: parent
+            anchors.bottomMargin: Ui.scrollInset(hbar.implicitHeight)
             orientation: ListView.Horizontal
             spacing: 12
             clip: true
             boundsBehavior: Flickable.StopAtBounds
             flickDeceleration: 2000
+            reuseItems: true
+            cacheBuffer: width
             model: railRoot.model
 
             delegate: AnimeCard {
@@ -98,9 +103,11 @@ ColumnLayout {
                 onClicked: if (animeData) railRoot.cardClicked(animeData)
             }
 
-            ScrollBar.horizontal: ScrollBar {
+            ScrollBar.horizontal: AppScrollBar {
                 id: hbar
-                policy: ScrollBar.AsNeeded
+                objectName: "animeRailHorizontalScrollBar"
+                viewport: cardList
+                Accessible.name: I18n.common.railScrollBarAccessible
             }
 
             // 滚轮横向平滑滚动支持
@@ -108,7 +115,16 @@ ColumnLayout {
                 anchors.fill: parent
                 acceptedButtons: Qt.NoButton
                 onWheel: wheel => {
-                    const delta = wheel.angleDelta.x || wheel.angleDelta.y
+                    const shifted = (wheel.modifiers & Qt.ShiftModifier) !== 0
+                    const pixels = wheel.pixelDelta.x !== 0 || wheel.pixelDelta.y !== 0
+                    const dx = pixels ? wheel.pixelDelta.x : wheel.angleDelta.x
+                    const dy = pixels ? wheel.pixelDelta.y : wheel.angleDelta.y
+                    if (!shifted && Math.abs(dy) >= Math.abs(dx) && dy !== 0) {
+                        railRoot.verticalScrollRequested(wheel.pixelDelta.y, wheel.angleDelta.y)
+                        wheel.accepted = true
+                        return
+                    }
+                    const delta = dx || (shifted ? dy : 0)
                     const next = Math.max(0, Math.min(Math.max(0, cardList.contentWidth - cardList.width), cardList.contentX - delta))
                     wheel.accepted = delta !== 0 && next !== cardList.contentX
                     if (wheel.accepted) cardList.contentX = next

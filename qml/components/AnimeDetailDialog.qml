@@ -12,10 +12,22 @@ Dialog {
     property bool loadingSubject: false
     property bool loadingEpisodes: false
     property bool episodesAvailable: false
+    property int episodePage: 0
+    property int episodeTotal: 0
+    property int episodePageCount: 1
     required property QtObject coverCache
     property bool stale: false
     property string error: ""
     property bool ownerVisible: true
+    property bool tagsExpanded: false
+    property real tagsSubjectId: 0
+    onDetailChanged: {
+        const id = Number(detail && detail.id) || 0
+        if (id !== tagsSubjectId) {
+            tagsSubjectId = id
+            tagsExpanded = false
+        }
+    }
     readonly property bool hasValidDetail: Boolean(detail && Number(detail.id) > 0)
     property string currentDate: Qt.formatDateTime(new Date(), "yyyy-MM-dd")
 
@@ -37,6 +49,7 @@ Dialog {
 
     signal closeRequested()
     signal retryRequested()
+    signal episodePageRequested(int page)
     signal watchNowRequested(string animeTitle)
     signal episodeSelected(string animeTitle, string episodeTitle, real episodeNumber)
 
@@ -49,17 +62,17 @@ Dialog {
     focus: true
     closePolicy: Popup.CloseOnEscape
     visible: ownerVisible && (hasValidDetail || loading || error.length > 0)
-    title: loading && !hasValidDetail ? I18n.common.loading : ((detail && detail.title) || I18n.home.heroDetails)
+    title: (detail && detail.title) || I18n.home.heroDetails
+    header: null
+    // Keep the native scrollbar's full hit area inside the shared outer inset.
+    leftPadding: Ui.scrollInset(detailVerticalBar.implicitWidth, padding)
+    topPadding: leftPadding
+    rightPadding: leftPadding
+    bottomPadding: leftPadding
     standardButtons: Dialog.NoButton
     onRejected: closeRequested()
     footer: DialogButtonBox {
         alignment: Qt.AlignRight
-        Button {
-            objectName: "refreshAnimeDetail"
-            text: I18n.common.refresh
-            enabled: !dialogRoot.loading
-            onClicked: dialogRoot.retryRequested()
-        }
         Button {
             objectName: "closeAnimeDetail"
             text: I18n.common.close
@@ -74,24 +87,22 @@ Dialog {
 
     contentItem: ScrollView {
         id: detailScroll
+        Accessible.name: dialogRoot.title
         clip: true
+        padding: 0
         contentWidth: availableWidth
         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-        rightPadding: 16 + Ui.scrollGap
+        rightPadding: 0
+        ScrollBar.vertical: AppScrollBar {
+            id: detailVerticalBar
+            objectName: "animeDetailVerticalScrollBar"
+            viewport: detailScroll
+            Accessible.name: I18n.common.pageScrollBarAccessible
+        }
 
         ColumnLayout {
             width: detailScroll.availableWidth
             spacing: 16
-
-            ProgressBar {
-                id: topProgressBar
-                Layout.fillWidth: true
-                implicitHeight: 3
-                indeterminate: true
-                visible: dialogRoot.loading
-                Accessible.role: Accessible.ProgressBar
-                Accessible.name: dialogRoot.stale ? I18n.home.updatingCache : I18n.common.loading
-            }
 
             LoadingPlaceholder {
                 objectName: "animeDetailSkeleton"
@@ -265,34 +276,6 @@ Dialog {
                             }
                         }
 
-                        // 题材标签行 (Tags 胶囊)
-                        Flow {
-                            Layout.fillWidth: true
-                            spacing: 6
-                            visible: Boolean(dialogRoot.detail && dialogRoot.detail.tags && dialogRoot.detail.tags.length > 0)
-
-                            Repeater {
-                                model: (dialogRoot.detail && dialogRoot.detail.tags) || []
-                                delegate: Rectangle {
-                                    required property string modelData
-                                    implicitWidth: tagLabel.implicitWidth + 10
-                                    implicitHeight: tagLabel.implicitHeight + 4
-                                    radius: 4
-                                    color: Ui.dark ? Qt.rgba(1, 1, 1, 0.07) : Qt.rgba(0, 0, 0, 0.05)
-                                    border.width: 1
-                                    border.color: Ui.cardBorder
-
-                                    Label {
-                                        id: tagLabel
-                                        anchors.centerIn: parent
-                                        text: modelData
-                                        font.pixelSize: Math.round(11 * Ui.textScale)
-                                        color: Ui.secondaryText
-                                    }
-                                }
-                            }
-                        }
-
                         Item { Layout.fillHeight: true }
 
                         // 主行动点（CTA）操作栏
@@ -344,10 +327,45 @@ Dialog {
 
                     Label {
                         objectName: "animeEpisodeCount"
-                        text: !dialogRoot.episodesAvailable ? (dialogRoot.loadingEpisodes ? I18n.common.loading : "")
-                            : I18n.format(I18n.home.episodesCountFormat, ((dialogRoot.detail && dialogRoot.detail.episodes) || []).length)
+                        text: dialogRoot.episodesAvailable || dialogRoot.episodeTotal > 0
+                            ? I18n.format(I18n.home.episodesCountFormat, dialogRoot.episodeTotal)
+                            : (dialogRoot.loadingEpisodes ? I18n.common.loading : "")
                         font.pixelSize: Ui.captionSize
                         color: Ui.secondaryText
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: dialogRoot.episodePageCount > 1
+                    spacing: 8
+                    Button {
+                        objectName: "animeEpisodesPrevious"
+                        icon.source: Ui.icon("chevron-left")
+                        Accessible.name: I18n.home.previousEpisodeRange
+                        enabled: dialogRoot.episodePage > 0
+                        onClicked: dialogRoot.episodePageRequested(dialogRoot.episodePage - 1)
+                    }
+                    AppComboBox {
+                        objectName: "animeEpisodeRange"
+                        Layout.fillWidth: true
+                        Accessible.name: I18n.home.episodeRange
+                        model: {
+                            const ranges = []
+                            for (let i = 0; i < dialogRoot.episodePageCount; ++i)
+                                ranges.push(I18n.format(I18n.home.episodeRangeFormat, i * 100 + 1,
+                                    Math.min((i + 1) * 100, dialogRoot.episodeTotal)))
+                            return ranges
+                        }
+                        currentIndex: dialogRoot.episodePage
+                        onActivated: index => dialogRoot.episodePageRequested(index)
+                    }
+                    Button {
+                        objectName: "animeEpisodesNext"
+                        icon.source: Ui.icon("chevron-right")
+                        Accessible.name: I18n.home.nextEpisodeRange
+                        enabled: dialogRoot.episodePage + 1 < dialogRoot.episodePageCount
+                        onClicked: dialogRoot.episodePageRequested(dialogRoot.episodePage + 1)
                     }
                 }
 
@@ -437,6 +455,53 @@ Dialog {
                     text: I18n.home.noEpisodes
                     color: Ui.secondaryText
                     font.pixelSize: Ui.captionSize
+                }
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                visible: Boolean(dialogRoot.detail && dialogRoot.detail.tags && dialogRoot.detail.tags.length > 0)
+                Label {
+                    text: I18n.home.allTags
+                    font.pixelSize: Ui.sectionHeaderSize
+                    font.weight: Font.DemiBold
+                }
+                Flow {
+                    id: tagsFlow
+                    objectName: "animeDetailTags"
+                    Layout.fillWidth: true
+                    spacing: 6
+                    Repeater {
+                        model: {
+                            const tags = (dialogRoot.detail && dialogRoot.detail.tags) || []
+                            return dialogRoot.tagsExpanded ? tags : tags.slice(0, 12)
+                        }
+                        delegate: Rectangle {
+                            required property string modelData
+                            implicitWidth: Math.min(tagLabel.implicitWidth + 16, tagsFlow.width)
+                            implicitHeight: tagLabel.implicitHeight + 8
+                            radius: Ui.cardRadius
+                            color: Ui.cardBackground
+                            border.width: 1
+                            border.color: Ui.cardBorder
+                            Label {
+                                id: tagLabel
+                                anchors.centerIn: parent
+                                width: Math.max(0, parent.width - 16)
+                                text: modelData
+                                wrapMode: Text.WrapAnywhere
+                                font.pixelSize: Ui.captionSize
+                                color: Ui.secondaryText
+                            }
+                        }
+                    }
+                }
+                Button {
+                    objectName: "animeDetailExpandTags"
+                    visible: Boolean(dialogRoot.detail && dialogRoot.detail.tags && dialogRoot.detail.tags.length > 12)
+                    text: dialogRoot.tagsExpanded ? I18n.home.collapseTags : I18n.home.expandTags
+                    onClicked: dialogRoot.tagsExpanded = !dialogRoot.tagsExpanded
                 }
             }
 
