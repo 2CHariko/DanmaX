@@ -1023,8 +1023,12 @@ ApplicationWindow {
         QCOMPARE(expandTags->property("text").toString(), QStringLiteral("收起"));
         for (const auto& theme : {"light", "dark"}) {
             settings->setValue("theme", theme); window->resize(520, 600); QTest::qWait(80);
-            for (auto* item : tagFlow->childItems()) if (item->property("modelData").isValid())
+            for (auto* item : tagFlow->childItems()) if (item->property("modelData").isValid()) {
                 QVERIFY(item->x() + item->width() <= tagFlow->width() + 1);
+                const QString text = item->property("modelData").toString();
+                if (!text.contains(QStringLiteral("超长标签")) && !text.contains(QStringLiteral("用于验证窄窗口")))
+                    QVERIFY(std::abs(item->height() - expandTags->height()) < 1);
+            }
             QQuickItem* lastTag = nullptr;
             for (auto* item : tagFlow->childItems())
                 if (item->property("modelData").isValid()) lastTag = item;
@@ -1049,6 +1053,25 @@ ApplicationWindow {
         setTags(QStringLiteral("['TV', '日本']"));
         QCOMPARE(tagCount(), 2);
         QVERIFY(!expandTags->isVisible());
+        setTags(QStringLiteral("['TV', '日本', 'J.C.STAFF', '漫画改', 'Passione', '2026', '轻改', '超长标签'.repeat(30)]"));
+        checkCollapsedTags();
+        for (auto* item : tagFlow->childItems()) {
+            if (!item->property("modelData").isValid() || !item->isVisible()) continue;
+            const QString text = item->property("modelData").toString();
+            if (text == QStringLiteral("TV") || text == QStringLiteral("J.C.STAFF"))
+                QVERIFY(std::abs(item->height() - expandTags->height()) < 1);
+        }
+        expandTags->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        QTRY_VERIFY(expandTags->property("text").toString() == QStringLiteral("收起"));
+        for (auto* item : tagFlow->childItems()) {
+            if (!item->property("modelData").isValid() || !item->isVisible()) continue;
+            const QString text = item->property("modelData").toString();
+            if (text == QStringLiteral("TV") || text == QStringLiteral("J.C.STAFF"))
+                QVERIFY(std::abs(item->height() - expandTags->height()) < 1);
+        }
+        expandTags->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        QTest::qWait(80);
+        checkCollapsedTags();
         setTags(QStringLiteral("['超长标签'.repeat(100), 'TV', '日本']"));
         checkCollapsedTags();
         QCOMPARE(tagCount(), 0);

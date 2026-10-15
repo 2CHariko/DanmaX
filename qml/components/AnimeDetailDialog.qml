@@ -479,7 +479,7 @@ Dialog {
                     // Reserve the trailing action before selecting a complete prefix.
                     readonly property int collapsedCount: {
                         let used = 0
-                        const widths = tags.map(tag => Math.min(Math.ceil(tagMetrics.advanceWidth(String(tag))) + 16, width))
+                        const widths = tags.map(tag => Math.min(Math.ceil(tagMetrics.advanceWidth(String(tag))) + 18, width))
                         for (let i = 0; i < widths.length; ++i)
                             used += widths[i] + (i > 0 ? spacing : 0)
                         if (used <= width) return tags.length
@@ -496,7 +496,7 @@ Dialog {
                     }
                     FontMetrics {
                         id: tagMetrics
-                        font: expandTagsButton.font
+                        font.pixelSize: Ui.captionSize
                     }
                     Repeater {
                         model: tagsFlow.tags
@@ -504,7 +504,7 @@ Dialog {
                             required property string modelData
                             required property int index
                             visible: dialogRoot.tagsExpanded || index < tagsFlow.collapsedCount
-                            implicitWidth: Math.min(Math.ceil(tagMetrics.advanceWidth(modelData)) + 16, tagsFlow.width)
+                            implicitWidth: Math.min(tagLabel.implicitWidth + 16, tagsFlow.width)
                             implicitHeight: dialogRoot.tagsExpanded ? tagLabel.implicitHeight + 8 : tagsFlow.chipHeight
                             radius: Ui.cardRadius
                             color: Ui.cardBackground
@@ -513,10 +513,11 @@ Dialog {
                             Label {
                                 id: tagLabel
                                 anchors.centerIn: parent
-                                width: Math.max(0, parent.width - 16)
+                                readonly property bool isLongTag: (implicitWidth + 16) > tagsFlow.width
+                                width: isLongTag ? Math.max(0, parent.width - 16) : implicitWidth
                                 text: modelData
-                                wrapMode: dialogRoot.tagsExpanded ? Text.WrapAnywhere : Text.NoWrap
-                                elide: dialogRoot.tagsExpanded ? Text.ElideNone : Text.ElideRight
+                                wrapMode: (isLongTag && dialogRoot.tagsExpanded) ? Text.WrapAnywhere : Text.NoWrap
+                                elide: (isLongTag && !dialogRoot.tagsExpanded) ? Text.ElideRight : Text.ElideNone
                                 font.pixelSize: Ui.captionSize
                                 color: Ui.secondaryText
                             }

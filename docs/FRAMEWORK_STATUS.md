@@ -901,6 +901,7 @@ Windows 10/早期 Windows 11、系统透明开关与节能切换、高对比度�
 
 - 标签收起规则由固定前 12 项改为按实际字体度量与容器宽度选择可完整容纳的一段前缀，并提前预留末尾“展开”按钮及间距。收起最多一行，全部标签能放下时隐藏按钮；展开显示完整标签流，“收起”紧跟最后一个标签，空间不足时自然换行。展开态超长标签继续换行，收起态不因长文字增加行数。
 - 按钮保留 Qt 官方 FluentWinUI3 的背景、悬停、按下和键盘焦点，只将文字、内边距及高度压缩到标签尺寸。此次紧凑操作例外和自适应规则已更新至 UI_DESIGN_SYSTEM.md，无新依赖或业务层改动。
-- Debug、Release 主程序及 ui_workflow_tests 目标构建通过。Windows 默认图形后端的 homePageWorkflow 在 Debug 下 **3 passed、0 failed、0 skipped，16.666 秒**；Release 在 `QT_SCALE_FACTOR=1.5`、13.5pt 字体下 **3 passed、0 failed、0 skipped，10.573 秒**（均含初始化／清理）。验证窗口请求宽度 520／800／1080（受应用最小宽度约束）、单行布局、按钮尺寸与末尾位置、浅深主题下完整展开、键盘收起及焦点、全部可见时隐藏按钮、超长首项和空标签，保持原页面工作流回归；无 QML 引擎警告。
+- 修复英文短标签（如“TV”、“J.C.STAFF”）在亚像素度量下误触发竖向折行与横向省略的问题：将数据层预估测量与渲染层真实排版解耦，Chip 尺寸由 Label 自然隐式宽度撑开，禁止短标签无差别启用 `WrapAnywhere` 与 `ElideRight`，仅在单条标签自然宽度超过容器时启用超长换行和截断，并在预估一行可容纳数量时增加亚像素容差。
+- Debug、Release 主程序及 ui_workflow_tests 目标构建通过。Windows 默认图形后端的 homePageWorkflow 在 Debug 下 **3 passed、0 failed、0 skipped，17.626 秒**；Release 在 `QT_SCALE_FACTOR=1.5`、13.5pt 字体下 **3 passed、0 failed、0 skipped，10.797 秒**（均含初始化／清理）。验证窗口请求宽度 520／800／1080（受应用最小宽度约束）、单行布局、按钮尺寸与末尾位置、浅深主题下完整展开、英文短标签（TV、J.C.STAFF）保持单行高度与完整文本、键盘收起及焦点、全部可见时隐藏按钮、超长首项和空标签，保持原页面工作流回归；无 QML 引擎警告。
 - 报告为 `out/build/windows-debug/tag-layout-tests.txt`、`out/build/windows-release/tag-layout-scaled-tests.txt`；截图位于 `out/validation/home-fix/native/` 与 `native-scaled/`，已检查收起、展开和放大文字的实际渲染。环境缩放不等于真实多显示器 DPI 验收，本轮未增加高对比度、Narrator、全量 CTest 或正式部署结论。
-- Debug、Release 开发运行目录已通过 `run.ps1 -NoBuild -SmokeTest` 更新并启动，日志为对应构建目录的 `tag-layout-run.log`。本次修改未提交 Git。
+- Debug、Release 开发运行目录已通过 `run.ps1 -NoBuild -SmokeTest` 更新并启动，日志为对应构建目录的 `tag-layout-run.log`。修改尚未提交 Git。
