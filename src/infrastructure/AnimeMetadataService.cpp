@@ -1,4 +1,5 @@
 #include "infrastructure/AnimeMetadataService.h"
+#include "version.h"
 #include "infrastructure/CoverCache.h"
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -133,7 +134,7 @@ void AnimeMetadataService::network(const std::shared_ptr<Job>& job) {
     else if (job->kind == Kind::Search) path = "/v0/search/subjects?limit=20&offset=0";
     else path = "/v0/episodes?subject_id=" + job->identity + "&type=0&limit=100&offset=" + QString::number(job->episodes.size());
     QNetworkRequest req(QUrl(baseUrl_ + path));
-    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("DanmaX/0.2.4 (https://github.com/2CHariko/DanmaX)"));
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral(DANMAX_HTTP_USER_AGENT));
     req.setRawHeader("Accept", "application/json");
     req.setTransferTimeout(timeoutMs_);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::SameOriginRedirectPolicy);

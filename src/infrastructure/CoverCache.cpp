@@ -1,4 +1,5 @@
 #include "infrastructure/CoverCache.h"
+#include "version.h"
 #include <QBuffer>
 #include <QImageReader>
 #include <QFileInfo>
@@ -134,7 +135,7 @@ void CoverCache::complete(const std::shared_ptr<Entry>& entry, QUrl source, QDat
 void CoverCache::download(const std::shared_ptr<Entry>& entry) {
     QNetworkRequest request(entry->url);
     request.setTransferTimeout(timeoutMs_);
-    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("DanmaX/0.2.4"));
+    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral(DANMAX_HTTP_USER_AGENT));
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     auto* reply = network_.get(request); entry->reply = reply;
     reply->setReadBufferSize(maxBytes + 1);

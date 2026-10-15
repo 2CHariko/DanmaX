@@ -125,6 +125,7 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/LogModel.cpp src/infrastructure/LogModel.h
         src/infrastructure/ChineseConverter.cpp src/infrastructure/ChineseConverter.h)
     target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi)
+    target_include_directories(danmaku_runtime PRIVATE "${CMAKE_BINARY_DIR}/generated")
     file(GLOB fluent_icons CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/resources/fluent/*.png")
     qt_add_resources(danmaku_runtime fluent_icons PREFIX "/fluent"
         BASE "${CMAKE_SOURCE_DIR}/resources/fluent" FILES ${fluent_icons})

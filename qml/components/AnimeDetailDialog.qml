@@ -17,6 +17,23 @@ Dialog {
     property string error: ""
     property bool ownerVisible: true
     readonly property bool hasValidDetail: Boolean(detail && Number(detail.id) > 0)
+    property string currentDate: Qt.formatDateTime(new Date(), "yyyy-MM-dd")
+
+    function isFutureEpisode(value) {
+        var text = String(value || "")
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false
+        var date = new Date(Number(text.slice(0, 4)), Number(text.slice(5, 7)) - 1, Number(text.slice(8, 10)))
+        if (Qt.formatDateTime(date, "yyyy-MM-dd") !== text) return false
+        return text > currentDate
+    }
+
+    onAboutToShow: currentDate = Qt.formatDateTime(new Date(), "yyyy-MM-dd")
+    Timer {
+        interval: 60000
+        repeat: true
+        running: dialogRoot.visible
+        onTriggered: dialogRoot.currentDate = Qt.formatDateTime(new Date(), "yyyy-MM-dd")
+    }
 
     signal closeRequested()
     signal retryRequested()
@@ -33,8 +50,23 @@ Dialog {
     closePolicy: Popup.CloseOnEscape
     visible: ownerVisible && (hasValidDetail || loading || error.length > 0)
     title: loading && !hasValidDetail ? I18n.common.loading : ((detail && detail.title) || I18n.home.heroDetails)
-    standardButtons: Dialog.Close
+    standardButtons: Dialog.NoButton
     onRejected: closeRequested()
+    footer: DialogButtonBox {
+        alignment: Qt.AlignRight
+        Button {
+            objectName: "refreshAnimeDetail"
+            text: I18n.common.refresh
+            enabled: !dialogRoot.loading
+            onClicked: dialogRoot.retryRequested()
+        }
+        Button {
+            objectName: "closeAnimeDetail"
+            text: I18n.common.close
+            DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            onClicked: dialogRoot.closeRequested()
+        }
+    }
     Binding { target: dialogRoot.enter; property: "enabled"; value: Ui.motionEnabled }
     Binding { target: dialogRoot.exit; property: "enabled"; value: Ui.motionEnabled }
     ContentReveal { id: headerReveal; target: detailHeader }
@@ -51,25 +83,14 @@ Dialog {
             width: detailScroll.availableWidth
             spacing: 16
 
-            RowLayout {
+            ProgressBar {
+                id: topProgressBar
                 Layout.fillWidth: true
-                BusyIndicator {
-                    running: dialogRoot.visible && dialogRoot.loading
-                    visible: running
-                }
-                Label {
-                    Layout.fillWidth: true
-                    text: dialogRoot.loading ? (dialogRoot.stale ? I18n.home.updatingCache : I18n.common.loading) : ""
-                    color: Ui.secondaryText
-                    wrapMode: Text.WordWrap
-                    Accessible.role: Accessible.AlertMessage
-                }
-                Button {
-                    objectName: "refreshAnimeDetail"
-                    text: I18n.common.refresh
-                    enabled: !dialogRoot.loading
-                    onClicked: dialogRoot.retryRequested()
-                }
+                implicitHeight: 3
+                indeterminate: true
+                visible: dialogRoot.loading
+                Accessible.role: Accessible.ProgressBar
+                Accessible.name: dialogRoot.stale ? I18n.home.updatingCache : I18n.common.loading
             }
 
             LoadingPlaceholder {
@@ -347,35 +368,17 @@ Dialog {
 
                     Repeater {
                         model: (dialogRoot.detail && dialogRoot.detail.episodes) || []
-                        delegate: Button {
-                            id: epBtn
+                        delegate: Item {
+                            id: episodeDelegate
                             required property var modelData
-                            objectName: "animeEpisode" + modelData.sort
-
-                            readonly property real sortNum: Number(modelData.sort) || 0
-                            readonly property string displayNum: {
-                                if (sortNum <= 0) return String(modelData.sort || "")
-                                if (Math.floor(sortNum) === sortNum) {
-                                    return sortNum < 10 ? ("0" + sortNum) : String(sortNum)
-                                }
-                                return String(sortNum)
+                            implicitWidth: epBtn.implicitWidth
+                            implicitHeight: epBtn.implicitHeight
+                            HoverHandler {
+                                id: episodeHover
+                                objectName: "animeEpisodeHover" + episodeDelegate.modelData.sort
                             }
-
-                            text: displayNum
-                            font.pixelSize: Math.round(13 * Ui.textScale)
-                            font.weight: Font.DemiBold
-
-                            // 统一规整方块尺寸，内部居中对齐，彻底根除省略号截断
-                            implicitWidth: Math.round(52 * Ui.textScale)
-                            implicitHeight: Math.round(36 * Ui.textScale)
-                            leftPadding: 4
-                            rightPadding: 4
-
-                            Accessible.name: I18n.format(I18n.home.episodeLoadDanmaku, modelData.sort) +
-                                (modelData.title && modelData.title.length > 0 ? (" · " + modelData.title) : "")
-
                             // 悬停提示完整信息（集数 + 详细标题 + 播出时间）
-                            ToolTip.visible: hovered
+                            ToolTip.visible: episodeHover.hovered
                             ToolTip.delay: 200
                             ToolTip.text: {
                                 var numStr = I18n.format(I18n.home.episodeNumberFormat, modelData.sort)
@@ -390,11 +393,41 @@ Dialog {
                                 return res
                             }
 
-                            onClicked: dialogRoot.episodeSelected(
-                                (dialogRoot.detail && dialogRoot.detail.title) || "",
-                                modelData.title || "",
-                                Number(modelData.sort)
-                            )
+                            Button {
+                                id: epBtn
+                                anchors.fill: parent
+                                readonly property var modelData: episodeDelegate.modelData
+                                objectName: "animeEpisode" + modelData.sort
+                                enabled: !dialogRoot.isFutureEpisode(modelData.airDate)
+
+                                readonly property real sortNum: Number(modelData.sort) || 0
+                                readonly property string displayNum: {
+                                    if (sortNum <= 0) return String(modelData.sort || "")
+                                    if (Math.floor(sortNum) === sortNum) {
+                                        return sortNum < 10 ? ("0" + sortNum) : String(sortNum)
+                                    }
+                                    return String(sortNum)
+                                }
+
+                                text: displayNum
+                                font.pixelSize: Math.round(13 * Ui.textScale)
+                                font.weight: Font.DemiBold
+
+                                // 统一规整方块尺寸，内部居中对齐，彻底根除省略号截断
+                                implicitWidth: Math.round(52 * Ui.textScale)
+                                implicitHeight: Math.round(36 * Ui.textScale)
+                                leftPadding: 4
+                                rightPadding: 4
+
+                                Accessible.name: I18n.format(I18n.home.episodeLoadDanmaku, modelData.sort) +
+                                    (modelData.title && modelData.title.length > 0 ? (" · " + modelData.title) : "")
+
+                                onClicked: dialogRoot.episodeSelected(
+                                    (dialogRoot.detail && dialogRoot.detail.title) || "",
+                                    modelData.title || "",
+                                    Number(modelData.sort)
+                                )
+                            }
                         }
                     }
                 }

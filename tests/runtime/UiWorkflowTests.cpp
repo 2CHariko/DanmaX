@@ -4,6 +4,7 @@
 #include <QCursor>
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
+#include <QQmlExpression>
 #include <QQuickWindow>
 #include <QQuickItem>
 #include <QQuickItemGrabResult>
@@ -951,6 +952,42 @@ ApplicationWindow {
         detailFlick->setProperty("contentY", std::max(0.0,
             detailFlick->property("contentHeight").toDouble() - content->height()));
         QVERIFY(window->grabWindow().save(evidence + "/detail-bottom.png"));
+        detailFlick->setProperty("contentY", 0);
+        const auto originalDetail = metadata->currentDetail();
+        auto datedDetail = originalDetail;
+        datedDetail["episodes"] = QVariantList{
+            QVariantMap{{"sort", 9}, {"airDate", "2026-10-15"}},
+            QVariantMap{{"sort", 10}, {"airDate", "2026-10-16"}, {"title", "Future episode"}},
+            QVariantMap{{"sort", 11}, {"airDate", "2026-02-30"}},
+            QVariantMap{{"sort", 12}, {"airDate", ""}}};
+        dialog->setProperty("currentDate", "2026-10-15");
+        dialog->setProperty("detail", datedDetail);
+        auto* futureEpisode = find(content, "animeEpisode10");
+        QVERIFY(futureEpisode);
+        QVERIFY(!futureEpisode->isEnabled());
+        QVERIFY(find(content, "animeEpisode9")->isEnabled());
+        QVERIFY(find(content, "animeEpisode11")->isEnabled());
+        QVERIFY(find(content, "animeEpisode12")->isEnabled());
+        QSignalSpy blockedSelection(dialog, SIGNAL(episodeSelected(QString,QString,double)));
+        QVERIFY(blockedSelection.isValid());
+        QTest::qWait(80);
+        const auto futurePosition = futureEpisode->mapToScene(QPointF(futureEpisode->width() / 2, futureEpisode->height() / 2)).toPoint();
+        struct CursorRestore { QPoint point; ~CursorRestore() { QCursor::setPos(point); } } restoreCursor{QCursor::pos()};
+        QCursor::setPos(window->mapToGlobal(futurePosition));
+        QTest::mouseMove(window, futurePosition);
+        auto* futureHover = futureEpisode->parentItem()->findChild<QObject*>("animeEpisodeHover10");
+        QVERIFY(futureHover);
+        QTRY_VERIFY(futureHover->property("hovered").toBool());
+        QQmlExpression tooltipVisible(qmlContext(futureEpisode->parentItem()), futureEpisode->parentItem(), "ToolTip.visible");
+        QTRY_VERIFY(tooltipVisible.evaluate().toBool());
+        QVERIFY(!tooltipVisible.hasError());
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, futurePosition);
+        QCOMPARE(blockedSelection.count(), 0);
+        dialog->setProperty("currentDate", "2026-10-16");
+        QVERIFY(futureEpisode->isEnabled());
+        dialog->setProperty("detail", originalDetail);
+        episode = find(content, "animeEpisode9");
+        QVERIFY(episode);
         QSignalSpy selected(home, SIGNAL(openDanmakuForAnime(QString,QString,double)));
         QVERIFY(selected.isValid());
         episode->forceActiveFocus();
