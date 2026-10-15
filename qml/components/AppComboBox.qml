@@ -85,7 +85,8 @@ ComboBox {
         required property int index
 
         width: control.popupList ? control.popupList.width : control.width
-        implicitHeight: 36
+        font: control.font
+        implicitHeight: Math.max(36, implicitContentHeight + topPadding + bottomPadding)
         highlighted: control.highlightedIndex === index
         hoverEnabled: control.hoverEnabled
 
@@ -118,8 +119,9 @@ ComboBox {
                 id: itemLabel
                 text: control.textAt(itemDelegate.index) || (itemDelegate.model && control.textRole ? itemDelegate.model[control.textRole] : (typeof itemDelegate.modelData === "string" ? itemDelegate.modelData : ""))
                 color: Ui.textColor
-                font.pixelSize: Ui.bodySize
-                font.family: control.renderFontFamily ? itemLabel.text : ""
+                // An empty family is an explicit override, not font inheritance.
+                // Inherit size/weight from the delegate, override only preview families.
+                font.family: control.renderFontFamily ? itemLabel.text : itemDelegate.font.family
                 elide: Text.ElideRight
                 Layout.fillWidth: true
                 verticalAlignment: Text.AlignVCenter

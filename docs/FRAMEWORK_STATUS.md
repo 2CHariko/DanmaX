@@ -905,3 +905,12 @@ Windows 10/早期 Windows 11、系统透明开关与节能切换、高对比度�
 - Debug、Release 主程序及 ui_workflow_tests 目标构建通过。Windows 默认图形后端的 homePageWorkflow 在 Debug 下 **3 passed、0 failed、0 skipped，17.626 秒**；Release 在 `QT_SCALE_FACTOR=1.5`、13.5pt 字体下 **3 passed、0 failed、0 skipped，10.797 秒**（均含初始化／清理）。验证窗口请求宽度 520／800／1080（受应用最小宽度约束）、单行布局、按钮尺寸与末尾位置、浅深主题下完整展开、英文短标签（TV、J.C.STAFF）保持单行高度与完整文本、键盘收起及焦点、全部可见时隐藏按钮、超长首项和空标签，保持原页面工作流回归；无 QML 引擎警告。
 - 报告为 `out/build/windows-debug/tag-layout-tests.txt`、`out/build/windows-release/tag-layout-scaled-tests.txt`；截图位于 `out/validation/home-fix/native/` 与 `native-scaled/`，已检查收起、展开和放大文字的实际渲染。环境缩放不等于真实多显示器 DPI 验收，本轮未增加高对比度、Narrator、全量 CTest 或正式部署结论。
 - Debug、Release 开发运行目录已通过 `run.ps1 -NoBuild -SmokeTest` 更新并启动，日志为对应构建目录的 `tag-layout-run.log`。修改尚未提交 Git。
+
+## 下拉选项字体继承修复（2026-10-16）
+
+- 修复 AppComboBox 普通选项将字体族显式设置为空字符串的问题。本机锁定 Qt 6.11.0 的最小复现中，空字体名匹配至不支持平滑缩放的 MS Sans Serif，请求 14px 实际匹配为 13px；官方下拉主体使用 Segoe UI Variable 14px，两者均为 QtRendering。
+- 选项 ItemDelegate 绑定所属 ComboBox 的完整字体，内部 Label 继承字号、字重等属性，普通选项字体族跟随所属控件，只有字体选择器按选项名称覆盖字体族。行高取 36 与文字加官方上下内边距的较大值，避免放大文字被固定行高裁切；不改变覆盖层文字渲染。
+- Debug、Release 主程序与现有 ui_workflow_tests 目标构建通过。Windows 默认图形后端运行 popupGeometryAndInput、workflow：Debug **4 passed、0 failed、0 skipped，41.549 秒**；Release 在 `QT_SCALE_FACTOR=1.5`、13.5pt 应用字体下 **4 passed、0 failed、0 skipped，23.406 秒**（均含初始化／清理）。覆盖长下拉、当前项末尾、上下展开、缩窗、鼠标／触控板分类的合成滚轮、滑块拖动、留白与键盘，以及浅深主题、800／1080 等既有工作流场景；无 QML 引擎警告。
+- 两种配置的 CTest application_smoke、application_image_smoke 各 **2/2** 通过。额外使用生产 AppComboBox 的临时字体探针验证 14／32／20px、动态字体族与字重、字体预览开关反复切换及行高，**0 项失败**；已目视检查浅深主题、长列表、字体预览及 32px 放大文字截图。报告与临时探针位于 `out/analysis/font-rendering/`，现有 UI 截图位于 `out/validation/scroll-popup/font-fix-native/`、`font-fix-scaled/` 与 `out/validation/ui-refresh/` 对应子目录。
+- 未执行全量 CTest、静态构建或正式发布打包，不新增真实触控板惯性、混合 DPI 跨屏、高对比度、Narrator、DWM 或性能验收结论。开发构建不等于已更新项目外的安装版本。
+- Debug、Release 开发运行目录均通过 `run.ps1 -NoBuild -SmokeTest` 更新并启动，EXE SHA-256 与对应最终构建产物一致；日志为 `out/analysis/font-rendering/run-debug.log`、`run-release.log`。修改尚未提交 Git。
