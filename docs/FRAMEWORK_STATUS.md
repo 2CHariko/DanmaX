@@ -915,6 +915,14 @@ Windows 10/早期 Windows 11、系统透明开关与节能切换、高对比度�
 - 未执行全量 CTest、静态构建或正式发布打包，不新增真实触控板惯性、混合 DPI 跨屏、高对比度、Narrator、DWM 或性能验收结论。开发构建不等于已更新项目外的安装版本。
 - Debug、Release 开发运行目录均通过 `run.ps1 -NoBuild -SmokeTest` 更新并启动，EXE SHA-256 与对应最终构建产物一致；日志为 `out/analysis/font-rendering/run-debug.log`、`run-release.log`。修改尚未提交 Git。
 
+## WinUI 3 XAML Islands 独立可行性验证（2026-10-16）
+
+- 用户授权先做原型和成本分析。根 CMake 增加默认关闭的评估目标，锁定 Windows App SDK / C++/WinRT 评估依赖；准备与构建分离，不改变生产 QML、业务或覆盖层。
+- 动态 Qt 与现有静态 Qt `/MT` 均可承载真正 WinUI 3 ComboBox；framework-dependent 与自包含独立部署的程序检查均通过。鼠标、滚轮、基本键盘、选择往返、浅深主题、岛重建与标题栏关闭已有实机证据。
+- 已复现原生子窗口盖住 QML `Popup.Item` 模态、原生焦点导致模态键盘异常，以及不遵守 Flickable 裁切的边界。尚不能作为 AppComboBox 的生产替代；独立窗口只能改善层级，未完成视觉/交互验收。
+- 原型静态 Qt 部署约 32.31 MiB；携带未裁剪原生载荷后约 86.21 MiB。净机、真实触控板/IME、混合 DPI、高对比度、Narrator、完整滚动输入与播放性能未验收。
+- 默认关闭原型的 windows-core 构建与 CTest 4/4 通过；未执行全量生产 Qt 测试或发布。详细成本、证据和复现步骤见 [WINUI_XAML_ISLANDS_EVALUATION.md](WINUI_XAML_ISLANDS_EVALUATION.md)。
+
 ## 剧集选集分页布局内嵌与紧凑化（2026-10-16）
 
 - 消除原剧集选集分页控件独立占行、横向过度拉伸（数百像素空旷下拉框与过大翻页按钮）及割裂标题与集数网格的问题。

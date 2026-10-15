@@ -22,7 +22,7 @@
 
 ## 下拉与滚动
 
-- AppComboBox 在 ComboBox 基础上规范了 WinUI 3 风格的弹出浮层（8px 圆角、微细描边、深浅色浮层材质、4px 内嵌胶囊条 delegate），并附加标准 ScrollBar，限制尺寸、窗口内定位与当前项可见性，彻底解决 Qt 官方对 ComboBox 弹窗回退至旧式 Fusion 黑框的问题。
+- AppComboBox 当前在 ComboBox 基础上自定义弹出浮层背景（8px 圆角、微细描边、深浅色浮层）及 4px 内嵌胶囊条 delegate，并附加标准 ScrollBar，限制尺寸、窗口内定位与当前项可见性。Qt 6.11.0 源码已有官方 Fluent ComboBox 弹层，原“ComboBox 弹层回退 Fusion”的笼统归因不成立；当前实现和 Qt 官方风格都不能称为原生 WinUI 控件。真正 WinUI 3 的独立验证及尚未解决的接入边界见 [XAML Islands 评估](WINUI_XAML_ISLANDS_EVALUATION.md)，不表示生产组件已迁移。
 - 长列表最高 360×文本缩放，受窗口可用空间约束，距窗口边缘至少 8。保留 F4/Alt+Down、末尾当前项、缩窗和上下展开的回归检查。
 - 下拉选项继承所属 ComboBox 的字体、字号与字重；字体选择器仅按选项名称覆盖字体族。不得用空字体名表示继承，避免匹配至旧式字体；行高至少容纳文字及官方上下内边距。
 - 所有控制界面（整页、内嵌列表、弹窗、下拉浮层及横向番剧列表）复用 `AppScrollBar` 的布局与滚轮适配。通过公开 API 调整父容器、位置、长度并处理悬停区域的滚轮，保留 Qt 官方背景、内容实现、完整交互宽度、悬停、拖动和淡出行为，启用方向的策略统一为 `AsNeeded`，不需要的方向使用 `AlwaysOff`。不得重画滚动条或强制常驻粗滑块。无溢出时判断滑块状态，不要求 ScrollBar 对象本身隐藏。

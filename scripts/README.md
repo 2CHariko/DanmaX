@@ -19,3 +19,4 @@
 - `release.ps1`：官方正式打包与发布总控脚本（构建号自动递增，生成便携单 EXE、绿色 ZIP 与校验和）。
 - `validate-static.ps1`：静态单 EXE 便携版无释放与白名单严格验收。
 - `clean.ps1`：安全清理构建缓存（保留用户配置）。
+- `prepare-winui-island.ps1` / `probe-winui-island.ps1` / `measure-winui-island.ps1`：可选 WinUI 3 XAML Islands 原型的显式依赖准备、构建/部署/交互验证及初步开销采样；不参与生产构建，见 [接入评估](../docs/WINUI_XAML_ISLANDS_EVALUATION.md)。

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Optional WinUI 3 / Qt Quick feasibility probe only; not a production dependency",
+  "windowsAppSdkVersion": "1.8.260921001",
+  "runtimeMajorMinor": "1.8",
+  "packages": [
+    {"id":"Microsoft.WindowsAppSDK.Base","version":"1.8.251216001","sha256":"58f0c69ad99293e7efd36b7f8c6ead0e20940a5e91866b16901b9610b08642c9","license":"Microsoft Windows App SDK license.txt in package"},
+    {"id":"Microsoft.WindowsAppSDK.Foundation","version":"1.8.260803002","sha256":"b9232041afd605b606c6f78f442d92ead0076453f1f2a3260d2b7f8089bcab0e","license":"Microsoft Windows App SDK license.txt in package"},
+    {"id":"Microsoft.WindowsAppSDK.InteractiveExperiences","version":"1.8.260708001","sha256":"496eea92d353b5d3601b67353f06dcadd6d2d9b635575acebe6e42587dbfad76","license":"Microsoft Windows App SDK license.txt in package"},
+    {"id":"Microsoft.WindowsAppSDK.WinUI","version":"1.8.260803003","sha256":"bdf72c0cbc385ba6e6ab916b17d3aa00950811c9d6372d11ac2f32f1c83f2496","license":"Microsoft Windows App SDK license.txt in package"},
+    {"id":"Microsoft.Windows.CppWinRT","version":"2.0.250303.1","sha256":"955e3051b35db1c00177ed14ab6b7b995c3b32a53fdb6c184ea53b1dba66e439","license":"MIT; LICENSE in package"},
+    {"id":"Microsoft.WindowsAppSDK.DWrite","version":"1.8.25122902","sha256":"77e0c020966a76c4755485a1011e48c6b888066b49cd6cbcd2a546817d803b6c","license":"Microsoft Windows App SDK license.txt in package; self-contained native runtime"},
+    {"id":"Microsoft.Web.WebView2","version":"1.0.3179.45","sha256":"70bd381c5d67f97a6a80294001cde125ab5b24b6d36098ad901d8e15efd752d0","license":"Microsoft WebView2 LICENSE.txt in package; metadata reference only"}
+  ],
+  "sourceRule": "https://api.nuget.org/v3-flatcontainer/{lowercase-id}/{version}/{lowercase-id}.{version}.nupkg",
+  "paths": {"downloads":".cache/downloads/winui-island","packages":".deps/winui-island/packages","projection":".deps/winui-island/include","build":"out/build/winui-island-{dynamic|static}-release","reports":"out/validation/winui-island"},
+  "toolRules": "Use scripts/common.ps1 and the explicit .local/toolchain.local.json system MSVC/Windows SDK exception. C++/WinRT generator is from this lock. No NuGet restore or implicit global cache.",
+  "excludedTransitivePackages": "Windows SDK BuildTools/MSIX packages: explicit system SDK already supplies metadata and this probe uses CMake, no XAML/MSIX build tasks. WebView2 runtime is not deployed because no WebView is instantiated. AI, ML and Widgets packages are not consumed.",
+  "deployment": "Framework-dependent mode explicitly bootstraps installed Windows App Runtime 1.8 x64. Self-contained mode explicitly loads the app-local Microsoft.WindowsAppRuntime.dll from a separately staged native payload. No installer or fallback between modes."
+}
