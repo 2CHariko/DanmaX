@@ -67,10 +67,10 @@ void AutomaticDanmaku::reset(bool invalidateRecovery) {
     settle_.stop(); library_.cancel(); ready_.reset(); latest_ = {}; parsed_ = {}; identity_.clear(); suspended_ = false;
     state(Waiting, enabled_ ? QStringLiteral("等待指定播放器提供标题") : QStringLiteral("自动匹配未开启"));
 }
-void AutomaticDanmaku::suspend() {
+void AutomaticDanmaku::suspend(bool resume) {
     if (!enabled_) return;
     QScopedValueRollback guard(changing_, true);
-    recovery_.finish(true);
+    if (resume) recovery_.finish(true);
     settle_.stop(); library_.cancel(); ready_.reset(); suspended_ = true;
     state(Waiting, QStringLiteral("自动匹配已暂停；手动操作优先，可点击继续自动匹配"));
 }
@@ -83,7 +83,7 @@ void AutomaticDanmaku::retry() {
 }
 void AutomaticDanmaku::forgetAssociation() {
     const auto error = associations_.forget(parsed_);
-    const auto rawError = associations_.forgetRaw(latest_.title);
+    const auto rawError = associations_.forgetRaw(matchingTitle());
     if (!error.isEmpty() || !rawError.isEmpty()) { state(Failed, error.isEmpty() ? rawError : error); return; }
     if (suspended_ || !fresh()) {
         state(Waiting, suspended_ ? QStringLiteral("已忘记关联；自动匹配仍暂停，可点击继续自动匹配")
@@ -109,9 +109,9 @@ void AutomaticDanmaku::observe(const MediaSample& sample) {
         return;
     }
     if (sameTitle && phase_ != Waiting && !identity_.isEmpty()) return;
-    const auto report = identifyMediaTitle(sample.title);
+    const auto report = identifyMediaTitle(matchingTitle());
     const auto parsed = report.selected;
-    const auto identity = sample.id + '\n' + QString::number(sample.sessionToken) + '\n' + (parsed.valid() ? parsed.key() : sample.title.left(1024).simplified());
+    const auto identity = sample.id + '\n' + QString::number(sample.sessionToken) + '\n' + (parsed.valid() ? parsed.key() : matchingTitle().left(1024).simplified());
     if (identity == identity_ && phase_ != Waiting) return;
     QScopedValueRollback guard(changing_, true);
     offeredIdentity_.clear();
@@ -124,7 +124,7 @@ void AutomaticDanmaku::observe(const MediaSample& sample) {
 }
 void AutomaticDanmaku::resolve() {
     if (!fresh()) { state(Waiting, QStringLiteral("媒体信息已过期，等待播放器更新")); identity_.clear(); return; }
-    const auto rawAssociation = associations_.raw(latest_.title);
+    const auto rawAssociation = associations_.raw(matchingTitle());
     if (library_.scanning()) { state(Cache, QStringLiteral("正在准备本地弹幕索引…")); return; }
     if (!rawAssociation.isEmpty()) {
         for (const auto& entry : library_.cachedEntries()) {
@@ -200,7 +200,7 @@ void AutomaticDanmaku::accept() {
     if (phase_ != LoadingCache && phase_ != Searching && phase_ != Choice && phase_ != Failed) return;
     QString error;
     if (parsed_.valid()) error = associations_.remember(parsed_, result->metadata);
-    const auto rawError = associations_.rememberRaw(latest_.title, result->metadata, parsed_.animeKey);
+    const auto rawError = associations_.rememberRaw(matchingTitle(), result->metadata, parsed_.animeKey);
     if (error.isEmpty()) error = rawError;
     ready_ = std::move(result);
     state(Loaded, QStringLiteral("已自动载入 %1").arg(recognizedTitle()) + (error.isEmpty() ? QString() : QStringLiteral("；") + error));

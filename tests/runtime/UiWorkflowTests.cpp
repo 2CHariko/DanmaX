@@ -249,6 +249,110 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void dualWorkspaceNavigationAndRecentPlayback() {
+        QTemporaryDir directory;
+        AppController backend(directory.path());
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        auto* media = qobject_cast<MediaSession*>(backend.media()); auto* recent = qobject_cast<RecentVideoStore*>(media->recent());
+        QString first;
+        for (int i = 0; i < 24; ++i) {
+            const auto path = directory.filePath(QString("Video-%1.mp4").arg(i)); QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("fixture"); file.close();
+            recent->opened(path); recent->checkpoint(path, 30, 120, {}); first = path;
+        }
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty()); auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        window->resize(900, 700); window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
+        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
+            if (parent->objectName() == name) return parent;
+            for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
+            return nullptr;
+        };
+        auto* player = find(window->contentItem(), "playerPage"); auto* page = find(window->contentItem(), "mediaLibraryPage"); QVERIFY(player && page);
+        QVERIFY(!find(player, "openVideoButton")); QVERIFY(find(page, "openVideoButton"));
+        QSignalSpy loaded(&backend, &AppController::loadCompleted);
+        backend.loadFile(QStringLiteral(DANMAKU_SOURCE_DIR "/tests/fixtures/sample.xml")); QTRY_VERIFY(!loaded.isEmpty()); backend.start(true); QVERIFY(backend.running());
+        const auto generation = qobject_cast<PlaybackCoordinator*>(backend.coordinator())->generation();
+        QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 5))); QTest::qWait(100);
+        QCOMPARE(window->property("currentPageName").toString(), QString("media")); QVERIFY(backend.running());
+        QCOMPARE(qobject_cast<PlaybackCoordinator*>(backend.coordinator())->generation(), generation);
+        auto* flick = page->property("contentItem").value<QQuickItem*>(); auto* bar = page->findChild<QQuickItem*>("pageVerticalScrollBar"); QVERIFY(flick && bar);
+        QVERIFY(flick->property("contentHeight").toDouble() > flick->height());
+        const QList<QPoint> points{page->mapToScene(QPointF(page->width()/2, page->height()/2)).toPoint(),
+            page->mapToScene(QPointF(2, page->height()/2)).toPoint(),
+            bar->mapToScene(QPointF(-4, bar->height()/2)).toPoint(),
+            bar->mapToScene(QPointF(bar->width()/2, bar->height()/2)).toPoint(),
+            page->mapToScene(QPointF(page->width()-2, page->height()/2)).toPoint()};
+        for (const auto& point : points) for (const bool pixel : {false, true}) {
+            flick->setProperty("contentY", 0);
+            QWheelEvent event(QPointF(point), window->mapToGlobal(point), pixel ? QPoint(0,-35) : QPoint(),
+                pixel ? QPoint() : QPoint(0,-120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(window, &event); QTest::qWait(30);
+            QVERIFY2(flick->property("contentY").toDouble() > 0, qPrintable(QString("wheel at %1,%2 pixel=%3; viewport %4x%5 content=%6")
+                .arg(point.x()).arg(point.y()).arg(pixel).arg(flick->width()).arg(flick->height()).arg(flick->property("contentHeight").toDouble())));
+        }
+        flick->setProperty("contentY", 0); bar->setProperty("active", true); QTest::qWait(80);
+        const auto thumb = bar->mapToScene(QPointF(bar->width()/2, bar->height()*bar->property("size").toDouble()/2)).toPoint();
+        QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, thumb); QTest::mouseMove(window, thumb + QPoint(0,60), 50);
+        QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, thumb + QPoint(0,60)); QVERIFY(flick->property("contentY").toDouble() > 0);
+        QPointer<QQuickItem> button = find(page, "playRecentVideo"); QVERIFY(button);
+        QVERIFY(QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(button.data())))); button->forceActiveFocus();
+        recent->checkpoint(first, 35, 120, {}); QCoreApplication::processEvents(); QVERIFY(button); QVERIFY(button->hasActiveFocus());
+        media->openVideo(directory.filePath("missing.mp4")); QVERIFY(backend.running());
+        QCOMPARE(qobject_cast<PlaybackCoordinator*>(backend.coordinator())->owner(), PlaybackCoordinator::Danmaku);
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            settings->setValue("theme", theme); flick->setProperty("contentY", 0); QTest::qWait(100);
+            const auto output = qEnvironmentVariable("DANMAKU_VIDEO_UI_ARTIFACTS");
+            if (!output.isEmpty()) { QVERIFY(QDir().mkpath(output)); QVERIFY(window->grabWindow().save(output + "/media-library-" + theme + ".png")); }
+        }
+        QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 1))); QVERIFY(backend.running());
+        QStringList errors; for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) errors << error.toString();
+        QVERIFY2(warnings.isEmpty(), qPrintable(errors.join('\n'))); backend.stop(); window->close();
+    }
+    void vlcSessionDiscoveryChoices() {
+        QTemporaryDir directory; AppController backend(directory.path());
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        auto* monitor = backend.findChild<MediaMonitor*>(); QVERIFY(monitor);
+        const QString available = "danmax-vlc:123:456", unavailable = "danmax-vlc:789:987";
+        monitor->sessionsChanged({QVariantMap{{"id", available}, {"label", "VLC（DanmaX 连接）"}, {"connectable", true}},
+            QVariantMap{{"id", unavailable}, {"label", "VLC · PID 789 · 未建立同步连接"}, {"connectable", false}}});
+        QObject::disconnect(monitor, nullptr, &backend, nullptr);
+        backend.selectSession(available);
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}, {"selectedPage", 1}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty()); auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        window->resize(900, 700); window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
+        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
+            if (parent->objectName() == name) return parent;
+            for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
+            return nullptr;
+        };
+        auto* page = find(window->contentItem(), "playerPage"); auto* combo = find(window->contentItem(), "targetSessionChoice");
+        auto* hint = find(window->contentItem(), "vlcSessionDiscoveryHint"); QVERIFY(page && combo && hint);
+        QVERIFY(hint->isVisible()); QCOMPARE(combo->property("count").toInt(), 2); QCOMPARE(combo->property("currentIndex").toInt(), 0);
+        QVERIFY(QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(combo)))); QTest::qWait(100);
+        combo->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4);
+        auto* popup = combo->property("popup").value<QObject*>(); QVERIFY(popup); QTRY_VERIFY(popup->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_End); QTest::keyClick(window, Qt::Key_Return);
+        QCOMPARE(settings->values().value("targetSession").toString(), available);
+        QCOMPARE(combo->property("currentIndex").toInt(), 0);
+        if (popup->property("visible").toBool()) QTest::keyClick(window, Qt::Key_Escape);
+        QTRY_VERIFY(!popup->property("visible").toBool());
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            settings->setValue("theme", theme); QTest::qWait(80);
+            combo->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4); QTRY_VERIFY(popup->property("opened").toBool());
+            const auto output = qEnvironmentVariable("DANMAKU_VIDEO_UI_ARTIFACTS");
+            if (!output.isEmpty()) { QVERIFY(QDir().mkpath(output)); QVERIFY(window->grabWindow().save(output + "/vlc-sessions-" + theme + ".png")); }
+            QTest::keyClick(window, Qt::Key_Escape); QTRY_VERIFY(!popup->property("visible").toBool());
+        }
+        QStringList loadErrors;
+        for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) loadErrors << error.toString();
+        QVERIFY2(warnings.isEmpty(), qPrintable(loadErrors.join('\n'))); window->close();
+    }
     void externalPlayerConfigurationWorkflow() {
         QTemporaryDir directory;
         AppController backend(directory.path());
@@ -447,7 +551,7 @@ private slots:
             QCoreApplication::sendEvent(window, &event);
         };
         // All main-window areas remain the same target while the UI is captured.
-        for (int pageIndex = 0; pageIndex < 5; ++pageIndex) {
+        for (int pageIndex = 0; pageIndex < 6; ++pageIndex) {
             window->setProperty("selectedPage", pageIndex); QTest::qWait(30);
             enter(QPoint(20, 20));
             QVERIFY(feedback->property("dragActive").toBool()); QVERIFY(drop->isEnabled());
@@ -517,9 +621,9 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(&backend, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, before)));
         QCOMPARE(launches, 1);
         QVERIFY(!feedback->property("dragActive").toBool()); QVERIFY(!feedback->property("blurLoaded").toBool());
-        QCOMPARE(window->property("currentPageName").toString(), QString("player"));
+        QCOMPARE(window->property("currentPageName").toString(), QString("media"));
         QTest::qWait(60);
-        auto* page = window->findChild<QObject*>("playerPage"); QVERIFY(page);
+        auto* page = window->findChild<QObject*>("mediaLibraryPage"); QVERIFY(page);
         auto* cancel = page->findChild<QQuickItem*>("cancelVideoOpenButton"); QVERIFY(cancel); QVERIFY(cancel->isVisible());
         cancel->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
         QVERIFY(!video->pending());

@@ -46,7 +46,7 @@ QtObject {
         navExpanded: "导航已展开",
         navCollapsed: "导航已收起",
         home: "首页",
-        play: "播放",
+        play: "弹幕",
         logs: "日志",
         settings: "设置",
         about: "关于"
@@ -107,8 +107,8 @@ QtObject {
 
     // 播放页
     readonly property var player: ({
-        title: "播放",
-        description: "选择弹幕来源，连接播放器，然后开始播放。",
+        title: "弹幕",
+        description: "加载弹幕，选择独立播放或跟随播放器；打开视频请使用媒体库。",
         sourceTabsAccessible: "弹幕来源",
         sourceLocalTab: "本地 XML",
         sourceCachedTab: "已缓存",
@@ -132,6 +132,7 @@ QtObject {
         sessionWaitPlaceholder: "等待媒体会话，请先在播放器中播放视频",
         sessionAccessible: "目标播放器",
         sessionHint: "选择后自动记住此播放器；暂未打开或关闭后会继续等待，再次播放时自动连接。开始弹幕后跟随暂停和跳转。",
+        vlcDiscoveryHint: "未连接的 VLC：请在设置中将 VLC 设为默认外部播放器，再到媒体库打开视频建立同步连接。",
         savedSessionWaiting: "等待已保存的播放器：%1",
         forgetSession: "取消绑定",
         automaticTitle: "按播放内容自动匹配弹幕",

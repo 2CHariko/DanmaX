@@ -36,6 +36,10 @@ class VideoOpenService final : public QObject {
     bool active() const { return active_; }
     bool needsPlayer() const { return needsPlayer_; }
     bool needsConfirmation() const;
+    QString currentVideo() const { return video_; }
+    MediaSample latestSample() const { return latest_; }
+    QString sessionId() const { return transactionSession_; }
+    qint64 launchedPid() const { return launchedPid_; }
     void configurePath(const QString& path);
     void configureProfile(const ExternalPlayerProfile& profile);
     void observe(const MediaSample& sample);
@@ -57,6 +61,7 @@ class VideoOpenService final : public QObject {
     void cancelled();
     void failed(QString error);
     void launchOnlyOpening();
+    void validated(QString video);
     void managedOpenRequested(QString adapter, QString executable, QString video);
     void managedOpenCancelled();
   private:
@@ -65,7 +70,7 @@ class VideoOpenService final : public QObject {
     void fail(const QString& error);
     const IExternalPlayerAdapter* adapter() const { return registry_.find(profile_.adapter); }
     QString preflight() const;
-    QString launch() const;
+    QString launch();
     ExternalPlayerRegistry registry_;
     ExternalPlayerProfile profile_;
     Hooks hooks_;
@@ -73,5 +78,6 @@ class VideoOpenService final : public QObject {
     QString playerPath_, status_, video_, waitingFile_, baselineTitle_, transactionSession_;
     MediaSample latest_;
     double openedAt_{};
+    qint64 launchedPid_{};
     bool pending_{}, active_{}, needsPlayer_{}, awaitingBaseline_{};
 };

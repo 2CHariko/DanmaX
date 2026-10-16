@@ -70,6 +70,11 @@ ColumnLayout {
                 page: 1
             },
             {
+                title: "媒体库",
+                icon: "window",
+                page: 5
+            },
+            {
                 title: I18n.nav.logs,
                 icon: "logs",
                 page: 2

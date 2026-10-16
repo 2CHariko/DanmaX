@@ -21,6 +21,7 @@ class SmtcReader {
     explicit SmtcReader(ManagerRequest request = {});
     SmtcPoll poll(const QString& selected, quint64 generation, std::stop_token stop = {});
     QString control(const MediaSample& expected, bool play, std::stop_token stop = {}, std::function<bool()> current = {});
+    QString seek(const MediaSample& expected, double seconds, std::stop_token stop = {}, std::function<bool()> current = {});
 
   private:
     ManagerRequest request_;

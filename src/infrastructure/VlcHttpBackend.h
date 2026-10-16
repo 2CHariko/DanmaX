@@ -7,6 +7,7 @@
 #include <QUrlQuery>
 #include <deque>
 #include <functional>
+#include <thread>
 class QNetworkReply;
 class VlcHttpBackend final : public MediaPlaybackBackend {
     Q_OBJECT
@@ -15,6 +16,7 @@ class VlcHttpBackend final : public MediaPlaybackBackend {
         std::function<ManagedPlaybackOpen(const QString&, const QStringList&, const QMap<QString, QString>&)> launch;
         std::function<bool(const QString&, const QString&)> alive;
         std::function<PlayerProcessIdentity::Listener(quint16, const QString&)> listener;
+        std::function<QVariantList()> discover;
     };
     explicit VlcHttpBackend(QString directory, QObject* parent = nullptr, Hooks hooks = {});
     ~VlcHttpBackend() override;
@@ -22,6 +24,7 @@ class VlcHttpBackend final : public MediaPlaybackBackend {
     ManagedPlaybackOpen open(const QString& executable, const QString& video);
     void select(const QString& id, quint64 generation) override;
     void requestPlayback(MediaSample expected, bool play, quint64 request) override;
+    void requestSeek(MediaSample expected, double seconds, quint64 request) override;
     void cancelOpen();
     QString sessionId() const { return session_; }
   private:
@@ -31,6 +34,8 @@ class VlcHttpBackend final : public MediaPlaybackBackend {
     void missing();
     void unavailable(const QString& error);
     void request(QUrlQuery query, const QString& kind, quint64 control = 0);
+    void publishSessions();
+    QVariantList discovered_, published_;
     QString directory_, executable_, session_, selected_, password_, pendingOpen_, latestItem_;
     QString openingTarget_, openedFromItem_, operation_;
     quint16 port_{};
@@ -41,8 +46,9 @@ class VlcHttpBackend final : public MediaPlaybackBackend {
     QByteArray body_;
     MediaSample latest_;
     double lastRawChangedAt_{};
-    struct Command { MediaSample expected; bool play{}; quint64 request{}; };
+    struct Command { MediaSample expected; bool play{}; quint64 request{}; double seconds{-1}; bool seek{}; };
     std::deque<Command> commands_;
     Hooks hooks_;
     QString lastError_;
+    std::jthread discovery_;
 };

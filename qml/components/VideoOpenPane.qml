@@ -9,7 +9,7 @@ SettingsRow {
     required property QtObject backend
     title: "使用 " + backend.videoOpen.playerName + " 打开视频"
     description: backend.videoOpen.pending ? backend.videoOpen.status
-        : backend.videoOpen.active ? backend.automatic.status
+        : backend.videoOpen.active ? backend.media.status
         : backend.videoOpen.status.length > 0 ? backend.videoOpen.status
         : (backend.videoOpen.synchronizes ? "拖入本地视频，打开播放器并匹配弹幕。" : "当前配置仅打开视频，不启用弹幕同步。")
     Button {
@@ -37,6 +37,6 @@ SettingsRow {
         title: "选择视频"
         fileMode: FileDialog.OpenFile
         nameFilters: ["视频 (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.m4v *.ts *.m2ts)"]
-        onAccepted: pane.backend.videoOpen.open([selectedFile])
+        onAccepted: pane.backend.media.openVideo(selectedFile)
     }
 }

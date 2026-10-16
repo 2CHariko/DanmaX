@@ -5,6 +5,9 @@
 #include "application/DanmakuLibrary.h"
 #include "application/AutomaticDanmaku.h"
 #include "application/VideoOpenService.h"
+#include "application/PlaybackCoordinator.h"
+#include "application/DanmakuSession.h"
+#include "application/MediaSession.h"
 #include "infrastructure/ExternalPlayerStore.h"
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
@@ -30,6 +33,9 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* library READ library CONSTANT)
     Q_PROPERTY(QObject* automatic READ automatic CONSTANT)
     Q_PROPERTY(QObject* videoOpen READ videoOpen CONSTANT)
+    Q_PROPERTY(QObject* danmaku READ danmaku CONSTANT)
+    Q_PROPERTY(QObject* media READ media CONSTANT)
+    Q_PROPERTY(QObject* coordinator READ coordinator CONSTANT)
     Q_PROPERTY(QObject* players READ players CONSTANT)
     Q_PROPERTY(QObject* metadata READ metadata CONSTANT)
     Q_PROPERTY(QObject* uiPreferences READ uiPreferences CONSTANT)
@@ -79,6 +85,9 @@ class AppController final : public QObject {
     QObject* library() { return &library_; }
     QObject* automatic() { return &automatic_; }
     QObject* videoOpen() { return &videoOpen_; }
+    QObject* danmaku() { return &danmaku_; }
+    QObject* media() { return &media_; }
+    QObject* coordinator() { return &coordinator_; }
     QObject* players() { return &players_; }
     QObject* metadata() { return &metadata_; }
     QObject* uiPreferences() { return &uiPreferences_; }
@@ -185,6 +194,15 @@ class AppController final : public QObject {
     void onSample(const MediaSample& sample);
 
   private:
+    friend class DanmakuSession;
+    friend class MediaSession;
+    void handoff(PlaybackCoordinator::Owner owner);
+    void bindMedia(const QString& id);
+    void presentMedia(std::vector<danmaku::Item> items, const QString& title, MediaSample sample);
+    void clearMediaItems();
+    void commitDanmakuItems(std::vector<danmaku::Item> items, const QString& title);
+    void unloadDanmaku();
+    QString boundSession() const;
     void tick();
     void configure();
     void applyRendererSettings();
@@ -195,7 +213,7 @@ class AppController final : public QObject {
     void clearDisconnectedContent();
     void commitItems(std::vector<danmaku::Item> items, const QString& title);
 
-    void fail(const QString& message);
+    void fail(const QString& message, bool danmaku = false);
     void applyChineseConversion();
     void updateWindow();
     bool updatePresentationVisibility(bool forceForeground = false, bool notify = true);
@@ -204,15 +222,20 @@ class AppController final : public QObject {
     static QString localPath(const QString& path);
     SettingsStore settings_;
     LogModel logs_;
-    DanmakuLibrary library_;
+    PlaybackCoordinator coordinator_;
+    DanmakuSession danmaku_;
+    DanmakuLibrary& library_;
     AnimeMetadataService metadata_;
-    AutomaticDanmaku automatic_;
+    AutomaticDanmaku& automatic_;
     VideoOpenService videoOpen_;
     ExternalPlayerStore players_;
     bool bindingVideo_{};
     bool automaticCommit_{}, automaticSource_{};
     SystemUiPreferences uiPreferences_;
     MediaMonitor monitor_;
+    MediaSession media_;
+    bool presentingMedia_{};
+    bool startup_{true};
     bool targetSessionConnected_{};
     bool disconnectedContentCleared_{};
     double connectionObservedAt_{};

@@ -110,6 +110,9 @@ if(DANMAKU_BUILD_APP)
     danmax_require_anitomy()
     add_library(danmaku_runtime STATIC
         src/application/VideoOpenService.cpp src/application/VideoOpenService.h
+        src/application/PlaybackCoordinator.h src/application/DanmakuSession.cpp src/application/DanmakuSession.h
+        src/application/MediaSession.cpp src/application/MediaSession.h
+        src/infrastructure/RecentVideoStore.cpp src/infrastructure/RecentVideoStore.h
         src/infrastructure/ExternalPlayer.cpp src/infrastructure/ExternalPlayer.h
         src/infrastructure/ExternalPlayerStore.cpp src/infrastructure/ExternalPlayerStore.h
         src/infrastructure/ExternalPlayerDraft.cpp src/infrastructure/ExternalPlayerDraft.h
@@ -199,6 +202,14 @@ if(DANMAKU_BUILD_APP)
         add_executable(online_danmaku_tests tests/runtime/OnlineDanmakuTests.cpp)
         add_executable(video_open_tests tests/runtime/VideoOpenTests.cpp)
         add_executable(vlc_playback_tests tests/runtime/VlcPlaybackTests.cpp)
+        add_executable(workflow_session_tests tests/runtime/WorkflowSessionTests.cpp)
+        target_link_libraries(workflow_session_tests PRIVATE danmaku_runtime Qt6::Test)
+        if(DANMAKU_STATIC_QT)
+            qt_import_plugins(workflow_session_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin Qt6::QSchannelBackendPlugin)
+        endif()
+        danmaku_compile_options(workflow_session_tests)
+        add_test(NAME workflow_sessions COMMAND workflow_session_tests -o "${CMAKE_BINARY_DIR}/workflow-session-tests.txt,txt")
+        set_tests_properties(workflow_sessions PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
         target_link_libraries(vlc_playback_tests PRIVATE danmaku_runtime Qt6::Test)
         danmaku_compile_options(vlc_playback_tests)
         target_link_libraries(video_open_tests PRIVATE danmaku_runtime Qt6::Test)

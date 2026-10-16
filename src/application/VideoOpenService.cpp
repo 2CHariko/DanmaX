@@ -41,11 +41,12 @@ QString VideoOpenService::executableFilter() const {
 QString VideoOpenService::preflight() const {
     return hooks_.preflight ? hooks_.preflight(playerPath_) : adapter()->preflight(profile_);
 }
-QString VideoOpenService::launch() const {
+QString VideoOpenService::launch() {
     const auto issue = adapter()->validate(playerPath_);
     if (!issue.isEmpty()) return issue;
     const auto arguments = adapter()->arguments(profile_, video_);
-    return hooks_.launch ? hooks_.launch(playerPath_, arguments) : ExternalPlayerProcess::launch(playerPath_, arguments);
+    launchedPid_ = 0;
+    return hooks_.launch ? hooks_.launch(playerPath_, arguments) : ExternalPlayerProcess::launch(playerPath_, arguments, &launchedPid_);
 }
 void VideoOpenService::choosePlayer(const QString& input) {
     if (!adapter()) { emit failed(QStringLiteral("播放器配置不可用，请检查设置中的配置错误")); return; }
@@ -85,6 +86,7 @@ void VideoOpenService::open(const QVariantList& files) {
     auto error = adapter()->validate(playerPath_);
     if (error.isEmpty()) error = preflight();
     if (!error.isEmpty()) { emit failed(error); return; }
+    emit validated(path);
     if (adapter()->managedPlayback()) {
         cancel(); video_ = path; pending_ = true; awaitingBaseline_ = false; transactionSession_.clear(); baselineTitle_.clear();
         openedAt_ = MediaMonitor::monotonicSeconds(); deadline_.start();

@@ -34,6 +34,7 @@ MediaMonitor::MediaMonitor(QObject* parent, const QString& playerDirectory) : QO
             if (backend == active_) emit errorOccurred(error);
         });
         connect(backend, &MediaPlaybackBackend::playbackControlFinished, this, &MediaMonitor::playbackControlFinished);
+        connect(backend, &MediaPlaybackBackend::seekFinished, this, &MediaMonitor::seekFinished);
     }
     connect(smtc_, &MediaPlaybackBackend::sessionsChanged, this, [this](QVariantList list) { smtcSessions_ = std::move(list); publishSessions(); });
     connect(vlc_, &MediaPlaybackBackend::sessionsChanged, this, [this](QVariantList list) { vlcSessions_ = std::move(list); publishSessions(); });
@@ -60,6 +61,12 @@ void MediaMonitor::requestPlayback(MediaSample expected, bool play, quint64 requ
     active_->requestPlayback(std::move(expected), play, request);
 }
 quint64 MediaMonitor::generation() { return generation_; }
+void MediaMonitor::requestSeek(MediaSample expected, double seconds, quint64 request) {
+    if (expected.generation != generation_ || expected.id != selected_) {
+        emit seekFinished(request, false, QStringLiteral("选择的播放器已改变")); return;
+    }
+    active_->requestSeek(std::move(expected), seconds, request);
+}
 ManagedPlaybackOpen MediaMonitor::openManaged(const QString& adapter, const QString& executable, const QString& video) {
     if (adapter != "vlc") return {{}, QStringLiteral("播放器没有可用的媒体后端")};
     return vlc_->open(executable, video);

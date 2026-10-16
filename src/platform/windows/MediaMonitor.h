@@ -13,6 +13,7 @@ class MediaMonitor final : public QObject {
     quint64 select(QString id, bool renew = false);
     quint64 generation();
     void requestPlayback(MediaSample expected, bool play, quint64 request);
+    void requestSeek(MediaSample expected, double seconds, quint64 request);
     ManagedPlaybackOpen openManaged(const QString& adapter, const QString& executable, const QString& video);
     void cancelManagedOpen();
     static double monotonicSeconds();
@@ -26,6 +27,7 @@ class MediaMonitor final : public QObject {
     void sampleReceived(MediaSample sample);
     void errorOccurred(QString error);
     void playbackControlFinished(quint64 request, bool success, QString error);
+    void seekFinished(quint64 request, bool success, QString error);
 
   private:
     void publishSessions();

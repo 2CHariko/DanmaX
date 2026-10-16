@@ -58,11 +58,14 @@ void SmtcBackend::run(std::stop_token stop) {
                     if (command->expected.generation != generation_ || command->expected.id != selected_)
                         error = QStringLiteral("选择的播放器已改变");
                 }
-                if (error.isEmpty()) error = reader.control(command->expected, command->play, stop, [this, &command] {
+                const auto current = [this, &command] {
                     std::lock_guard lock(mutex_);
                     return command->expected.generation == generation_ && command->expected.id == selected_;
-                });
-                emit playbackControlFinished(command->request, error.isEmpty(), error);
+                };
+                if (error.isEmpty()) error = command->seek ? reader.seek(command->expected, command->seconds, stop, current)
+                    : reader.control(command->expected, command->play, stop, current);
+                if (command->seek) emit seekFinished(command->request, error.isEmpty(), error);
+                else emit playbackControlFinished(command->request, error.isEmpty(), error);
             }
             for (int i = 0; i < 4 && !stop.stop_requested(); ++i)
                 std::this_thread::sleep_for(std::chrono::milliseconds(25));
@@ -73,4 +76,9 @@ void SmtcBackend::run(std::stop_token stop) {
         emit errorOccurred(QString::fromUtf8(e.what()));
     }
     if (initialized) uninit_apartment();
+}
+void SmtcBackend::requestSeek(MediaSample expected, double seconds, quint64 request) {
+    std::lock_guard lock(mutex_);
+    if (commands_.size() < 8) commands_.push_back({std::move(expected), false, request, seconds, true});
+    else emit seekFinished(request, false, QStringLiteral("控制队列已满"));
 }

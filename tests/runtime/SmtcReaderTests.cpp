@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <QElapsedTimer>
 #include <QTest>
+#include <limits>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Media.h>
 #include <winrt/Windows.Storage.Streams.h>
@@ -12,7 +13,8 @@ using namespace Windows::Media::Control;
 namespace {
 enum class Fault { None, Operation, Properties, Timeline, Playback, TimelineRead, PlaybackRead, ArtistRead };
 struct State { Fault fault{}; int timelineReads{}; int propertyReads{}; bool playing{};
-    bool controllable{}; int playCommands{}, pauseCommands{}; hstring title{L"Test title"}; };
+    bool controllable{}, seekable{}; int playCommands{}, pauseCommands{}, seekCommands{};
+    int64_t seekTicks{}; hstring title{L"Test title"}; };
 struct Properties : implements<Properties, IGlobalSystemMediaTransportControlsSessionMediaProperties> {
     State* state;
     explicit Properties(State* s) : state(s) {}
@@ -38,6 +40,8 @@ struct Timeline : implements<Timeline, IGlobalSystemMediaTransportControlsSessio
     DateTime LastUpdatedTime() { return clock::now(); }
 };
 struct Controls : implements<Controls, IGlobalSystemMediaTransportControlsSessionPlaybackControls> {
+    State* state;
+    explicit Controls(State* value) : state(value) {}
     bool IsPlayEnabled() { return true; }
     bool IsPauseEnabled() { return true; }
     bool IsStopEnabled() { return false; }
@@ -52,13 +56,13 @@ struct Controls : implements<Controls, IGlobalSystemMediaTransportControlsSessio
     bool IsShuffleEnabled() { return false; }
     bool IsRepeatEnabled() { return false; }
     bool IsPlaybackRateEnabled() { return false; }
-    bool IsPlaybackPositionEnabled() { return false; }
+    bool IsPlaybackPositionEnabled() { return state->seekable; }
 };
 struct Playback : implements<Playback, IGlobalSystemMediaTransportControlsSessionPlaybackInfo> {
     State* state;
     explicit Playback(State* s) : state(s) {}
     GlobalSystemMediaTransportControlsSessionPlaybackControls Controls() {
-        return state->controllable ? make<::Controls>().as<GlobalSystemMediaTransportControlsSessionPlaybackControls>() : nullptr;
+        return state->controllable ? make<::Controls>(state).as<GlobalSystemMediaTransportControlsSessionPlaybackControls>() : nullptr;
     }
     GlobalSystemMediaTransportControlsSessionPlaybackStatus PlaybackStatus() { return state->playing ? GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing : GlobalSystemMediaTransportControlsSessionPlaybackStatus::Paused; }
     IReference<Windows::Media::MediaPlaybackType> PlaybackType() { return nullptr; }
@@ -110,7 +114,10 @@ struct Session : implements<Session, IGlobalSystemMediaTransportControlsSession>
     IAsyncOperation<bool> TryChangeAutoRepeatModeAsync(Windows::Media::MediaPlaybackAutoRepeatMode) { return command(); }
     IAsyncOperation<bool> TryChangePlaybackRateAsync(double) { return command(); }
     IAsyncOperation<bool> TryChangeShuffleActiveAsync(bool) { return command(); }
-    IAsyncOperation<bool> TryChangePlaybackPositionAsync(int64_t) { return command(); }
+    IAsyncOperation<bool> TryChangePlaybackPositionAsync(int64_t value) {
+        if (!state->seekable) throw hresult_error(E_ACCESSDENIED);
+        ++state->seekCommands; state->seekTicks = value; co_return true;
+    }
     template<class T> event_token TimelinePropertiesChanged(T const&) { return {}; }
     void TimelinePropertiesChanged(event_token const&) {}
     template<class T> event_token PlaybackInfoChanged(T const&) { return {}; }
@@ -176,6 +183,22 @@ private slots:
         QVERIFY(!reader.poll("Test.Player", 7).sample.found);
         QVERIFY(!reader.control(sample, false).isEmpty());
         QCOMPARE(fixture.state.pauseCommands, 1);
+    }
+    void selectedSeekCapabilitiesAndIdentity() {
+        Fixture fixture; fixture.state.controllable = true;
+        SmtcReader reader(fixture.request()); auto sample = reader.poll("Test.Player", 7).sample;
+        QVERIFY(!sample.canSeek); QVERIFY(!reader.seek(sample, 30).isEmpty());
+        fixture.state.seekable = true; sample = reader.poll("Test.Player", 7).sample; QVERIFY(sample.canSeek);
+        QVERIFY(reader.seek(sample, 30.25).isEmpty()); QCOMPARE(fixture.state.seekCommands, 1);
+        QCOMPARE(fixture.state.seekTicks, int64_t(352500000)); // Nonzero timeline origin + fractional seconds.
+        for (const auto value : {-1.0, 121.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
+            QVERIFY(!reader.seek(sample, value).isEmpty());
+        auto wrong = sample; wrong.observedAt -= 10; QVERIFY(!reader.seek(wrong, 30).isEmpty());
+        wrong = sample; wrong.observedAt = std::numeric_limits<double>::quiet_NaN(); QVERIFY(!reader.seek(wrong, 30).isEmpty());
+        wrong = sample; ++wrong.sessionToken; QVERIFY(!reader.seek(wrong, 30).isEmpty());
+        QVERIFY(!reader.seek(sample, 30, {}, [] { return false; }).isEmpty());
+        fixture.state.title = L"Other episode"; QVERIFY(!reader.seek(sample, 30).isEmpty());
+        QCOMPARE(fixture.state.seekCommands, 1);
     }
     void unavailableObjectsAndRecovery_data() {
         QTest::addColumn<int>("fault");

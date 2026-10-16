@@ -16,7 +16,7 @@ ApplicationWindow {
     Binding { target: Ui; property: "systemAnimationsEnabled"; value: root.backend.uiPreferences.animationsEnabled }
     property int selectedPage: 0
     property int sourceTab: 0
-    readonly property string currentPageName: ["home", "player", "logs", "settings", "about"][selectedPage] || ""
+    readonly property string currentPageName: ["home", "player", "logs", "settings", "about", "media"][selectedPage] || ""
     readonly property bool compact: width < Ui.expandedNavigationWidth
     readonly property real pageContentInset: pages.children[selectedPage].contentInset
     visible: false
@@ -157,14 +157,16 @@ ApplicationWindow {
                 spacing: 12
 
             RowLayout {
-                visible: root.backend.error.length > 0 || root.backend.settings.error.length > 0
+                visible: (root.backend.error.length > 0 && root.backend.error !== root.backend.danmaku.error)
+                    || root.backend.settings.error.length > 0
                 Layout.fillWidth: true
                 Layout.leftMargin: root.pageContentInset
                 Layout.rightMargin: root.pageContentInset
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
-                    text: root.backend.error.length > 0 ? root.backend.error : root.backend.settings.error
+                    text: root.backend.error.length > 0 && root.backend.error !== root.backend.danmaku.error
+                        ? root.backend.error : root.backend.settings.error
                     Accessible.name: I18n.common.errorPrefix + text
                 }
                 Button {
@@ -211,6 +213,10 @@ ApplicationWindow {
                         id: aboutPage
                         objectName: "aboutPage"
                     }
+                    MediaLibraryPage {
+                        objectName: "mediaLibraryPage"
+                        backend: root.backend
+                    }
                 }
             }
             }
@@ -231,8 +237,16 @@ ApplicationWindow {
 
     MatchingRecoveryDialog {
         backend: root.backend
+        workflow: root.backend.danmaku
         onOpenSettings: { root.navigate(3); Qt.callLater(settingsPage.focusOnlineSettings) }
         onManualSourceLoaded: { root.sourceTab = 0; playerPage.selectSourceTab(0); root.navigate(1) }
+    }
+    MatchingRecoveryDialog {
+        objectName: "mediaMatchingRecoveryDialog"
+        allowLocalXml: true
+        backend: root.backend.media
+        onOpenSettings: root.navigate(3)
+        onManualSourceLoaded: root.navigate(5)
     }
     FileDialog {
         id: missingPlayerDialog

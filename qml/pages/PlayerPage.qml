@@ -9,26 +9,34 @@ import "../i18n"
 PageFrame {
     id: page
     required property QtObject backend
+    readonly property QtObject session: backend.danmaku
     property int sourceTab: 0
-    readonly property bool effectiveManual: backend.manualMode
+    readonly property bool effectiveManual: session.manualMode
     readonly property var sessionChoices: {
         const choices = page.backend.sessions.slice()
         const saved = page.backend.settings.values.targetSession
         if (saved.length > 0 && !choices.some(entry => entry.id === saved))
-            choices.unshift({ id: saved, label: I18n.format(page.backend.targetSessionConnected
+            choices.unshift({ id: saved, label: I18n.format(page.session.targetSessionConnected
                 ? I18n.player.playerBadgeConnected : I18n.player.savedSessionWaiting, saved) })
         return choices
     }
     readonly property color playerConnectionColor: effectiveManual ? Ui.secondaryText
-        : backend.targetSessionConnected ? Ui.successText : Ui.cautionText
-    readonly property string blockedReason: backend.loading ? I18n.player.blockedLoading
-        : backend.total <= 0 ? (backend.automatic.enabled && !backend.automatic.suspended && !effectiveManual
-            ? backend.automatic.status : I18n.player.blockedNoDanmaku)
-        : !effectiveManual && backend.settings.values.targetSession.length === 0 ? I18n.player.blockedNoSession : ""
+        : session.targetSessionConnected ? Ui.successText : Ui.cautionText
+    readonly property string blockedReason: session.loading ? I18n.player.blockedLoading
+        : !effectiveManual && backend.settings.values.targetSession.length === 0 ? I18n.player.blockedNoSession
+        : session.total <= 0 && (effectiveManual || !backend.settings.values.automaticDanmaku) ? I18n.player.blockedNoDanmaku : ""
     title: I18n.player.title
     description: I18n.player.description
 
-    VideoOpenPane { backend: page.backend }
+    Label {
+        Layout.fillWidth: true
+        text: page.session.error
+        visible: text.length > 0
+        wrapMode: Text.WordWrap
+        color: Ui.cautionText
+        Accessible.role: Accessible.AlertMessage
+    }
+
 
     function formatTime(value) {
         const seconds = Math.max(0, Math.floor(value || 0))
@@ -53,7 +61,7 @@ PageFrame {
             radius: Ui.cardRadius
             color: Ui.cardBackground
             border.width: 1
-            border.color: page.backend.running ? Ui.accentColor : Ui.cardBorder
+            border.color: page.session.running ? Ui.accentColor : Ui.cardBorder
             Behavior on border.color { ColorAnimation { duration: 150 } }
         }
 
@@ -62,7 +70,7 @@ PageFrame {
 
             // --- 状态 A：未运行（空闲/配置与就绪检查）---
             GridLayout {
-                visible: !page.backend.running
+                visible: !page.session.running
                 Layout.fillWidth: true
                 columns: width >= 600 ? 2 : 1
                 columnSpacing: 16
@@ -99,9 +107,9 @@ PageFrame {
                             radius: 11
                             implicitHeight: 22
                             implicitWidth: danmakuBadgeRow.implicitWidth + 16
-                            color: page.backend.total > 0 ? (Ui.dark ? Qt.rgba(0.42, 0.80, 0.37, 0.15) : Qt.rgba(0.06, 0.49, 0.06, 0.10)) : (Ui.dark ? Qt.rgba(1, 1, 1, 0.06) : Qt.rgba(0, 0, 0, 0.05))
+                            color: page.session.total > 0 ? (Ui.dark ? Qt.rgba(0.42, 0.80, 0.37, 0.15) : Qt.rgba(0.06, 0.49, 0.06, 0.10)) : (Ui.dark ? Qt.rgba(1, 1, 1, 0.06) : Qt.rgba(0, 0, 0, 0.05))
                             border.width: 1
-                            border.color: page.backend.total > 0 ? (Ui.dark ? "#6CCB5F" : "#107C10") : Ui.cardBorder
+                            border.color: page.session.total > 0 ? (Ui.dark ? "#6CCB5F" : "#107C10") : Ui.cardBorder
 
                             RowLayout {
                                 id: danmakuBadgeRow
@@ -109,13 +117,13 @@ PageFrame {
                                 spacing: 5
                                 Rectangle {
                                     width: 6; height: 6; radius: 3
-                                    color: page.backend.total > 0 ? (Ui.dark ? "#6CCB5F" : "#107C10") : Ui.secondaryText
+                                    color: page.session.total > 0 ? (Ui.dark ? "#6CCB5F" : "#107C10") : Ui.secondaryText
                                 }
                                 Label {
                                     id: danmakuBadgeText
-                                    text: page.backend.total > 0 ? I18n.format(I18n.player.danmakuBadgeReady, page.backend.total) : I18n.player.danmakuBadgeNotLoaded
+                                    text: page.session.total > 0 ? I18n.format(I18n.player.danmakuBadgeReady, page.session.total) : I18n.player.danmakuBadgeNotLoaded
                                     font.pixelSize: Ui.captionSize
-                                    color: page.backend.total > 0 ? (Ui.dark ? "#6CCB5F" : "#107C10") : Ui.secondaryText
+                                    color: page.session.total > 0 ? (Ui.dark ? "#6CCB5F" : "#107C10") : Ui.secondaryText
                                 }
                             }
                             Accessible.role: Accessible.StaticText
@@ -147,7 +155,7 @@ PageFrame {
                                     Layout.fillWidth: true
                                     text: page.effectiveManual ? I18n.player.playerBadgeManual
                                          : (page.backend.settings.values.targetSession.length > 0
-                                            ? I18n.format(page.backend.targetSessionConnected ? I18n.player.playerBadgeConnected : I18n.player.savedSessionWaiting, page.backend.settings.values.targetSession)
+                                            ? I18n.format(page.session.targetSessionConnected ? I18n.player.playerBadgeConnected : I18n.player.savedSessionWaiting, page.backend.settings.values.targetSession)
                                             : I18n.player.playerBadgeWaiting)
                                     font.pixelSize: Ui.captionSize
                                     color: page.playerConnectionColor
@@ -162,7 +170,7 @@ PageFrame {
                     // 辅助状态/行动说明
                     Label {
                         visible: text.length > 0
-                        text: page.blockedReason.length > 0 ? page.blockedReason : page.backend.status
+                        text: page.blockedReason.length > 0 ? page.blockedReason : page.session.status
                         font.pixelSize: Ui.captionSize
                         color: page.blockedReason.length > 0 ? (Ui.dark ? "#EAA300" : "#BC4B09") : Ui.secondaryText
                         wrapMode: Text.WordWrap
@@ -178,30 +186,30 @@ PageFrame {
 
                     Button {
                         objectName: "unloadDanmaku"
-                        visible: page.backend.running || page.backend.total > 0 || page.backend.loading || page.backend.library.busy
+                        visible: page.session.running || page.session.total > 0 || page.session.loading || page.backend.library.busy
                         text: I18n.player.unloadDanmaku
                         Accessible.description: I18n.player.unloadDanmakuDesc
-                        onClicked: page.backend.unload()
+                        onClicked: page.session.unload()
                     }
 
                     Button {
                         id: startPlaybackBtn
                         objectName: "startPlayback"
-                        visible: !page.backend.running
+                        visible: !page.session.running
                         text: I18n.player.startPlayback
                         highlighted: true
                         enabled: page.blockedReason.length === 0
                         font.weight: Font.DemiBold
                         Layout.preferredHeight: 36
                         Layout.preferredWidth: Math.max(104, implicitWidth)
-                        onClicked: page.backend.start(page.effectiveManual)
+                        onClicked: page.session.start(page.effectiveManual)
                     }
                 }
             }
 
             // --- 状态 B：正在运行（中控台与实时状态）---
             ColumnLayout {
-                visible: page.backend.running
+                visible: page.session.running
                 Layout.fillWidth: true
                 spacing: 12
 
@@ -230,7 +238,7 @@ PageFrame {
                             Layout.fillWidth: true
                             spacing: 2
                             Label {
-                                text: page.backend.mediaTitle.length > 0 ? page.backend.mediaTitle : I18n.player.heroStatusRunning
+                                text: page.session.mediaTitle.length > 0 ? page.session.mediaTitle : I18n.player.heroStatusRunning
                                 font.pixelSize: Ui.subtitleSize
                                 font.weight: Font.DemiBold
                                 color: Ui.textColor
@@ -238,7 +246,7 @@ PageFrame {
                                 Layout.fillWidth: true
                             }
                             Label {
-                                text: page.backend.status
+                                text: page.session.status
                                 font.pixelSize: Ui.captionSize
                                 color: Ui.secondaryText
                                 Layout.fillWidth: true
@@ -250,21 +258,21 @@ PageFrame {
                         spacing: 8
                         Button {
                             objectName: "pausePlayback"
-                            visible: page.backend.running && page.backend.manualMode
-                            text: page.backend.completed ? I18n.player.replayPlayback : page.backend.playing ? I18n.player.pausePlayback : I18n.player.resumePlayback
-                            highlighted: !page.backend.playing
-                            onClicked: page.backend.togglePause()
+                            visible: page.session.running && page.session.manualMode
+                            text: page.session.completed ? I18n.player.replayPlayback : page.session.playing ? I18n.player.pausePlayback : I18n.player.resumePlayback
+                            highlighted: !page.session.playing
+                            onClicked: page.session.togglePause()
                         }
                         Button {
                             objectName: "stopPlayback"
                             text: I18n.player.stopPlayback
                             Accessible.description: I18n.player.stopPlaybackDesc
-                            onClicked: page.backend.stop()
+                            onClicked: page.session.stop()
                         }
                         Button {
                             text: I18n.player.unloadDanmaku
                             Accessible.description: I18n.player.unloadDanmakuDesc
-                            onClicked: page.backend.unload()
+                            onClicked: page.session.unload()
                         }
                     }
                 }
@@ -277,14 +285,14 @@ PageFrame {
                     RowLayout {
                         Layout.fillWidth: true
                         Label {
-                            text: page.formatTime(manualSeek.pendingSeek ? manualSeek.value : page.backend.position)
-                                + " / " + page.formatTime(page.backend.duration)
+                            text: page.formatTime(manualSeek.pendingSeek ? manualSeek.value : page.session.position)
+                                + " / " + page.formatTime(page.session.duration)
                             font.pixelSize: Ui.bodySize
                             font.weight: Font.DemiBold
                             color: Ui.textColor
                         }
                         Label {
-                            text: page.backend.manualMode ? I18n.player.timeManualSuffix : I18n.player.timeSyncSuffix
+                            text: page.session.manualMode ? I18n.player.timeManualSuffix : I18n.player.timeSyncSuffix
                             font.pixelSize: Ui.captionSize
                             color: Ui.secondaryText
                         }
@@ -293,33 +301,33 @@ PageFrame {
 
                     Slider {
                         id: manualSeek
-                        visible: page.backend.manualMode
+                        visible: page.session.manualMode
                         property bool pendingSeek: false
                         property bool cancelling: false
                         Layout.fillWidth: true
                         from: 0
-                        to: Math.max(1, page.backend.duration)
-                        Binding on value { value: page.backend.position; when: !manualSeek.pressed && !manualSeek.pendingSeek }
+                        to: Math.max(1, page.session.duration)
+                        Binding on value { value: page.session.position; when: !manualSeek.pressed && !manualSeek.pendingSeek }
                         Accessible.name: I18n.player.manualSeekAccessible
                         onMoved: {
                             pendingSeek = true
-                            if (!pressed && page.backend.running) {
+                            if (!pressed && page.session.running) {
                                 const target = value
                                 pendingSeek = false
-                                page.backend.seek(target)
+                                page.session.seek(target)
                             }
                         }
                         onPressedChanged: {
-                            if (!pressed && pendingSeek && !cancelling && page.backend.running) {
+                            if (!pressed && pendingSeek && !cancelling && page.session.running) {
                                 const target = value
                                 pendingSeek = false
-                                page.backend.seek(target)
+                                page.session.seek(target)
                             }
                         }
                         Connections {
                             target: page.backend
                             function onStateChanged() {
-                                if (!page.backend.running) {
+                                if (!page.session.running) {
                                     manualSeek.cancelling = true
                                     manualSeek.pendingSeek = false
                                     manualSeek.cancelling = false
@@ -329,12 +337,12 @@ PageFrame {
                     }
 
                     ProgressBar {
-                        visible: !page.backend.manualMode
+                        visible: !page.session.manualMode
                         indeterminate: false
                         Layout.fillWidth: true
                         from: 0
-                        to: Math.max(1, page.backend.duration)
-                        value: page.backend.position
+                        to: Math.max(1, page.session.duration)
+                        value: page.session.position
                         Accessible.name: I18n.player.playerProgressAccessible
                     }
                 }
@@ -393,7 +401,7 @@ PageFrame {
             // 状态 A：已载入弹幕时，展示精致的媒体就绪卡片（完全收起输入框）
             Control {
                 id: loadedDanmakuCard
-                visible: page.backend.sourceTitle.length > 0 || page.backend.total > 0
+                visible: page.session.sourceTitle.length > 0 || page.session.total > 0
                 Layout.fillWidth: true
                 leftPadding: Ui.cardPaddingX
                 rightPadding: Ui.cardPaddingX
@@ -416,7 +424,7 @@ PageFrame {
 
                         Label {
                             visible: text.length > 0
-                            text: page.backend.sourceTitle
+                            text: page.session.sourceTitle
                             font.weight: Font.DemiBold
                             font.pixelSize: Ui.bodySize
                             color: Ui.textColor
@@ -439,15 +447,15 @@ PageFrame {
                                 Label {
                                     id: loadedCountBadge
                                     anchors.centerIn: parent
-                                    text: I18n.format(I18n.player.loadedCountFormat, page.backend.total)
+                                    text: I18n.format(I18n.player.loadedCountFormat, page.session.total)
                                     font.pixelSize: Ui.captionSize - 1
                                     color: Ui.dark ? "#6CCB5F" : "#107C10"
                                 }
                             }
 
                             Label {
-                                text: page.backend.filePath.length > 0 && page.backend.sourceTitle === page.backend.filePath
-                                    ? page.backend.filePath : I18n.player.loadedDanmakuCardTitle
+                                text: page.session.filePath.length > 0 && page.session.sourceTitle === page.session.filePath
+                                    ? page.session.filePath : I18n.player.loadedDanmakuCardTitle
                                 font.pixelSize: Ui.captionSize
                                 color: Ui.secondaryText
                                 elide: Text.ElideMiddle
@@ -467,7 +475,7 @@ PageFrame {
                         Button {
                             text: I18n.player.clearDanmakuBtn
                             onClicked: {
-                                page.backend.unload()
+                                page.session.unload()
                                 if (pathInput) pathInput.text = ""
                             }
                         }
@@ -477,7 +485,7 @@ PageFrame {
 
             // 状态 B：未载入弹幕时，展示文件路径选择与载入操作
             ColumnLayout {
-                visible: !(page.backend.sourceTitle.length > 0 || page.backend.total > 0)
+                visible: !(page.session.sourceTitle.length > 0 || page.session.total > 0)
                 Layout.fillWidth: true
                 spacing: 8
 
@@ -491,10 +499,10 @@ PageFrame {
                         id: pathInput
                         objectName: "danmakuPath"
                         Layout.fillWidth: true
-                        text: page.backend.filePath
+                        text: page.session.filePath
                         placeholderText: I18n.player.pathPlaceholder
                         Accessible.name: I18n.player.pathAccessible
-                        onAccepted: if (!page.backend.loading) page.backend.loadFile(text)
+                        onAccepted: if (!page.session.loading) page.backend.loadFile(text)
                     }
 
                     Flow {
@@ -508,21 +516,21 @@ PageFrame {
                         }
 
                         Button {
-                            text: page.backend.loading ? I18n.player.cancelLoad : I18n.player.loadDanmaku
+                            text: page.session.loading ? I18n.player.cancelLoad : I18n.player.loadDanmaku
                             highlighted: pathInput.text.trim().length > 0
-                            enabled: page.backend.loading || pathInput.text.trim().length > 0
-                            onClicked: page.backend.loading ? page.backend.cancelLoad() : page.backend.loadFile(pathInput.text)
+                            enabled: page.session.loading || pathInput.text.trim().length > 0
+                            onClicked: page.session.loading ? page.backend.cancelLoad() : page.backend.loadFile(pathInput.text)
                         }
                     }
                 }
 
                 ProgressBar {
-                    visible: page.backend.loading
+                    visible: page.session.loading
                     Layout.fillWidth: true
-                    indeterminate: page.backend.loadProgress < 0
+                    indeterminate: page.session.loadProgress < 0
                     from: 0
                     to: 100
-                    value: Math.max(0, page.backend.loadProgress)
+                    value: Math.max(0, page.session.loadProgress)
                 }
             }
         }
@@ -548,14 +556,14 @@ PageFrame {
                 objectName: "syncMode"
                 text: I18n.player.syncMode
                 checked: !page.effectiveManual
-                enabled: !page.backend.running
+                enabled: !page.session.running
                 onClicked: page.backend.setManualMode(false)
             }
             RadioButton {
                 objectName: "manualMode"
                 text: I18n.player.manualMode
                 checked: page.effectiveManual
-                enabled: !page.backend.running
+                enabled: !page.session.running
                 onClicked: page.backend.setManualMode(true)
             }
         }
@@ -573,9 +581,14 @@ PageFrame {
                 model: page.sessionChoices
                 textRole: "label"
                 valueRole: "id"
+                enabledRole: "connectable"
                 displayText: currentIndex >= 0 ? currentText : I18n.player.sessionWaitPlaceholder
                 Accessible.name: I18n.player.sessionAccessible
-                onActivated: page.backend.selectSession(currentValue)
+                onActivated: {
+                    const entry = page.sessionChoices[currentIndex]
+                    if (entry && entry.connectable === false) syncSelection()
+                    else page.backend.selectSession(currentValue)
+                }
                 function syncSelection() { currentIndex = indexOfValue(page.backend.settings.values.targetSession) }
                 onModelChanged: syncSelection()
                 Component.onCompleted: syncSelection()
@@ -590,9 +603,18 @@ PageFrame {
             }
 
             Label {
+                objectName: "vlcSessionDiscoveryHint"
+                visible: page.sessionChoices.some(entry => entry.connectable === false)
+                text: I18n.player.vlcDiscoveryHint
+                color: Ui.secondaryText
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+
+            Label {
                 objectName: "savedPlayerStatus"
                 visible: page.backend.settings.values.targetSession.length > 0
-                text: I18n.format(page.backend.targetSessionConnected ? I18n.player.playerBadgeConnected : I18n.player.savedSessionWaiting,
+                text: I18n.format(page.session.targetSessionConnected ? I18n.player.playerBadgeConnected : I18n.player.savedSessionWaiting,
                     page.backend.settings.values.targetSession)
                 color: page.playerConnectionColor
                 wrapMode: Text.WrapAnywhere

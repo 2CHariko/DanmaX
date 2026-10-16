@@ -29,7 +29,7 @@ class AutomaticDanmaku final : public QObject {
     void configure(bool enabled, const QStringList& servers);
     void observe(const MediaSample& sample);
     void reset(bool invalidateRecovery = true);
-    Q_INVOKABLE void suspend();
+    Q_INVOKABLE void suspend(bool resume = true);
     void refreshCache() { library_.refreshCache(); }
     Q_INVOKABLE void retry();
     Q_INVOKABLE void forgetAssociation();
@@ -37,6 +37,7 @@ class AutomaticDanmaku final : public QObject {
     Q_INVOKABLE void openRecovery();
     std::shared_ptr<OnlineDanmakuResult> takeReadyResult();
     MediaSample latestSample() const { return latest_; }
+    void setFileTitle(const QString& title) { fileTitle_ = title; }
   signals:
     void changed();
     void contentInvalidated();
@@ -49,6 +50,7 @@ class AutomaticDanmaku final : public QObject {
     void libraryChanged();
     void accept();
     bool fresh() const;
+    QString matchingTitle() const { return fileTitle_.isEmpty() ? latest_.title : fileTitle_; }
     void state(Phase phase, const QString& status);
     DanmakuLibrary library_;
     PlaybackRecovery recovery_{this};
@@ -58,7 +60,7 @@ class AutomaticDanmaku final : public QObject {
     ParsedMediaTitle parsed_;
     MediaParseResult parseResult_;
     QString offeredIdentity_;
-    QString identity_, status_;
+    QString identity_, status_, fileTitle_;
     QStringList servers_;
     Phase phase_{Waiting};
     bool enabled_{}, suspended_{}, changing_{};

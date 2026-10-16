@@ -1,8 +1,10 @@
 #include "application/PlaybackRecovery.h"
+#include <atomic>
+namespace { quint64 nextControlRequest() { static std::atomic<quint64> sequence{0}; return ++sequence; } }
 PlaybackRecovery::PlaybackRecovery(QObject* parent) : QObject(parent) {
     deadline_.setSingleShot(true); deadline_.setInterval(3000);
     connect(&deadline_, &QTimer::timeout, this, [this] {
-        pending_ = awaitingPause_ = owned_ = false; ++request_;
+        pending_ = awaitingPause_ = owned_ = false; (request_ = nextControlRequest());
         status_ = QStringLiteral("未能确认播放器暂停，请手动控制播放"); emit changed();
     });
 }
@@ -17,7 +19,7 @@ void PlaybackRecovery::begin(const MediaSample& sample, const QString& reason) {
     invalidate(); origin_ = latest_ = sample; reason_ = reason; active_ = true;
     if (sample.playback == MediaSample::Playback::Playing) {
         pending_ = true; playingCommand_ = false; status_ = QStringLiteral("正在请求指定播放器暂停…");
-        deadline_.start(); emit controlRequested(sample, false, ++request_);
+        deadline_.start(); emit controlRequested(sample, false, (request_ = nextControlRequest()));
     } else status_ = QStringLiteral("播放器原本已暂停，完成或取消后保持暂停");
     emit changed(); emit showRequested();
 }
@@ -55,9 +57,9 @@ void PlaybackRecovery::finish(bool resume) {
 void PlaybackRecovery::resumeIfOwned() {
     if (!resumeWanted_ || !owned_ || pending_ || !same(latest_) || latest_.playback != MediaSample::Playback::Paused) return;
     resumeWanted_ = false; owned_ = false; pending_ = true; playingCommand_ = true;
-    deadline_.start(); emit controlRequested(latest_, true, ++request_);
+    deadline_.start(); emit controlRequested(latest_, true, (request_ = nextControlRequest()));
 }
 void PlaybackRecovery::invalidate() {
-    deadline_.stop(); ++request_; active_ = pending_ = awaitingPause_ = owned_ = resumeWanted_ = playingCommand_ = false;
+    deadline_.stop(); (request_ = nextControlRequest()); active_ = pending_ = awaitingPause_ = owned_ = resumeWanted_ = playingCommand_ = false;
     origin_ = latest_ = {}; reason_.clear(); status_.clear(); emit changed();
 }

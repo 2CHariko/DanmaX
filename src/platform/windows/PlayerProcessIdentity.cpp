@@ -2,6 +2,8 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <iphlpapi.h>
+#include <tlhelp32.h>
+#include "platform/windows/VlcLauncher.h"
 #include <QFileInfo>
 #include <QByteArray>
 namespace {
@@ -18,6 +20,29 @@ DWORD processId(const QString& session) {
 }
 }
 namespace PlayerProcessIdentity {
+QVariantList discoverVlc() {
+    QVariantList result;
+    const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return result;
+    PROCESSENTRY32W entry{}; entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snapshot, &entry)) do {
+        if (QString::fromWCharArray(entry.szExeFile).compare("vlc.exe", Qt::CaseInsensitive) != 0) continue;
+        const auto handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, entry.th32ProcessID);
+        if (!handle) continue;
+        wchar_t path[32768]; DWORD length = 32768;
+        QString executable, id;
+        if (WaitForSingleObject(handle, 0) == WAIT_TIMEOUT && QueryFullProcessImageNameW(handle, 0, path, &length)) {
+            executable = QString::fromWCharArray(path, length); id = key(handle, entry.th32ProcessID);
+        }
+        CloseHandle(handle);
+        if (id.isEmpty() || !VlcLauncher::validate(executable).isEmpty()) continue;
+        result.append(QVariantMap{{"id", id}, {"title", "VLC"}, {"pid", quint32(entry.th32ProcessID)},
+            {"label", QStringLiteral("VLC · PID %1 · 未建立同步连接").arg(entry.th32ProcessID)},
+            {"connectable", false}, {"reason", QStringLiteral("请将 VLC 设为默认外部播放器，再通过 DanmaX 打开视频建立同步连接。")}});
+    } while (Process32NextW(snapshot, &entry));
+    CloseHandle(snapshot);
+    return result;
+}
 QString session(qint64 pid, const QString& executable) {
     if (pid <= 0 || quint64(pid) > MAXDWORD) return {};
     HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, DWORD(pid));

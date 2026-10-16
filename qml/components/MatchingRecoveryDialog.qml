@@ -1,15 +1,18 @@
 import QtQuick
 import QtQuick.Controls.FluentWinUI3
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import "../theme"
 
 Dialog {
     id: dialog
     objectName: "matchingRecoveryDialog"
     required property QtObject backend
+    property QtObject workflow: backend
     readonly property QtObject automatic: backend.automatic
     readonly property QtObject recovery: automatic.recovery
     property bool manualSearch: false
+    property bool allowLocalXml: false
     property bool manualBoundToPlayer: false
     readonly property QtObject activeLibrary: manualSearch ? backend.library : automatic.library
     signal openSettings()
@@ -49,11 +52,11 @@ Dialog {
         target: dialog.backend
         function onRequestOnlineDanmakuSearch() {
             dialog.manualSearch = true
-            dialog.manualBoundToPlayer = !dialog.backend.manualMode && dialog.backend.targetSessionConnected
+            dialog.manualBoundToPlayer = !dialog.workflow.manualMode && dialog.workflow.targetSessionConnected
             dialog.open()
         }
         function onStateChanged() {
-            if (dialog.visible && dialog.manualSearch && dialog.manualBoundToPlayer && !dialog.backend.targetSessionConnected)
+            if (dialog.visible && dialog.manualSearch && dialog.manualBoundToPlayer && !dialog.workflow.targetSessionConnected)
                 dialog.cancelMatching()
         }
     }
@@ -113,6 +116,12 @@ Dialog {
                 Accessible.name: "当前播放文件名，可选择并复制"
             }
             Button {
+                visible: dialog.allowLocalXml
+                objectName: "chooseRecoveryXml"
+                text: "选择本地 XML"
+                onClicked: xmlDialog.open()
+            }
+            Button {
                 objectName: "copyRecoveryFileName"
                 visible: !dialog.manualSearch
                 text: "复制完整文件名"
@@ -136,5 +145,11 @@ Dialog {
                 }
             }
         }
+    }
+    FileDialog {
+        id: xmlDialog
+        title: "为当前视频选择弹幕 XML"
+        nameFilters: ["弹幕 XML (*.xml)"]
+        onAccepted: { dialog.manualSearch = false; dialog.backend.loadFile(selectedFile) }
     }
 }

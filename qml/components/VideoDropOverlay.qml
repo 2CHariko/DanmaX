@@ -139,7 +139,7 @@ Item {
             feedback.reset()
             if (!valid) { drop.accepted = false; return }
             drop.accept((drop.supportedActions & Qt.CopyAction) ? Qt.CopyAction : Qt.LinkAction)
-            feedback.backend.videoOpen.open(drop.urls)
+            feedback.backend.media.openVideo(drop.urls[0])
         }
     }
     Shortcut {

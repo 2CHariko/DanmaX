@@ -8,6 +8,7 @@ import "../i18n"
 ComboBox {
     id: control
     property bool renderFontFamily: false
+    property string enabledRole: ""
     property real popupLimit: Ui.comboPopupHeight
     readonly property real desiredPopupWidth: Math.max(control.width, renderFontFamily ? 280 : 160)
     readonly property var popupList: popup.contentItem
@@ -83,9 +84,14 @@ ComboBox {
         id: itemDelegate
         required property var model
         required property int index
+        enabled: control.enabledRole.length === 0 || !control.model
+            || !control.model[index] || control.model[index][control.enabledRole] !== false
 
         width: control.popupList ? control.popupList.width : control.width
         font: control.font
+        // Qt 6.11's disabled Fluent delegate references an undefined verticalOffset
+        // in topPadding. Keep its symmetric native padding through the public API.
+        topPadding: bottomPadding
         implicitHeight: Math.max(36, implicitContentHeight + topPadding + bottomPadding)
         highlighted: control.highlightedIndex === index
         hoverEnabled: control.hoverEnabled
@@ -118,7 +124,7 @@ ComboBox {
             Label {
                 id: itemLabel
                 text: control.textAt(itemDelegate.index) || (itemDelegate.model && control.textRole ? itemDelegate.model[control.textRole] : (typeof itemDelegate.modelData === "string" ? itemDelegate.modelData : ""))
-                color: Ui.textColor
+                color: itemDelegate.enabled ? Ui.textColor : Ui.secondaryText
                 // An empty family is an explicit override, not font inheritance.
                 // Inherit size/weight from the delegate, override only preview families.
                 font.family: control.renderFontFamily ? itemLabel.text : itemDelegate.font.family

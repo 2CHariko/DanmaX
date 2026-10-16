@@ -513,7 +513,7 @@ private slots:
         auto* settings = qobject_cast<SettingsStore*>(controller.settings());
         auto* automatic = qobject_cast<AutomaticDanmaku*>(controller.automatic()); QVERIFY(automatic);
         settings->setValue("danmakuServers", QStringList{server.base()});
-        controller.selectSession("Test.Player"); settings->setValue("automaticDanmaku", true);
+        controller.selectSession("Test.Player"); controller.setAutomaticDanmaku(true);
         QQuickWindow overlay; DanmakuItem renderer;
         renderer.setParentItem(overlay.contentItem()); renderer.setSize({800, 600});
         controller.attach(&renderer, &overlay);

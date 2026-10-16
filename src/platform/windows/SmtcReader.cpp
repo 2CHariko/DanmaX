@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <limits>
 #include <winrt/Windows.Foundation.Collections.h>
 
 using namespace winrt;
@@ -34,6 +35,7 @@ MediaSample readSample(const GlobalSystemMediaTransportControlsSession& session,
     require(timeline, "SMTC returned null timeline properties");
     const auto playback = session.GetPlaybackInfo();
     require(playback, "SMTC returned null playback info");
+    if (const auto controls = playback.Controls()) sample.canSeek = controls.IsPlaybackPositionEnabled();
     const auto start = timeline.StartTime();
     sample.duration = std::max(0.0, std::chrono::duration<double>(timeline.EndTime() - start).count());
     sample.position = std::chrono::duration<double>(timeline.Position() - start).count();
@@ -177,6 +179,29 @@ QString SmtcReader::control(const MediaSample& expected, bool play, std::stop_to
         auto operation = play ? selectedSession_.TryPlayAsync() : selectedSession_.TryPauseAsync();
         if (!waitFor(operation, stop)) return QStringLiteral("控制已取消");
         return operation.GetResults() ? QString() : QStringLiteral("播放器拒绝控制请求");
+    } catch (const hresult_error&) { return currentError(); }
+      catch (const std::exception&) { return currentError(); }
+}
+QString SmtcReader::seek(const MediaSample& expected, double seconds, std::stop_token stop, std::function<bool()> current) {
+    try {
+        const auto age = MediaMonitor::monotonicSeconds() - expected.observedAt;
+        if (!std::isfinite(seconds) || !std::isfinite(expected.duration) || expected.duration <= 0 || expected.duration > 366 * 86400.0
+            || !std::isfinite(expected.observedAt)
+            || seconds < 0 || seconds > expected.duration || !expected.canSeek || !expected.found
+            || !selectedSession_ || !expected.sessionToken || expected.sessionToken != sessionToken_ || age < 0 || age > 2.5
+            || qt(selectedSession_.SourceAppUserModelId()) != expected.id) return QStringLiteral("定位目标或会话无效");
+        auto properties = selectedSession_.TryGetMediaPropertiesAsync();
+        if (!waitFor(properties, stop)) return QStringLiteral("定位已取消");
+        if (qt(properties.GetResults().Title()) != expected.title) return QStringLiteral("播放内容已切换");
+        const auto playback = selectedSession_.GetPlaybackInfo();
+        if (!playback || !playback.Controls() || !playback.Controls().IsPlaybackPositionEnabled()) return QStringLiteral("播放器不支持定位");
+        if (stop.stop_requested() || (current && !current())) return QStringLiteral("选择的播放器已改变");
+        const auto start = selectedSession_.GetTimelineProperties().StartTime().count();
+        const auto ticks = static_cast<int64_t>(seconds * 10000000.0);
+        if (start > std::numeric_limits<int64_t>::max() - ticks) return QStringLiteral("定位位置越界");
+        auto operation = selectedSession_.TryChangePlaybackPositionAsync(start + ticks);
+        if (!waitFor(operation, stop)) return QStringLiteral("定位已取消");
+        return operation.GetResults() ? QString() : QStringLiteral("播放器拒绝定位");
     } catch (const hresult_error&) { return currentError(); }
       catch (const std::exception&) { return currentError(); }
 }

@@ -28,10 +28,7 @@ ScrollView {
     }
     function focusHeading() { contentItem.contentY = 0; heading.forceActiveFocus() }
     function scrollVertical(pixels, angle) {
-        const flick = page.contentItem
-        if (!flick) return
-        const step = pixels || (angle / 120.0) * Ui.wheelScrollStep
-        flick.contentY = Math.max(0, Math.min(Math.max(0, flick.contentHeight - page.availableHeight), flick.contentY - step))
+        verticalBar.scrollBy(pixels, angle)
     }
     WheelHandler {
         id: wheelHandler
@@ -39,13 +36,15 @@ ScrollView {
         // AppScrollBar supplies the separate full-container padding fallback.
         parent: page.contentItem ? page.contentItem.contentItem : null
         target: null
-        acceptedDevices: PointerDevice.Mouse
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         orientation: Qt.Vertical
         blocking: true
         onWheel: (event) => {
-            if (!(event.modifiers & Qt.ShiftModifier) && event.pixelDelta.x === 0 && event.pixelDelta.y === 0
-                    && event.angleDelta.y !== 0 && Math.abs(event.angleDelta.y) >= Math.abs(event.angleDelta.x)) {
-                page.scrollVertical(0, event.angleDelta.y)
+            const pixels = event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0
+            const dx = pixels ? event.pixelDelta.x : event.angleDelta.x
+            const dy = pixels ? event.pixelDelta.y : event.angleDelta.y
+            if (!(event.modifiers & Qt.ShiftModifier) && dy !== 0 && Math.abs(dy) >= Math.abs(dx)) {
+                page.scrollVertical(pixels ? dy : 0, pixels ? 0 : dy)
                 event.accepted = true
             } else {
                 event.accepted = false

@@ -32,6 +32,7 @@ std::optional<VlcState> VlcProtocol::decode(const QByteArray& data, const QStrin
     else if (state == "stopped") sample.playback = MediaSample::Playback::Stopped;
     else return {};
     sample.playing = sample.playback == MediaSample::Playback::Playing;
+    sample.canSeek = obj.value("canSeek").toBool();
     sample.title = QFileInfo(uri.toLocalFile()).fileName();
     sample.identity = session + '\n' + sample.mediaUri + '\n' + result.item;
     sample.sessionToken = qHash(sample.identity); if (!sample.sessionToken) sample.sessionToken = 1;

@@ -18,10 +18,16 @@ if command == "open" then
         end
         previous_item = danmax_previous_item
     else ok = false end
-elseif command == "pause" or command == "resume" then
+elseif command == "pause" or command == "resume" or command == "seek" then
     if item and uri == _GET["expected_uri"] and playlist_id == _GET["expected_item"] then
         local state = vlc.playlist.status()
-        if (command == "pause" and state == "playing") or (command == "resume" and state == "paused") then
+        if command == "seek" then
+            local seconds = tonumber(_GET["seconds"])
+            local input = vlc.object.input()
+            if input and seconds and seconds == seconds and seconds >= 0 and seconds <= item:duration() and vlc.var.get(input, "can-seek") then
+                vlc.var.set(input, "time", math.floor(seconds * 1000000))
+            else ok = false end
+        elseif (command == "pause" and state == "playing") or (command == "resume" and state == "paused") then
             vlc.playlist.pause()
         end
     else ok = false end
@@ -35,6 +41,7 @@ if result.found then
     result.position = vlc.var.get(input, "time") / 1000000
     result.duration = item:duration()
     result.rate = vlc.var.get(input, "rate")
+    result.canSeek = vlc.var.get(input, "can-seek") == true
     result.state = vlc.playlist.status()
 end
 json.printTableAsJson(result)
