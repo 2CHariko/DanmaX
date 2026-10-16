@@ -20,10 +20,13 @@ class SmtcReader {
     using ManagerRequest = std::function<winrt::Windows::Foundation::IAsyncOperation<Manager>()>;
     explicit SmtcReader(ManagerRequest request = {});
     SmtcPoll poll(const QString& selected, quint64 generation, std::stop_token stop = {});
+    QString control(const MediaSample& expected, bool play, std::stop_token stop = {}, std::function<bool()> current = {});
 
   private:
     ManagerRequest request_;
     Manager manager_{nullptr};
     std::chrono::steady_clock::time_point reconnectAt_{};
     int cycle_{};
+    winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSession selectedSession_{nullptr};
+    quint64 sessionToken_{};
 };

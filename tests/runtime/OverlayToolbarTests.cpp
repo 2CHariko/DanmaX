@@ -452,7 +452,19 @@ private slots:
         QVERIFY(settings->setValue("foregroundOnly", true));
         controller.beginDemo(50);
         controller.stop();
+        controller.selectSession("Policy.Player");
+        auto* mediaMonitor = controller.findChild<MediaMonitor*>(); QVERIFY(mediaMonitor);
+        QObject::disconnect(mediaMonitor, &MediaMonitor::sampleReceived, &controller, nullptr);
         controller.start(false);
+        QVERIFY(!controller.overlayVisible());
+        MediaSample media;
+        media.id = "Policy.Player"; media.found = true; media.duration = 100;
+        media.playback = MediaSample::Playback::Paused;
+        const auto send = [&] {
+            media.generation = mediaMonitor->generation(); media.observedAt = MediaMonitor::monotonicSeconds();
+            QVERIFY(QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, media)));
+        };
+        QTimer heartbeat; connect(&heartbeat, &QTimer::timeout, &controller, send); heartbeat.start(30); send();
         QTRY_VERIFY(controller.overlayVisible());
         playerForeground = false;
         QTRY_VERIFY(!controller.overlayVisible());
@@ -466,6 +478,8 @@ private slots:
         panelForeground = false;
         // Leaving the panel forces a new player sample even within 250ms.
         QTRY_VERIFY(!controller.overlayVisible());
+        panelForeground = true; media.found = false; send();
+        QVERIFY(!controller.overlayVisible()); QVERIFY(!controller.toolbarPresentationAllowed());
         controller.stop();
     }
 

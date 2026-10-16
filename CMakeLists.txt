@@ -68,6 +68,7 @@ set(PORTABLE_CABINET "" CACHE FILEPATH "Embedded cabinet for the portable launch
 set(PORTABLE_MANIFEST "" CACHE FILEPATH "SHA-256 file manifest for the portable launcher")
 option(DANMAKU_BUILD_APP "Build the Qt Quick desktop application" ON)
 option(DANMAKU_BUILD_WINUI_ISLAND_PROBE "Build the isolated Windows App SDK / Qt Quick feasibility probe" OFF)
+option(DANMAKU_BUILD_ANITOMY_PROBE "Build the isolated anime filename parsing feasibility probe" OFF)
 if(WIN32 AND (DANMAKU_BUILD_APP OR PORTABLE_CABINET))
     enable_language(RC)
     include(cmake/AppIcon.cmake)
@@ -105,7 +106,14 @@ if(DANMAKU_BUILD_APP)
         message(FATAL_ERROR "Static application must use the project-local static Qt SDK.")
     endif()
     qt_standard_project_setup(REQUIRES 6.11)
+    include(cmake/Anitomy.cmake)
+    danmax_require_anitomy()
     add_library(danmaku_runtime STATIC
+        src/application/PlaybackRecovery.cpp src/application/PlaybackRecovery.h
+        src/infrastructure/MediaTitleParser.cpp src/infrastructure/MediaTitleParser.h
+        src/application/AutomaticDanmaku.cpp src/application/AutomaticDanmaku.h
+        src/infrastructure/MediaTitle.cpp src/infrastructure/MediaTitle.h
+        src/infrastructure/MediaAssociationStore.cpp src/infrastructure/MediaAssociationStore.h
         src/application/DanmakuLibrary.cpp src/application/DanmakuLibrary.h
         src/infrastructure/OnlineDanmakuData.cpp src/infrastructure/OnlineDanmakuData.h
         src/application/AppController.cpp src/application/AppController.h
@@ -125,7 +133,7 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/SettingsStore.cpp src/infrastructure/SettingsStore.h
         src/infrastructure/LogModel.cpp src/infrastructure/LogModel.h
         src/infrastructure/ChineseConverter.cpp src/infrastructure/ChineseConverter.h)
-    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi)
+    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi PRIVATE danmax_anitomy)
     target_include_directories(danmaku_runtime PRIVATE "${CMAKE_BINARY_DIR}/generated")
     file(GLOB fluent_icons CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/resources/fluent/*.png")
     qt_add_resources(danmaku_runtime fluent_icons PREFIX "/fluent"
@@ -172,6 +180,15 @@ if(DANMAKU_BUILD_APP)
             set_tests_properties(ui_workflow PROPERTIES TIMEOUT 120 ENVIRONMENT "QT_QUICK_BACKEND=software")
         endif()
         add_executable(online_danmaku_tests tests/runtime/OnlineDanmakuTests.cpp)
+        add_executable(automatic_danmaku_tests tests/runtime/AutomaticDanmakuTests.cpp)
+        target_link_libraries(automatic_danmaku_tests PRIVATE danmaku_runtime Qt6::Test)
+        target_compile_definitions(automatic_danmaku_tests PRIVATE DANMAKU_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+        danmaku_compile_options(automatic_danmaku_tests)
+        if(DANMAKU_STATIC_QT)
+            qt_import_plugins(automatic_danmaku_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin Qt6::QSchannelBackendPlugin)
+        endif()
+        add_test(NAME automatic_danmaku COMMAND automatic_danmaku_tests -o "${CMAKE_BINARY_DIR}/automatic-danmaku-tests.txt,txt")
+        set_tests_properties(automatic_danmaku PROPERTIES TIMEOUT 90 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
         target_link_libraries(online_danmaku_tests PRIVATE danmaku_runtime Qt6::Test)
         if(DANMAKU_STATIC_QT)
             qt_import_plugins(online_danmaku_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin Qt6::QSchannelBackendPlugin)
@@ -249,6 +266,9 @@ if(DANMAKU_BUILD_APP)
 endif()
 if(DANMAKU_BUILD_WINUI_ISLAND_PROBE)
     add_subdirectory(tools/winui-island-probe)
+endif()
+if(DANMAKU_BUILD_ANITOMY_PROBE)
+    add_subdirectory(tools/anitomy-probe)
 endif()
 if(BUILD_TESTING)
     add_executable(core_tests tests/core/PlaybackClockTests.cpp)

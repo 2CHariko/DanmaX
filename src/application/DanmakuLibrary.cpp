@@ -1,4 +1,5 @@
 #include "application/DanmakuLibrary.h"
+#include "infrastructure/MediaTitle.h"
 #include <QRegularExpression>
 #include <cmath>
 #include "infrastructure/ChineseConverter.h"
@@ -26,7 +27,7 @@ QString identifier(const QJsonValue& value) {
 }
 } // namespace
 
-DanmakuLibrary::DanmakuLibrary(QString cacheRoot, QObject* parent, int timeoutMs)
+DanmakuLibrary::DanmakuLibrary(QString cacheRoot, QObject* parent, int timeoutMs, bool scanOnStart)
     : QObject(parent), directory_(QDir(cacheRoot).filePath("danmaku")), network_(this), timeoutMs_(timeoutMs) {
     worker_.setMaxThreadCount(1);
     scanner_.setMaxThreadCount(1);
@@ -39,7 +40,7 @@ DanmakuLibrary::DanmakuLibrary(QString cacheRoot, QObject* parent, int timeoutMs
         reply->abort(); reply->deleteLater();
         nextAttempt(QStringLiteral("请求超时，请重试"));
     });
-    refreshCache();
+    if (scanOnStart) refreshCache();
 }
 DanmakuLibrary::~DanmakuLibrary() {
     invalidate();
@@ -68,6 +69,7 @@ void DanmakuLibrary::cancel() {
     emit changed();
 }
 void DanmakuLibrary::begin(const QString& status, bool sourceLoad, Operation operation) {
+    emit operationStarted();
     invalidate();
     operation_ = operation;
     busy_ = true; status_ = status; error_.clear();
@@ -232,11 +234,13 @@ void DanmakuLibrary::searchAnime(const QString& keyword) {
                 int count = 0;
                 for (const auto& value : animes_) {
                     const auto item = value.toMap();
-                    if (danmax::toSimplified(item.value("title").toString().trimmed()) == danmax::toSimplified(searchKeyword_)) {
+                    if (canonicalAnimeTitle(item.value("title").toString()) == canonicalAnimeTitle(searchKeyword_)) {
                         match = item.value("id").toString(); ++count;
                     }
                 }
                 if (count == 1) selectAnime(match);
+                else if (count == 0 && animes_.size() == 1)
+                    selectAnimeChecked(animes_.first().toMap().value("id").toString(), true);
             }
         });
     }); });
@@ -252,21 +256,30 @@ void DanmakuLibrary::searchAnimeForEpisode(const QString& keyword, const QString
     requestedEpisodeNumber_ = std::isfinite(episodeNumber) && episodeNumber > 0 ? episodeNumber : 0;
     emit changed();
 }
+void DanmakuLibrary::loadKnownAnime(const QVariantMap& metadata, double episodeNumber) {
+    searchKeyword_ = metadata.value("animeTitle").toString();
+    requestedEpisodeTitle_.clear(); requestedEpisodeNumber_ = episodeNumber;
+    animes_ = {QVariantMap{{"id", metadata.value("animeId")}, {"title", searchKeyword_}}};
+    emit searchKeywordChanged();
+    selectAnime(metadata.value("animeId").toString());
+}
+void DanmakuLibrary::loadKnownEpisode(const QVariantMap& metadata) {
+    searchKeyword_ = metadata.value("animeTitle").toString();
+    animeId_ = metadata.value("animeId").toString(); episodeId_ = metadata.value("episodeId").toString();
+    requestedEpisodeTitle_.clear(); requestedEpisodeNumber_ = 0;
+    animes_ = {QVariantMap{{"id", animeId_}, {"title", searchKeyword_}}};
+    episodes_ = {QVariantMap{{"id", episodeId_}, {"title", metadata.value("episodeTitle")}, {"number", metadata.value("episodeNumber")}}};
+    emit searchKeywordChanged();
+    downloadEpisode();
+}
 void DanmakuLibrary::matchRequestedEpisode() {
     if (requestedEpisode().isEmpty()) return;
     QString match;
     int count = 0;
-    static const QRegularExpression numberPattern(
-        QStringLiteral(R"(^(?:第\s*(\d+(?:\.\d+)?)\s*[话話集]|(?:EP(?:ISODE)?\s*|\[)(\d+(?:\.\d+)?)(?:\]|\b)|(\d+(?:\.\d+)?)(?:\s|$|[、])))"),
-        QRegularExpression::CaseInsensitiveOption);
     for (const auto& value : episodes_) {
         const auto item = value.toMap();
         const auto title = item.value("title").toString().trimmed();
-        double number = item.value("number").toDouble();
-        if (!(number > 0)) {
-            const auto found = numberPattern.match(title);
-            for (int i = 1; i <= 3 && !(number > 0); ++i) number = found.captured(i).toDouble();
-        }
+        double number = danmakuEpisodeNumber(title, item.value("number").toDouble());
         const bool exactTitle = !requestedEpisodeTitle_.isEmpty() && danmax::toSimplified(title) == danmax::toSimplified(requestedEpisodeTitle_);
         const bool matches = requestedEpisodeNumber_ > 0 && number > 0
             ? std::abs(number - requestedEpisodeNumber_) < 0.0001 : exactTitle;
@@ -276,15 +289,24 @@ void DanmakuLibrary::matchRequestedEpisode() {
     else { status_ = QStringLiteral("未能唯一匹配所选集数，请手动选择剧集"); emit changed(); }
 }
 void DanmakuLibrary::selectAnime(const QString& id) {
+    selectAnimeChecked(id, false);
+}
+void DanmakuLibrary::selectAnimeChecked(const QString& id, bool verifyTitle) {
     bool found{};
     for (const auto& entry : animes_) if (entry.toMap().value("id").toString() == id) found = true;
     if (!found) return;
     begin(QStringLiteral("正在读取剧集…"), false, Operation::Episodes); animeId_ = id; episodeId_.clear(); episodes_.clear();
     emit changed(); emit cacheChanged();
-    startAttempts([this, id] { request("/api/v2/bangumi/" + id, {}, [this](QByteArray bytes) {
+    startAttempts([this, id, verifyTitle] { request("/api/v2/bangumi/" + id, {}, [this, verifyTitle](QByteArray bytes) {
         work([bytes = std::move(bytes)](std::stop_token stop) {
             Work output;
             const auto doc = QJsonDocument::fromJson(bytes); const auto object = doc.object();
+            const auto bangumi = object.value("bangumi").toObject();
+            for (const auto& value : bangumi.value("titles").toArray()) {
+                const auto alias = value.toObject().value("title").toString();
+                if (!alias.isEmpty() && alias.size() <= 512 && output.aliases.size() < 64) output.aliases.append(alias);
+            }
+            output.aliases.append(bangumi.value("animeTitle").toString());
             auto values = object.value("bangumi").toObject().value("episodes");
             if (!values.isArray()) values = object.value("episodes");
             if (!doc.isObject() || !values.isArray() ||
@@ -300,16 +322,42 @@ void DanmakuLibrary::selectAnime(const QString& id) {
                 output.list.append(QVariantMap{{"id", id}, {"title", title}, {"number", episode.value("episodeNumber").toVariant()}});
             }
             return output;
-        }, [this](Work output) {
+        }, [this, verifyTitle](Work output) {
             if (!output.error.isEmpty()) { nextAttempt(output.error); return; }
             if (output.list.isEmpty()) { nextAttempt(QStringLiteral("没有可用结果")); return; }
             attempt_ = {};
             episodes_ = std::move(output.list); busy_ = false;
             status_ = QStringLiteral("请选择剧集"); progress_ = -1;
             emit changed();
+            if (verifyTitle) {
+                const auto query = canonicalAnimeTitle(searchKeyword_);
+                bool verified = false;
+                for (const auto& alias : output.aliases) {
+                    const auto name = canonicalAnimeTitle(alias);
+                    if (name == query) { verified = true; break; }
+                    // Only the standalone Japanese particle o/wo; do not fuzzy-match other words or seasons.
+                    if (query.size() >= 16 &&
+                        QRegularExpression(QStringLiteral("^[a-z0-9]+$")).match(name).hasMatch() &&
+                        QRegularExpression(QStringLiteral("^[a-z0-9]+$")).match(query).hasMatch()) {
+                        const auto romanized = [](QString title) {
+                            return canonicalAnimeTitle(title.toCaseFolded().replace(
+                                QRegularExpression(QStringLiteral("\\bo\\b")), QStringLiteral("wo")));
+                        };
+                        if (romanized(alias) == romanized(searchKeyword_)) verified = true;
+                    }
+                }
+                if (!verified) { status_ = QStringLiteral("搜索结果的别名未能核实，请手动确认番剧和剧集"); emit changed(); return; }
+            }
             matchRequestedEpisode();
         });
     }); });
+}
+void DanmakuLibrary::setSearchKeyword(const QString& keyword) {
+    searchKeyword_ = keyword.left(512); emit searchKeywordChanged();
+}
+void DanmakuLibrary::clearSelection() {
+    cancel(); animeId_.clear(); episodeId_.clear(); animes_.clear(); episodes_.clear(); error_.clear();
+    requestedEpisodeTitle_.clear(); requestedEpisodeNumber_ = 0; emit changed();
 }
 void DanmakuLibrary::selectEpisode(const QString& id) {
     for (const auto& entry : episodes_) {
@@ -326,8 +374,10 @@ QVariantMap DanmakuLibrary::episodeMetadata() const {
         metadata["animeTitle"] = entry.toMap().value("title");
         metadata["imageUrl"] = entry.toMap().value("imageUrl");
     }
-    for (const auto& entry : episodes_) if (entry.toMap().value("id").toString() == episodeId_)
+    for (const auto& entry : episodes_) if (entry.toMap().value("id").toString() == episodeId_) {
         metadata["episodeTitle"] = entry.toMap().value("title");
+        metadata["episodeNumber"] = danmakuEpisodeNumber(entry.toMap().value("title").toString(), entry.toMap().value("number").toDouble());
+    }
     return metadata;
 }
 bool DanmakuLibrary::selectedCached() const {

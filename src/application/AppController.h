@@ -3,6 +3,7 @@
 #include "core/DanmakuEngine.h"
 #include "core/MediaClock.h"
 #include "application/DanmakuLibrary.h"
+#include "application/AutomaticDanmaku.h"
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
 #include "platform/windows/MediaMonitor.h"
@@ -25,6 +26,7 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* settings READ settings CONSTANT)
     Q_PROPERTY(QObject* logs READ logs CONSTANT)
     Q_PROPERTY(QObject* library READ library CONSTANT)
+    Q_PROPERTY(QObject* automatic READ automatic CONSTANT)
     Q_PROPERTY(QObject* metadata READ metadata CONSTANT)
     Q_PROPERTY(QObject* uiPreferences READ uiPreferences CONSTANT)
     Q_PROPERTY(QObject* toolbarPointer READ toolbarPointer CONSTANT)
@@ -71,6 +73,7 @@ class AppController final : public QObject {
         return &logs_;
     }
     QObject* library() { return &library_; }
+    QObject* automatic() { return &automatic_; }
     QObject* metadata() { return &metadata_; }
     QObject* uiPreferences() { return &uiPreferences_; }
     QObject* toolbarPointer() { return &toolbarPointer_; }
@@ -155,6 +158,8 @@ class AppController final : public QObject {
      Q_INVOKABLE void showMainWindow();
     Q_INVOKABLE void showOnlineDanmakuForAnime(const QString& animeTitle, const QString& episodeTitle = {}, double episodeNumber = 0);
     Q_INVOKABLE void loadCachedDanmaku(const QString& key);
+    Q_INVOKABLE void showAutomaticDanmakuChoice();
+    Q_INVOKABLE void copyRecoveryTitle();
     void beginDemo(int activeCount = 40);
     void writeReport(const QString& path);
   signals:
@@ -167,6 +172,7 @@ class AppController final : public QObject {
      void loadCompleted(bool success);
      void requestShowMainWindow();
     void requestNavigateToPage(int page, int sourceTab = 0);
+    void requestOnlineDanmakuSearch();
 
   private slots:
     void onSample(const MediaSample& sample);
@@ -179,6 +185,7 @@ class AppController final : public QObject {
     void resetPlayback(bool unloadSource);
     void setPlaybackState(PlaybackState state);
     void resetDanmakuTimeline();
+    void clearDisconnectedContent();
     void commitItems(std::vector<danmaku::Item> items, const QString& title);
 
     void fail(const QString& message);
@@ -192,9 +199,12 @@ class AppController final : public QObject {
     LogModel logs_;
     DanmakuLibrary library_;
     AnimeMetadataService metadata_;
+    AutomaticDanmaku automatic_;
+    bool automaticCommit_{}, automaticSource_{};
     SystemUiPreferences uiPreferences_;
     MediaMonitor monitor_;
     bool targetSessionConnected_{};
+    bool disconnectedContentCleared_{};
     double connectionObservedAt_{};
     ForegroundQuery foregroundQuery_;
     MainForegroundQuery mainForegroundQuery_;
@@ -209,7 +219,7 @@ class AppController final : public QObject {
     ToolbarInputFilter toolbarInputFilter_;
     ToolbarPointerMonitor toolbarPointer_;
     WindowLayerController windowLayers_;
-    QTimer timer_, metricsTimer_;
+    QTimer timer_, metricsTimer_, disconnectCleanup_;
     QElapsedTimer frameTime_, sampleTime_, foregroundTime_, metricsTime_;
     std::jthread loader_;
     std::shared_ptr<XmlResult> pendingLoad_;

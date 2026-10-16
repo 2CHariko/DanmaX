@@ -66,6 +66,11 @@
   pwsh -NoProfile -File scripts/bootstrap.ps1 -Offline
   ```
 
+#### `prepare-anitomy.ps1`
+- **用途**：显式下载并校验 `toolchain/anitomy.lock.json` 锁定的 MPL-2.0 源码，下载缓存 `.cache/anitomy/`、解压依赖 `.deps/anitomy/`。正式应用首次构建前需要准备，配置／构建本身不联网。
+- **参数**：`-Offline` 仅使用已有且哈希一致的下载包。
+- **验证**：`test-anitomy-probe.ps1 -Configuration Debug|Release [-BuildDirectory out/build/<新目录>]` 运行独立测试；`test-anitomy-library.ps1 -LibraryPath <媒体目录> [-NoBuild]` 仅枚举文件名及目录元数据，报告落在 `out/validation/anitomy-library/`，不读取视频或批量请求服务。
+
 #### `doctor.ps1`
 - **用途**：全面检查开发环境。验证 `.local/toolchain.local.json` 所指定的 Visual Studio / MSVC 与 Windows SDK 是否存在，检查 CMake/Ninja/Qt 路径及版本。
 - **示例**：

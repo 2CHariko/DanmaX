@@ -7,10 +7,12 @@ import "../i18n"
 ColumnLayout {
     id: pane
     required property QtObject library
+    property string loadActionText: ""
     readonly property string effectiveServer: pane.library.activeServer.length > 0
         ? pane.library.activeServer
         : (pane.library.servers.length > 0 ? pane.library.servers[0] : "")
     signal openSettings()
+    signal cancelled()
     spacing: 10
 
     // 1. 无服务器配置时的引导横幅
@@ -231,7 +233,7 @@ ColumnLayout {
                     spacing: 8
 
                     Button {
-                        text: pane.library.selectedCached ? I18n.online.loadCachedBtn : I18n.online.downloadAndLoadBtn
+                        text: pane.loadActionText || (pane.library.selectedCached ? I18n.online.loadCachedBtn : I18n.online.downloadAndLoadBtn)
                         highlighted: true
                         enabled: !pane.library.busy && pane.library.selectedEpisode.length > 0
                         onClicked: pane.library.downloadEpisode(false)
@@ -270,7 +272,7 @@ ColumnLayout {
 
         Button {
             text: I18n.online.cancelBtn
-            onClicked: pane.library.cancel()
+            onClicked: { pane.library.cancel(); pane.cancelled() }
         }
     }
 

@@ -16,6 +16,7 @@ DanmaX 是一款 Windows 平台下的原生高性能外挂弹幕工具，基于 
 |---|---|---|---|---|---|
 | **Qt 6 (Base, Declarative, Shader Tools)** | 6.11.0 | LGPL-3.0-only / GPL-3.0 | https://code.qt.io/cgit/qt/ | 核心 GUI、场景图硬件加速渲染、QML 引擎、流式 XML 解析与异步网络通信 | 静态编译内置于单 EXE，或动态 DLL 依赖 |
 | **QWindowKit** | 1.5.0 (`267a002`) | Apache-2.0 | https://github.com/stdware/qwindowkit | Windows 11 沉浸式自绘标题栏、Snap Layouts 贴靠布局、系统阴影与 Mica 背景集成 | 静态编译内置于单 EXE |
+| **Anitomy** | `a538eff670cb4666f8395cf66a9c29a535f2c383` | MPL-2.0 | https://github.com/erengy/anitomy | 文件名解析适配器；未修改上游源码，版本和 SHA-256 见 `toolchain/anitomy.lock.json` | 静态链接；所有打包格式配套 `anitomy/` 目录，含许可证、锁定清单及匹配源码归档 |
 
 ### 1.2 视觉资产与图标
 

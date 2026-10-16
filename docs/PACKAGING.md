@@ -9,6 +9,7 @@
 ```powershell
 # 常规工具与显式 MSVC/SDK 声明按 README 准备
 pwsh -NoProfile -File scripts/bootstrap.ps1
+pwsh -NoProfile -File scripts/prepare-anitomy.ps1
 
 # 联网准备：固定版本的 Qt 官方源码，SHA-256 校验后才解压
 pwsh -NoProfile -File scripts/prepare-qt-static.ps1

@@ -29,7 +29,7 @@ class DanmakuLibrary final : public QObject {
     Q_PROPERTY(QString searchKeyword READ searchKeyword NOTIFY searchKeywordChanged)
     Q_PROPERTY(QString requestedEpisode READ requestedEpisode NOTIFY changed)
   public:
-    explicit DanmakuLibrary(QString cacheRoot, QObject* parent = nullptr, int timeoutMs = 30000);
+    explicit DanmakuLibrary(QString cacheRoot, QObject* parent = nullptr, int timeoutMs = 30000, bool scanOnStart = true);
     ~DanmakuLibrary() override;
     QStringList servers() const { return servers_; }
     QString activeServer() const { return server_; }
@@ -59,17 +59,23 @@ class DanmakuLibrary final : public QObject {
     Q_INVOKABLE void refreshCache();
     Q_INVOKABLE void cancel();
     std::shared_ptr<OnlineDanmakuResult> takeReadyResult();
+    void loadKnownAnime(const QVariantMap& metadata, double episodeNumber);
+    void loadKnownEpisode(const QVariantMap& metadata);
+    void setSearchKeyword(const QString& keyword);
+    void clearSelection();
   signals:
     void changed();
     void searchKeywordChanged();
     void cacheChanged();
     void sourceLoadStarted();
+    void operationStarted();
     void sourceReady();
   private:
     struct Work {
         QVariantList list;
         std::shared_ptr<OnlineDanmakuResult> result;
         QString error;
+        QStringList aliases;
     };
     enum class Operation { Other, Search, Episodes };
     Operation operation_{Operation::Other};
@@ -85,6 +91,7 @@ class DanmakuLibrary final : public QObject {
     QVariantMap episodeMetadata() const;
     void invalidate();
     void matchRequestedEpisode();
+    void selectAnimeChecked(const QString& id, bool verifyTitle);
     QString searchKeyword_, requestedEpisodeTitle_;
     double requestedEpisodeNumber_{};
     QString directory_, server_, animeId_, episodeId_, status_, error_;

@@ -11,11 +11,12 @@ using namespace Windows::Foundation;
 using namespace Windows::Media::Control;
 namespace {
 enum class Fault { None, Operation, Properties, Timeline, Playback, TimelineRead, PlaybackRead, ArtistRead };
-struct State { Fault fault{}; int timelineReads{}; int propertyReads{}; bool playing{}; };
+struct State { Fault fault{}; int timelineReads{}; int propertyReads{}; bool playing{};
+    bool controllable{}; int playCommands{}, pauseCommands{}; hstring title{L"Test title"}; };
 struct Properties : implements<Properties, IGlobalSystemMediaTransportControlsSessionMediaProperties> {
     State* state;
     explicit Properties(State* s) : state(s) {}
-    hstring Title() { return L"Test title"; }
+    hstring Title() { return state->title; }
     hstring Artist() { if (state->fault == Fault::ArtistRead) throw hresult_error(E_FAIL); return L"Test artist"; }
     hstring Subtitle() { return {}; }
     hstring AlbumArtist() { return {}; }
@@ -36,10 +37,29 @@ struct Timeline : implements<Timeline, IGlobalSystemMediaTransportControlsSessio
     TimeSpan Position() { return std::chrono::seconds(17); }
     DateTime LastUpdatedTime() { return clock::now(); }
 };
+struct Controls : implements<Controls, IGlobalSystemMediaTransportControlsSessionPlaybackControls> {
+    bool IsPlayEnabled() { return true; }
+    bool IsPauseEnabled() { return true; }
+    bool IsStopEnabled() { return false; }
+    bool IsRecordEnabled() { return false; }
+    bool IsFastForwardEnabled() { return false; }
+    bool IsRewindEnabled() { return false; }
+    bool IsNextEnabled() { return false; }
+    bool IsPreviousEnabled() { return false; }
+    bool IsChannelUpEnabled() { return false; }
+    bool IsChannelDownEnabled() { return false; }
+    bool IsPlayPauseToggleEnabled() { return false; }
+    bool IsShuffleEnabled() { return false; }
+    bool IsRepeatEnabled() { return false; }
+    bool IsPlaybackRateEnabled() { return false; }
+    bool IsPlaybackPositionEnabled() { return false; }
+};
 struct Playback : implements<Playback, IGlobalSystemMediaTransportControlsSessionPlaybackInfo> {
     State* state;
     explicit Playback(State* s) : state(s) {}
-    GlobalSystemMediaTransportControlsSessionPlaybackControls Controls() { return nullptr; }
+    GlobalSystemMediaTransportControlsSessionPlaybackControls Controls() {
+        return state->controllable ? make<::Controls>().as<GlobalSystemMediaTransportControlsSessionPlaybackControls>() : nullptr;
+    }
     GlobalSystemMediaTransportControlsSessionPlaybackStatus PlaybackStatus() { return state->playing ? GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing : GlobalSystemMediaTransportControlsSessionPlaybackStatus::Paused; }
     IReference<Windows::Media::MediaPlaybackType> PlaybackType() { return nullptr; }
     IReference<Windows::Media::MediaPlaybackAutoRepeatMode> AutoRepeatMode() { return nullptr; }
@@ -68,10 +88,16 @@ struct Session : implements<Session, IGlobalSystemMediaTransportControlsSession>
         if (state->fault == Fault::Playback) return nullptr;
         return make<Playback>(state).as<GlobalSystemMediaTransportControlsSessionPlaybackInfo>();
     }
-    // The reader is read-only: any accidental transport command fails the test.
+    // Polling must never issue commands. Only explicitly controllable fixtures permit play/pause.
     IAsyncOperation<bool> command() { throw hresult_error(E_ACCESSDENIED); }
-    IAsyncOperation<bool> TryPlayAsync() { return command(); }
-    IAsyncOperation<bool> TryPauseAsync() { return command(); }
+    IAsyncOperation<bool> TryPlayAsync() {
+        if (!state->controllable) throw hresult_error(E_ACCESSDENIED);
+        ++state->playCommands; state->playing = true; co_return true;
+    }
+    IAsyncOperation<bool> TryPauseAsync() {
+        if (!state->controllable) throw hresult_error(E_ACCESSDENIED);
+        ++state->pauseCommands; state->playing = false; co_return true;
+    }
     IAsyncOperation<bool> TryStopAsync() { return command(); }
     IAsyncOperation<bool> TryRecordAsync() { return command(); }
     IAsyncOperation<bool> TryFastForwardAsync() { return command(); }
@@ -127,6 +153,30 @@ class SmtcReaderTests : public QObject {
 private slots:
     void initTestCase() { init_apartment(apartment_type::multi_threaded); }
     void cleanupTestCase() { uninit_apartment(); }
+    void selectedTransportAndGuards() {
+        Fixture fixture; fixture.state.controllable = true; fixture.state.playing = true;
+        SmtcReader reader(fixture.request());
+        auto sample = reader.poll("Test.Player", 7).sample;
+        QVERIFY(sample.found); QVERIFY(sample.sessionToken > 0);
+        QCOMPARE(reader.poll("Test.Player", 7).sample.sessionToken, sample.sessionToken);
+        QCOMPARE(fixture.state.pauseCommands, 0);
+        QVERIFY(reader.control(sample, false).isEmpty()); QCOMPARE(fixture.state.pauseCommands, 1);
+        sample = reader.poll("Test.Player", 7).sample;
+        QVERIFY(reader.control(sample, true).isEmpty()); QCOMPARE(fixture.state.playCommands, 1);
+        sample = reader.poll("Test.Player", 7).sample;
+        QVERIFY(!reader.control(sample, false, {}, [] { return false; }).isEmpty());
+        auto expired = sample; expired.observedAt -= 10; QVERIFY(!reader.control(expired, false).isEmpty());
+        auto wrong = sample; ++wrong.sessionToken; QVERIFY(!reader.control(wrong, false).isEmpty());
+        wrong = sample; wrong.id = "Other.Player"; QVERIFY(!reader.control(wrong, false).isEmpty());
+        fixture.state.title = L"Next episode"; QVERIFY(!reader.control(sample, false).isEmpty());
+        sample = reader.poll("Test.Player", 7).sample;
+        fixture.state.controllable = false; QVERIFY(!reader.control(sample, false).isEmpty());
+        fixture.state.controllable = true;
+        fixture.manager->sessions = single_threaded_vector<GlobalSystemMediaTransportControlsSession>({fixture.session, fixture.session}).GetView();
+        QVERIFY(!reader.poll("Test.Player", 7).sample.found);
+        QVERIFY(!reader.control(sample, false).isEmpty());
+        QCOMPARE(fixture.state.pauseCommands, 1);
+    }
     void unavailableObjectsAndRecovery_data() {
         QTest::addColumn<int>("fault");
         for (int i = static_cast<int>(Fault::Operation); i <= static_cast<int>(Fault::ArtistRead); ++i)

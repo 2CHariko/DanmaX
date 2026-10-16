@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFontDatabase>
 #include <QGuiApplication>
+#include <QClipboard>
 #include <QQmlEngine>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -20,6 +21,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
       logs_(dataDirectory),
       library_(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       metadata_(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
+      automatic_(dataDirectory, cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       monitor_(this),
       foregroundQuery_(foregroundQuery ? std::move(foregroundQuery) : ForegroundQuery(MediaMonitor::targetForeground)),
       mainForegroundQuery_(mainForegroundQuery ? std::move(mainForegroundQuery) : MainForegroundQuery([](QWindow* window) {
@@ -35,6 +37,35 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
             [this](const QString& message) { logs_.append("WARN", message); });
     file_ = settings_.values()["lastFile"].toString();
     library_.setServers(settings_.values()["danmakuServers"].toStringList());
+    connect(&library_, &DanmakuLibrary::operationStarted, this, [this] {
+        automatic_.suspend(); automaticSource_ = false;
+    });
+    connect(&automatic_, &AutomaticDanmaku::contentInvalidated, this, [this] {
+        discardLoad(); library_.cancel(); automaticSource_ = true; resetPlayback(true);
+    });
+    connect(automatic_.playbackRecovery(), &PlaybackRecovery::controlRequested, &monitor_, &MediaMonitor::requestPlayback);
+    connect(&monitor_, &MediaMonitor::playbackControlFinished, automatic_.playbackRecovery(), &PlaybackRecovery::controlFinished);
+    connect(automatic_.playbackRecovery(), &PlaybackRecovery::showRequested, this, &AppController::showMainWindow);
+    connect(&automatic_, &AutomaticDanmaku::changed, this, [this] {
+        if (automatic_.suspended()) automaticSource_ = false;
+    });
+    connect(&automatic_, &AutomaticDanmaku::sourceReady, this, [this] {
+        auto result = automatic_.takeReadyResult();
+        auto sample = automatic_.latestSample();
+        const double age = MediaMonitor::monotonicSeconds() - sample.observedAt;
+        if (!result || !automatic_.enabled() || automatic_.suspended() || manual_ ||
+            sample.id != settings_.values()["targetSession"].toString() || age < 0 || age > 2.5) return;
+        QScopedValueRollback guard(automaticCommit_, true);
+        discardLoad(); library_.cancel();
+        commitItems(std::move(result->items), result->metadata.value("animeTitle").toString() + QStringLiteral(" · ") +
+                    result->metadata.value("episodeTitle").toString());
+        automaticSource_ = true;
+        start(false);
+        sample.generation = mediaGeneration_;
+        onSample(sample);
+        library_.refreshCache();
+        emit loadCompleted(true);
+    });
     connect(&library_, &DanmakuLibrary::sourceLoadStarted, this, [this] {
         discardLoad();
         onlineLoadGeneration_ = loadGeneration_;
@@ -78,6 +109,9 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     timer_.setTimerType(Qt::PreciseTimer);
     monotonicTime_.start();
     timer_.setInterval(33);
+    disconnectCleanup_.setSingleShot(true);
+    disconnectCleanup_.setInterval(1500);
+    connect(&disconnectCleanup_, &QTimer::timeout, this, &AppController::clearDisconnectedContent);
     // Hidden/paused windows have no continuous frame callbacks. Keep media and
     // foreground tracking alive without driving a second visible animation loop.
     connect(&timer_, &QTimer::timeout, this, [this] {
@@ -96,6 +130,11 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     connect(&metricsTimer_, &QTimer::timeout, this, [this] {
         if (targetSessionConnected_ && MediaMonitor::monotonicSeconds() - connectionObservedAt_ > 2.5) {
             targetSessionConnected_ = false;
+            disconnectedContentCleared_ = false;
+            auto missing = automatic_.latestSample(); missing.found = false;
+            automatic_.observe(missing);
+            updatePresentationVisibility(true, false);
+            if (running_ && !manual_ && !disconnectCleanup_.isActive()) disconnectCleanup_.start();
             emit stateChanged();
         }
         updateMetrics();
@@ -212,8 +251,12 @@ void AppController::configure() {
     const auto s = settings_.values();
     library_.setServers(s["danmakuServers"].toStringList());
     metadata_.setShowChineseAnime(s["homeShowChineseAnime"].toBool());
+    automatic_.configure(s["automaticDanmaku"].toBool(), s["danmakuServers"].toStringList());
+    if (!s["automaticDanmaku"].toBool()) automaticSource_ = false;
     logs_.configure(s["logToFile"].toBool(), s["logLevel"].toString());
     if (lastSettings_.value("targetSession") != s["targetSession"]) {
+        automatic_.reset();
+        if (automaticSource_) { resetPlayback(true); automaticSource_ = false; }
         mediaGeneration_ = monitor_.select(s["targetSession"].toString(), true);
         targetSessionConnected_ = false;
         connectionObservedAt_ = 0;
@@ -281,7 +324,9 @@ bool AppController::updatePresentationVisibility(bool forceForeground, bool noti
         foreground_ = foregroundQuery_(settings_.values()["targetSession"].toString());
         foregroundTime_.start();
     }
-    desiredOverlayAllowed_ = running_ && (!checkForeground || foreground_ || panelForeground_);
+    const double connectionAge = MediaMonitor::monotonicSeconds() - connectionObservedAt_;
+    const bool mediaAvailable = targetSessionConnected_ && connectionAge >= 0 && connectionAge <= 2.5;
+    desiredOverlayAllowed_ = running_ && (manual_ || mediaAvailable) && (!checkForeground || foreground_ || panelForeground_);
     const bool layerReady = windowLayers_.reconcile(settings_.values()["onTop"].toInt(),
                                                    panelForeground_, desiredOverlayAllowed_);
     const bool show = desiredOverlayAllowed_ && (!panelForeground_ || layerReady);
@@ -409,6 +454,7 @@ void AppController::loadFile(const QString& input) {
     });
 }
 void AppController::cancelLoad() {
+    automatic_.suspend(); automaticSource_ = false;
     discardLoad();
     library_.cancel();
     status_ = QStringLiteral("已取消载入");
@@ -431,13 +477,14 @@ void AppController::start(bool manual) {
         fail(QStringLiteral("请先载入有效弹幕文件"));
         return;
     }
+    if (!automaticCommit_) { automatic_.suspend(); automaticSource_ = false; }
     manual_ = manual;
     position_ = 0;
     duration_ = manual ? loadedDuration_ : 0;
     mediaClock_ = {};
     syncConnected_ = false;
     lastSampleObservedAt_ = 0;
-    mediaGeneration_ = monitor_.select(settings_.values()["targetSession"].toString(), true);
+    mediaGeneration_ = monitor_.select(settings_.values()["targetSession"].toString(), !automaticCommit_);
     awaitingInitialExposure_ = manual && overlay_ && !overlay_->isExposed();
     if (auto* quick = qobject_cast<QQuickWindow*>(overlay_.data())) {
         quick->setPersistentSceneGraph(true);
@@ -459,17 +506,20 @@ void AppController::start(bool manual) {
     emit metricsChanged();
 }
 void AppController::stop() {
+    automatic_.suspend(); automaticSource_ = false;
     library_.cancel();
     discardLoad();
     resetPlayback(false);
 }
 void AppController::unload() {
+    automatic_.suspend(); automaticSource_ = false;
     library_.cancel();
     discardLoad();
     resetPlayback(true);
 }
 void AppController::setManualMode(bool manual) {
     if (running_ || manual_ == manual) return;
+    if (manual) { automatic_.suspend(); automaticSource_ = false; }
     manual_ = manual;
     emit stateChanged();
 }
@@ -507,6 +557,8 @@ void AppController::applyChineseConversion() {
     }
 }
 void AppController::resetPlayback(bool unloadSource) {
+    disconnectCleanup_.stop();
+    disconnectedContentCleared_ = false;
     timer_.stop();
     running_ = playing_ = visible_ = demo_ = false;
     toolbarAllowed_ = desiredOverlayAllowed_ = false;
@@ -532,7 +584,7 @@ void AppController::resetPlayback(bool unloadSource) {
     mediaClock_ = {};
     syncConnected_ = false;
     lastSampleObservedAt_ = 0;
-    mediaGeneration_ = monitor_.select(settings_.values()["targetSession"].toString(), true);
+    mediaGeneration_ = monitor_.select(settings_.values()["targetSession"].toString(), !automaticSource_);
     mediaIdentity_.clear();
     mediaTitle_.clear();
     position_ = samplePosition_ = 0;
@@ -623,8 +675,13 @@ void AppController::onSample(const MediaSample& s) {
             std::isfinite(s.position) && std::isfinite(s.duration);
         if (targetSessionConnected_ != connected) {
             targetSessionConnected_ = connected;
+            disconnectedContentCleared_ = false;
+            if (!connected) updatePresentationVisibility(true, false);
             emit stateChanged();
         }
+        if (connected) disconnectCleanup_.stop();
+        else if (running_ && !manual_ && !disconnectedContentCleared_ && !disconnectCleanup_.isActive()) disconnectCleanup_.start();
+        if (!manual_) automatic_.observe(s);
     }
     if (!running_ || manual_ || s.generation != mediaGeneration_ ||
         s.id != settings_.values()["targetSession"].toString() ||
@@ -658,14 +715,15 @@ void AppController::onSample(const MediaSample& s) {
     double actual = std::max(0.0, s.position);
     if (s.duration > 0) actual = std::min(actual, s.duration);
     const bool stopped = s.playback == MediaSample::Playback::Stopped;
-    const bool changed = !syncConnected_ || mediaIdentity_ != s.identity ||
+    const auto identity = automaticSource_ ? automatic_.contentIdentity() : s.identity;
+    const bool changed = !syncConnected_ || mediaIdentity_ != identity ||
                          (stopped && playbackState_ != PlayerStopped);
     const bool reset = mediaClock_.synchronize(actual, rate, samplePlaying,
                                 monotonicTime_.nsecsElapsed() * 1e-9, changed);
     if (reset) {
         ++sampleResets_;
     }
-    mediaIdentity_ = s.identity;
+    mediaIdentity_ = identity;
     mediaTitle_ = s.title;
     duration_ = s.duration;
     position_ = samplePosition_ = actual;
@@ -676,6 +734,7 @@ void AppController::onSample(const MediaSample& s) {
     if (playing_ && renderer_) renderer_->update();
     sampleTime_.start();
     setPlaybackState(stopped ? PlayerStopped : playing_ ? Playing : Paused);
+    updatePresentationVisibility(true, false);
     emit stateChanged();
     emit metricsChanged();
 }
@@ -900,15 +959,34 @@ void AppController::showMainWindow() {
     windowLayers_.invalidate();
 }
 void AppController::showOnlineDanmakuForAnime(const QString& animeTitle, const QString& episodeTitle, double episodeNumber) {
+    automatic_.suspend();
+    showMainWindow();
+    emit requestOnlineDanmakuSearch();
     if (!animeTitle.trimmed().isEmpty()) {
         if (episodeNumber > 0 || !episodeTitle.trimmed().isEmpty())
             library_.searchAnimeForEpisode(animeTitle.trimmed(), episodeTitle, episodeNumber);
         else library_.searchAnime(animeTitle.trimmed());
     }
-    emit requestNavigateToPage(0, 1);
+}
+void AppController::clearDisconnectedContent() {
+    if (!running_ || manual_ || targetSessionConnected_) return;
+    disconnectedContentCleared_ = true;
+    // Release active objects/tracks, retaining the source and remembered player for reconnect.
+    engine_.seek(danmakuPosition());
+    mediaIdentity_.clear();
+    snapshotDirty_ = true;
+    if (renderer_) { renderer_->clearContent(); renderer_->update(); }
+    updatePresentationVisibility(true);
+    emit metricsChanged();
 }
 void AppController::loadCachedDanmaku(const QString& key) {
     if (key.isEmpty()) return;
     library_.loadCached(key);
     emit requestNavigateToPage(1, 1);
+}
+void AppController::showAutomaticDanmakuChoice() {
+    automatic_.openRecovery();
+}
+void AppController::copyRecoveryTitle() {
+    if (auto* clipboard = QGuiApplication::clipboard()) clipboard->setText(automatic_.playbackRecovery()->title());
 }

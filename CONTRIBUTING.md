@@ -28,6 +28,7 @@
 ```powershell
 # 1. 自动准备项目内开发工具链
 pwsh -NoProfile -File scripts/bootstrap.ps1
+pwsh -NoProfile -File scripts/prepare-anitomy.ps1
 
 # 2. 声明本机 MSVC 安装路径（复制示例并根据本机实际路径修改）
 cp toolchain/local.example.json .local/toolchain.local.json

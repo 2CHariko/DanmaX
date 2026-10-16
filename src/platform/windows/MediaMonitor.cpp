@@ -6,6 +6,7 @@
 #include <propkey.h>
 #include <QFileInfo>
 #include <algorithm>
+#include <optional>
 #include <appmodel.h>
 #include <chrono>
 #include <psapi.h>
@@ -31,9 +32,13 @@ MediaMonitor::~MediaMonitor() {
 }
 quint64 MediaMonitor::select(QString id, bool renew) {
     std::lock_guard lock(mutex_);
-    if (renew || id != selected_) ++generation_;
+    if (renew || id != selected_) { ++generation_; commands_.clear(); }
     selected_ = std::move(id);
     return generation_;
+}
+void MediaMonitor::requestPlayback(MediaSample expected, bool play, quint64 request) {
+    std::lock_guard lock(mutex_);
+    if (commands_.size() < 8) commands_.push_back({std::move(expected), play, request});
 }
 quint64 MediaMonitor::generation() {
     std::lock_guard lock(mutex_);
@@ -73,6 +78,24 @@ void MediaMonitor::run(std::stop_token stop) {
                 lastError.clear();
             }
             emit sampleReceived(result.sample);
+            std::optional<Command> command;
+            {
+                std::lock_guard lock(mutex_);
+                if (!commands_.empty()) { command = std::move(commands_.front()); commands_.pop_front(); }
+            }
+            if (command) {
+                QString error;
+                {
+                    std::lock_guard lock(mutex_);
+                    if (command->expected.generation != generation_ || command->expected.id != selected_)
+                        error = QStringLiteral("选择的播放器已改变");
+                }
+                if (error.isEmpty()) error = reader.control(command->expected, command->play, stop, [this, &command] {
+                    std::lock_guard lock(mutex_);
+                    return command->expected.generation == generation_ && command->expected.id == selected_;
+                });
+                emit playbackControlFinished(command->request, error.isEmpty(), error);
+            }
             for (int i = 0; i < 4 && !stop.stop_requested(); ++i)
                 std::this_thread::sleep_for(std::chrono::milliseconds(25));
         }

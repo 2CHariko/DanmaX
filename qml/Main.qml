@@ -49,7 +49,6 @@ ApplicationWindow {
                 playerPage.selectSourceTab(tab)
             }
             root.navigate(page)
-            if (page === 0 && tab === 1) homePage.showOnlineDanmaku()
         }
     }
     // Keep the swapchain alpha-capable across live material preference changes.
@@ -188,11 +187,6 @@ ApplicationWindow {
                         objectName: "homePage"
                         backend: root.backend
                         searchField: homeSearch
-                        onOpenPlayer: { root.sourceTab = 0; playerPage.selectSourceTab(0); root.navigate(1) }
-                        onOpenSettings: {
-                            root.navigate(3)
-                            Qt.callLater(settingsPage.focusOnlineSettings)
-                        }
                         onOpenDanmakuForAnime: (title, episodeTitle, episodeNumber) => {
                             root.backend.showOnlineDanmakuForAnime(title, episodeTitle, episodeNumber)
                         }
@@ -222,6 +216,11 @@ ApplicationWindow {
         }
     }
 
+    MatchingRecoveryDialog {
+        backend: root.backend
+        onOpenSettings: { root.navigate(3); Qt.callLater(settingsPage.focusOnlineSettings) }
+        onManualSourceLoaded: { root.sourceTab = 0; playerPage.selectSourceTab(0); root.navigate(1) }
+    }
     OverlayWindow { id: overlay; backend: root.backend; visible: root.backend.overlayVisible }
     ToolbarWindow { id: toolbarWindow; backend: root.backend; overlayWindow: overlay }
     Component.onCompleted: {

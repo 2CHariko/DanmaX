@@ -4,6 +4,18 @@ param([ValidateSet('','windows-release','windows-static-release')][string] $Pres
 . "$PSScriptRoot/common.ps1"
 . "$PSScriptRoot/portable.ps1"
 . "$PSScriptRoot/deployment.ps1"
+function Copy-AnitomyMaterials([string] $Destination) {
+    $parserLock = Get-Content -LiteralPath (Get-ProjectPath 'toolchain/anitomy.lock.json') -Raw | ConvertFrom-Json
+    $parserArchive = Get-ProjectPath ".cache/anitomy/$($parserLock.archive)"
+    if (!(Test-Path -LiteralPath $parserArchive) -or (Get-FileHash -LiteralPath $parserArchive).Hash -ne $parserLock.sha256) {
+        throw 'Matching Anitomy source archive missing or changed; explicitly prepare the dependency before packaging.'
+    }
+    $parserMaterials = Join-Path $Destination 'anitomy'
+    New-Item -ItemType Directory -Force $parserMaterials | Out-Null
+    Copy-Item -LiteralPath $parserArchive -Destination $parserMaterials
+    Copy-Item -LiteralPath (Get-ProjectPath 'toolchain/anitomy.lock.json') -Destination $parserMaterials
+    Copy-Item -LiteralPath (Get-ProjectPath ".deps/anitomy/$($parserLock.sourceDirectory)/LICENSE") -Destination $parserMaterials
+}
 Invoke-ProjectEnvironment {
     if (-not $Preset) { $Preset = if ($Format -eq 'static-exe') { 'windows-static-release' } else { 'windows-release' } }
     if (($Format -eq 'static-exe') -ne ($Preset -eq 'windows-static-release')) {
@@ -23,6 +35,7 @@ Invoke-ProjectEnvironment {
         $output = Get-ProjectPath "out/packages/DanmaX-static-$timestamp"
         $materials = Get-ProjectPath "out/packages/materials-static-$timestamp"
         New-Item -ItemType Directory -Force $output,$materials | Out-Null
+        Copy-AnitomyMaterials $materials
         $destination = Join-Path $output 'DanmaX.exe'
         Copy-Item -LiteralPath $exe -Destination $destination
         # Audit the actual executable before reporting it as static. System DLLs remain normal dependencies.
@@ -95,6 +108,7 @@ in static-exe. These materials are not a completed component-by-component licens
     }
     $stage = Get-ProjectPath ('out/stage/DanmaX-' + $timestamp)
     New-Item -ItemType Directory -Force $stage | Out-Null
+    Copy-AnitomyMaterials $stage
     Copy-Item -LiteralPath $exe -Destination $stage
     Invoke-QtDeployment $stage $tools | Out-Null
     Copy-Item -LiteralPath (Get-ProjectPath 'LICENSE') -Destination $stage

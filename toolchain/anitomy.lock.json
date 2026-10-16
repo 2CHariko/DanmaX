@@ -1,0 +1,12 @@
+{
+  "purpose": "Pinned C++20 release filename parser adapter; statically linked into the Qt application and isolated evaluation probe",
+  "name": "Anitomy",
+  "version": "master-a538eff670cb4666f8395cf66a9c29a535f2c383",
+  "commit": "a538eff670cb4666f8395cf66a9c29a535f2c383",
+  "repository": "https://github.com/erengy/anitomy",
+  "url": "https://codeload.github.com/erengy/anitomy/zip/a538eff670cb4666f8395cf66a9c29a535f2c383",
+  "license": "MPL-2.0",
+  "archive": "anitomy-a538eff670cb4666f8395cf66a9c29a535f2c383.zip",
+  "sha256": "4661CEE09BF5F24E1E497558E54F2F960580001947D4F9BC94500DE05AFB61AF",
+  "sourceDirectory": "anitomy-a538eff670cb4666f8395cf66a9c29a535f2c383"
+}

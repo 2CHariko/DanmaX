@@ -15,12 +15,16 @@ PageFrame {
         const choices = page.backend.sessions.slice()
         const saved = page.backend.settings.values.targetSession
         if (saved.length > 0 && !choices.some(entry => entry.id === saved))
-            choices.unshift({ id: saved, label: I18n.format(I18n.player.savedSessionWaiting, saved) })
+            choices.unshift({ id: saved, label: I18n.format(page.backend.targetSessionConnected
+                ? I18n.player.playerBadgeConnected : I18n.player.savedSessionWaiting, saved) })
         return choices
     }
     readonly property color playerConnectionColor: effectiveManual ? Ui.secondaryText
         : backend.targetSessionConnected ? Ui.successText : Ui.cautionText
-    readonly property string blockedReason: backend.loading ? I18n.player.blockedLoading : backend.total <= 0 ? I18n.player.blockedNoDanmaku : !effectiveManual && backend.settings.values.targetSession.length === 0 ? I18n.player.blockedNoSession : ""
+    readonly property string blockedReason: backend.loading ? I18n.player.blockedLoading
+        : backend.total <= 0 ? (backend.automatic.enabled && !backend.automatic.suspended && !effectiveManual
+            ? backend.automatic.status : I18n.player.blockedNoDanmaku)
+        : !effectiveManual && backend.settings.values.targetSession.length === 0 ? I18n.player.blockedNoSession : ""
     title: I18n.player.title
     description: I18n.player.description
 
@@ -598,6 +602,66 @@ PageFrame {
                 visible: page.backend.settings.values.targetSession.length > 0
                 text: I18n.player.forgetSession
                 onClicked: page.backend.selectSession("")
+            }
+
+            SettingsRow {
+                title: I18n.player.automaticTitle
+                description: I18n.player.automaticHint
+                Switch {
+                    objectName: "automaticDanmakuSwitch"
+                    checked: page.backend.settings.values.automaticDanmaku
+                    Accessible.name: I18n.player.automaticTitle
+                    onToggled: page.backend.settings.setValue("automaticDanmaku", checked)
+                }
+            }
+            Label {
+                objectName: "automaticDanmakuStatus"
+                visible: page.backend.automatic.enabled
+                text: (page.backend.automatic.recognizedTitle.length > 0 ? page.backend.automatic.recognizedTitle + "\n" : "")
+                    + page.backend.automatic.status
+                textFormat: Text.PlainText
+                color: Ui.secondaryText
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                Accessible.role: Accessible.StaticText
+            }
+            Flow {
+                visible: page.backend.automatic.enabled
+                Layout.fillWidth: true
+                spacing: 8
+                Button {
+                    objectName: "automaticDanmakuChoice"
+                    visible: page.backend.automatic.needsChoice
+                    text: I18n.player.automaticChoice
+                    onClicked: page.backend.showAutomaticDanmakuChoice()
+                }
+                Button {
+                    objectName: "retryAutomaticDanmaku"
+                    text: page.backend.automatic.suspended ? I18n.player.automaticResume : I18n.player.automaticRetry
+                    onClicked: page.backend.automatic.retry()
+                }
+                Button {
+                    objectName: "forgetAutomaticAssociation"
+                    visible: page.backend.automatic.recognizedTitle.length > 0
+                    text: I18n.player.automaticForget
+                    onClicked: page.backend.automatic.forgetAssociation()
+                }
+            }
+            RowLayout {
+                visible: page.backend.automatic.enabled && page.backend.automatic.library.busy
+                Layout.fillWidth: true
+                spacing: 8
+                ProgressBar {
+                    Layout.fillWidth: true
+                    indeterminate: page.backend.automatic.library.progress < 0
+                    from: 0; to: 100
+                    value: Math.max(0, page.backend.automatic.library.progress)
+                    Accessible.name: I18n.online.progressAccessible
+                }
+                Button {
+                    text: I18n.online.cancelBtn
+                    onClicked: page.backend.automatic.suspend()
+                }
             }
 
             Disclosure {

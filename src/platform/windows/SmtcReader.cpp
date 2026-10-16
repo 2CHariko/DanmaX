@@ -97,6 +97,7 @@ SmtcPoll SmtcReader::poll(const QString& selected, quint64 generation, std::stop
         result.publishSessions = cycle_++ % 10 == 0;
         // Collection enumeration can also fail if the provider disappears mid-read.
         const auto count = sessions.Size();
+        int selectedCount = 0;
         for (uint32_t index = 0; index < count; ++index) {
             if (stop.stop_requested()) { result.cancelled = true; return result; }
             QString id;
@@ -111,7 +112,14 @@ SmtcPoll SmtcReader::poll(const QString& selected, quint64 generation, std::stop
                 const auto properties = request.GetResults();
                 require(properties, "SMTC returned null media properties");
                 title = qt(properties.Title());
-                if (id == selected && !selected.isEmpty()) result.sample = readSample(session, properties, result.sample);
+                if (id == selected && !selected.isEmpty()) {
+                    ++selectedCount;
+                    if (!selectedSession_ || get_abi(selectedSession_) != get_abi(session)) {
+                        selectedSession_ = session; ++sessionToken_;
+                    }
+                    result.sample = readSample(session, properties, result.sample);
+                    result.sample.sessionToken = sessionToken_;
+                }
             } catch (const hresult_error&) {
                 if (result.error.isEmpty()) result.error = id + ": " + currentError();
             } catch (const std::exception&) {
@@ -121,6 +129,13 @@ SmtcPoll SmtcReader::poll(const QString& selected, quint64 generation, std::stop
             if (result.publishSessions && !id.isEmpty()) result.sessions.push_back(QVariantMap{
                 {"id", id}, {"title", title}, {"label", title.isEmpty() ? id : id + " — " + title}});
         }
+        if (selectedCount != 1) {
+            selectedSession_ = nullptr; ++sessionToken_;
+            if (selectedCount > 1) {
+                result.sample.found = false;
+                result.error = QStringLiteral("同一应用存在多个媒体会话，无法安全控制播放");
+            }
+        }
     } catch (const hresult_error&) {
         result.error = currentError();
         manager_ = nullptr;
@@ -129,6 +144,7 @@ SmtcPoll SmtcReader::poll(const QString& selected, quint64 generation, std::stop
         manager_ = nullptr;
     }
     if (!manager_) {
+        selectedSession_ = nullptr; ++sessionToken_;
         reconnectAt_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
         result.publishSessions = true;
         result.sessions.clear();
@@ -139,4 +155,28 @@ SmtcPoll SmtcReader::poll(const QString& selected, quint64 generation, std::stop
     }
     result.cancelled = stop.stop_requested();
     return result;
+}
+QString SmtcReader::control(const MediaSample& expected, bool play, std::stop_token stop, std::function<bool()> current) {
+    try {
+        const double age = MediaMonitor::monotonicSeconds() - expected.observedAt;
+        if (!selectedSession_ || !expected.found || !expected.sessionToken || expected.sessionToken != sessionToken_ ||
+            age < 0 || age > 2.5 || qt(selectedSession_.SourceAppUserModelId()) != expected.id)
+            return QStringLiteral("媒体会话已失效");
+        auto properties = selectedSession_.TryGetMediaPropertiesAsync();
+        if (!waitFor(properties, stop)) return QStringLiteral("控制已取消");
+        if (qt(properties.GetResults().Title()) != expected.title) return QStringLiteral("播放内容已切换");
+        const auto playback = selectedSession_.GetPlaybackInfo();
+        require(playback, "Playback info unavailable");
+        const auto controls = playback.Controls();
+        if (!controls || (play ? !controls.IsPlayEnabled() : !controls.IsPauseEnabled()))
+            return QStringLiteral("播放器不支持此播放控制");
+        if (playback.PlaybackStatus() != (play ? GlobalSystemMediaTransportControlsSessionPlaybackStatus::Paused
+                                            : GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing))
+            return QStringLiteral("播放状态已改变");
+        if (stop.stop_requested() || (current && !current())) return QStringLiteral("选择的播放器已改变");
+        auto operation = play ? selectedSession_.TryPlayAsync() : selectedSession_.TryPauseAsync();
+        if (!waitFor(operation, stop)) return QStringLiteral("控制已取消");
+        return operation.GetResults() ? QString() : QStringLiteral("播放器拒绝控制请求");
+    } catch (const hresult_error&) { return currentError(); }
+      catch (const std::exception&) { return currentError(); }
 }
