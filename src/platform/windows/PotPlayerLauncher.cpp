@@ -1,21 +1,74 @@
 #include "platform/windows/PotPlayerLauncher.h"
+#include "infrastructure/ExternalPlayer.h"
 #include <QDir>
 #include <QFileInfo>
-#include <QProcess>
-#include <QProcessEnvironment>
 #include <QSettings>
+#include <QFile>
 #include <windows.h>
-#include <tlhelp32.h>
+#include <cstring>
 
 namespace PotPlayerLauncher {
 QString validate(const QString& path) {
-    const QFileInfo file(path);
-    if (!file.isAbsolute() || !file.isFile() ||
-        file.fileName().compare(QStringLiteral("PotPlayerMini64.exe"), Qt::CaseInsensitive) != 0)
+    const QFileInfo info(path);
+    if (path.contains(QChar::Null) || path.size() > 32768 || !info.isAbsolute() || !info.isFile()
+        || info.fileName().compare("PotPlayerMini64.exe", Qt::CaseInsensitive) != 0)
         return QStringLiteral("请选择存在的 PotPlayerMini64.exe（64 位 PotPlayer）");
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return QStringLiteral("无法读取播放器程序：") + file.errorString();
+    const auto read = [&file](qint64 offset, void* output, qint64 size) {
+        return offset >= 0 && offset <= file.size() && size <= file.size() - offset
+            && file.seek(offset) && file.read(static_cast<char*>(output), size) == size;
+    };
+    IMAGE_DOS_HEADER dos{}; IMAGE_FILE_HEADER header{}; DWORD signature{}; IMAGE_OPTIONAL_HEADER64 optional{};
+    const auto invalid = QStringLiteral("程序不是有效的 Windows x64 可执行文件");
+    if (!read(0, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < sizeof(dos)
+        || !read(dos.e_lfanew, &signature, sizeof(signature)) || signature != IMAGE_NT_SIGNATURE
+        || !read(qint64(dos.e_lfanew) + 4, &header, sizeof(header))) return invalid;
+    if (header.Machine != IMAGE_FILE_MACHINE_AMD64) return QStringLiteral("此预设仅支持 x64 PotPlayer，请选择 64 位版本");
+    const qint64 optionalOffset = qint64(dos.e_lfanew) + 4 + sizeof(header);
+    if (!(header.Characteristics & IMAGE_FILE_EXECUTABLE_IMAGE) || (header.Characteristics & IMAGE_FILE_DLL)
+        || header.NumberOfSections == 0 || header.NumberOfSections > 96 || header.SizeOfOptionalHeader < sizeof(optional)
+        || !read(optionalOffset, &optional, sizeof(optional)) || optional.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
+        || optional.Subsystem != IMAGE_SUBSYSTEM_WINDOWS_GUI || optional.SizeOfHeaders > file.size()
+        || optional.SizeOfImage <= optional.AddressOfEntryPoint) return invalid;
+    const qint64 sections = optionalOffset + header.SizeOfOptionalHeader;
+    if (optional.SizeOfHeaders < sections + qint64(header.NumberOfSections) * sizeof(IMAGE_SECTION_HEADER)) return invalid;
+    bool executableEntry = false;
+    for (int i = 0; i < header.NumberOfSections; ++i) {
+        IMAGE_SECTION_HEADER section{};
+        if (!read(sections + qint64(i) * sizeof(section), &section, sizeof(section))
+            || quint64(section.PointerToRawData) + section.SizeOfRawData > quint64(file.size())) return invalid;
+        executableEntry |= (section.Characteristics & IMAGE_SCN_MEM_EXECUTE) && optional.AddressOfEntryPoint >= section.VirtualAddress
+            && quint64(optional.AddressOfEntryPoint) < quint64(section.VirtualAddress) + section.SizeOfRawData;
+    }
+    if (!executableEntry) return invalid;
+    // Version identity is a compatibility check, not a signature/trust guarantee.
+    const auto native = QDir::toNativeSeparators(info.canonicalFilePath()).toStdWString();
+    DWORD ignored = 0; const DWORD size = GetFileVersionInfoSizeW(native.c_str(), &ignored);
+    if (size > 4 * 1024 * 1024) return QStringLiteral("播放器版本资源异常");
+    if (size) {
+        QByteArray bytes(size, '\0');
+        if (!GetFileVersionInfoW(native.c_str(), 0, size, bytes.data())) return QStringLiteral("无法读取播放器版本信息");
+        struct Translation { WORD language, page; };
+        Translation* translations = nullptr; UINT count = 0;
+        bool hasIdentity = false, matches = false;
+        if (VerQueryValueW(bytes.data(), L"\\VarFileInfo\\Translation", reinterpret_cast<void**>(&translations), &count)) {
+            for (UINT i = 0; i < count / sizeof(Translation); ++i) {
+                for (const auto* key : {"ProductName", "FileDescription", "OriginalFilename"}) {
+                    const auto query = QString("\\StringFileInfo\\%1%2\\%3").arg(translations[i].language, 4, 16, QChar('0'))
+                        .arg(translations[i].page, 4, 16, QChar('0')).arg(key).toStdWString();
+                    wchar_t* value = nullptr; UINT length = 0;
+                    if (VerQueryValueW(bytes.data(), query.c_str(), reinterpret_cast<void**>(&value), &length) && length > 1) {
+                        hasIdentity = true; matches |= QString::fromWCharArray(value, length - 1).contains("PotPlayer", Qt::CaseInsensitive);
+                    }
+                }
+            }
+        }
+        if (hasIdentity && !matches) return QStringLiteral("程序版本信息与 PotPlayer 预设不匹配");
+    }
     return {};
 }
-QString discover() {
+QStringList discoverCandidates() {
     QStringList candidates;
     for (const auto* root : {"HKEY_CURRENT_USER", "HKEY_LOCAL_MACHINE"}) {
         for (const auto* view : {"Software", "Software\\WOW6432Node"}) {
@@ -30,49 +83,13 @@ QString discover() {
             if (!duplicate) candidates.push_back(path);
         }
     }
+    return candidates;
+}
+QString discover() {
+    const auto candidates = discoverCandidates();
     return candidates.size() == 1 ? candidates.first() : QString();
 }
 QString preflight(const QString& path) {
-    const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE) return QStringLiteral("无法检查 PotPlayer 实例，请稍后重试");
-    PROCESSENTRY32W entry{}; entry.dwSize = sizeof(entry);
-    int count = 0;
-    QString error;
-    if (!Process32FirstW(snapshot, &entry)) error = QStringLiteral("无法枚举播放器进程");
-    else do {
-        const auto name = QString::fromWCharArray(entry.szExeFile);
-        if (name.compare(QStringLiteral("PotPlayerMini64.exe"), Qt::CaseInsensitive) != 0 &&
-            name.compare(QStringLiteral("PotPlayerMini.exe"), Qt::CaseInsensitive) != 0) continue;
-        ++count;
-        const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
-        wchar_t buffer[32768]; DWORD size = 32768;
-        if (!process || !QueryFullProcessImageNameW(process, 0, buffer, &size))
-            error = QStringLiteral("无法确认已有 PotPlayer 路径，请使用相同权限启动播放器");
-        else if (QFileInfo(QString::fromWCharArray(buffer, static_cast<int>(size))).canonicalFilePath()
-                     .compare(QFileInfo(path).canonicalFilePath(), Qt::CaseInsensitive) != 0)
-            error = QStringLiteral("已有 PotPlayer 与绑定程序路径不同，请先关闭其他安装的播放器");
-        if (process) CloseHandle(process);
-    } while (Process32NextW(snapshot, &entry));
-    CloseHandle(snapshot);
-    if (count > 1) return QStringLiteral("存在多个 PotPlayer 实例，请保留一个后重试");
-    return error;
-}
-QString launch(const QString& path, const QStringList& arguments) {
-    QProcess process;
-    process.setProgram(path);
-    process.setArguments(arguments);
-    process.setWorkingDirectory(QFileInfo(path).absolutePath());
-    process.setStandardInputFile(QProcess::nullDevice());
-    process.setStandardOutputFile(QProcess::nullDevice());
-    process.setStandardErrorFile(QProcess::nullDevice());
-    process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* arguments) {
-        // The detached GUI player must not retain DanmaX's logs or parent pipes.
-        arguments->inheritHandles = false;
-    });
-    auto environment = QProcessEnvironment::systemEnvironment();
-    for (const auto* key : {"QTDIR", "QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH", "QML_IMPORT_PATH", "QML2_IMPORT_PATH"})
-        environment.remove(QString::fromLatin1(key));
-    process.setProcessEnvironment(environment);
-    return process.startDetached() ? QString() : QStringLiteral("无法启动 PotPlayer：") + process.errorString();
+    return ExternalPlayerProcess::preflight(path, {"PotPlayerMini64.exe", "PotPlayerMini.exe"});
 }
 }

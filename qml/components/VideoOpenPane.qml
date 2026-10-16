@@ -7,21 +7,22 @@ import "../theme"
 SettingsRow {
     id: pane
     required property QtObject backend
-    title: "使用 PotPlayer 打开视频"
+    title: "使用 " + backend.videoOpen.playerName + " 打开视频"
     description: backend.videoOpen.pending ? backend.videoOpen.status
         : backend.videoOpen.active ? backend.automatic.status
-        : "拖入一个本地视频，自动打开播放器并匹配弹幕。也可使用打开按钮。"
+        : backend.videoOpen.status.length > 0 ? backend.videoOpen.status
+        : (backend.videoOpen.synchronizes ? "拖入本地视频，打开播放器并匹配弹幕。" : "当前配置仅打开视频，不启用弹幕同步。")
     Button {
         objectName: "openVideoButton"
         text: "打开视频"
-        Accessible.name: "选择视频并使用 PotPlayer 播放"
+        Accessible.name: "选择视频并使用 " + pane.backend.videoOpen.playerName + " 播放"
         onClicked: videoDialog.open()
     }
     Button {
         objectName: "confirmCurrentVideoButton"
         visible: pane.backend.videoOpen.needsConfirmation
         text: "使用当前视频"
-        Accessible.description: "确认 PotPlayer 当前播放的就是所选视频"
+        Accessible.description: "确认播放器当前播放的就是所选视频"
         onClicked: pane.backend.videoOpen.confirmCurrent()
     }
     Button {

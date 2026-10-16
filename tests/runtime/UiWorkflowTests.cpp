@@ -1,5 +1,7 @@
+#include "../fixtures/PlayerExecutableFixture.h"
 
 #include <QGuiApplication>
+#include "infrastructure/ExternalPlayerDraft.h"
 #include <QClipboard>
 #include <QScreen>
 #include <QCursor>
@@ -247,12 +249,145 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void externalPlayerConfigurationWorkflow() {
+        QTemporaryDir directory;
+        AppController backend(directory.path());
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        auto* store = qobject_cast<ExternalPlayerStore*>(backend.players()); QVERIFY(store);
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        window->setProperty("selectedPage", 3); window->resize(800, 632); window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(window)); window->requestActivate(); QTest::qWait(80);
+        std::function<QQuickItem*(QQuickItem*, const QString&)> visualItem = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
+            if (!parent) return nullptr;
+            if (parent->objectName() == name) return parent;
+            for (auto* child : parent->childItems()) if (auto* match = visualItem(child, name)) return match;
+            return nullptr;
+        };
+        const auto item = [&](const QString& name) {
+            if (auto* match = window->findChild<QQuickItem*>(name)) return match;
+            if (auto* match = visualItem(window->contentItem(), name)) return match;
+            auto* popup = window->findChild<QObject*>("externalPlayerDialog");
+            return popup ? visualItem(popup->property("contentItem").value<QQuickItem*>(), name) : nullptr;
+        };
+        const auto click = [&](const QString& name) {
+            auto* target = item(name); if (!target || !target->isVisible()) return false;
+            target->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space); QCoreApplication::processEvents(); return true;
+        };
+        QVERIFY(click("manageExternalPlayers"));
+        auto* dialog = window->findChild<QObject*>("externalPlayerDialog"); QVERIFY(dialog);
+        QTRY_VERIFY(dialog->property("opened").toBool());
+        auto* draft = window->findChild<ExternalPlayerDraft*>(); QVERIFY(draft);
+        QVERIFY(!item("addExternalPlayerButton")); QVERIFY(!item("externalPlayerAdvanced"));
+        QVERIFY(item("saveExternalPlayers")->isEnabled());
+        QVERIFY(click("saveExternalPlayers")); QTRY_VERIFY(!dialog->property("visible").toBool());
+        QVERIFY(store->current().executable.isEmpty());
+        QVERIFY(click("manageExternalPlayers")); QTRY_VERIFY(dialog->property("opened").toBool());
+        QVERIFY(!item("externalPlayerExecutable-potplayer")->property("readOnly").toBool());
+        QVERIFY(item("discoverPlayerButton-potplayer"));
+        const auto exe = directory.filePath("PotPlayerMini64.exe");
+        { QFile file(exe); QVERIFY(file.open(QIODevice::WriteOnly)); file.write(playerExecutableFixture()); }
+        draft->edit("potplayer"); draft->chooseExecutable(exe);
+        QVERIFY(draft->dirty()); QVERIFY(store->current().executable.isEmpty());
+        QVERIFY(item("externalPlayerValidation-potplayer")->property("text").toString().contains(QStringLiteral("通过")));
+        QVERIFY(click("cancelExternalPlayers")); QTRY_VERIFY(!dialog->property("visible").toBool());
+        QVERIFY(store->current().executable.isEmpty()); QVERIFY(!draft->dirty());
+        QVERIFY(click("manageExternalPlayers")); QTRY_VERIFY(dialog->property("opened").toBool());
+        const auto typePath = [&](const QString& text) {
+            auto* input = item("externalPlayerExecutable-potplayer");
+            input->forceActiveFocus(); QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+            if (text.isEmpty()) QTest::keyClick(window, Qt::Key_Backspace);
+            else { QInputMethodEvent commit; commit.setCommitString(text); QCoreApplication::sendEvent(window, &commit); }
+            QCoreApplication::processEvents();
+        };
+        typePath("relative.exe"); QVERIFY(item("saveExternalPlayers")->isEnabled());
+        QVERIFY(click("saveExternalPlayers")); QVERIFY(dialog->property("visible").toBool());
+        QVERIFY(!draft->issue().isEmpty()); QVERIFY(store->current().executable.isEmpty());
+        QVERIFY(!item("externalPlayerRowIssue-potplayer"));
+        QCOMPARE(item("externalPlayerValidation-potplayer")->property("text").toString(), draft->issue());
+        QCOMPARE(item("externalPlayerExecutable-potplayer")->property("text").toString(), QString("relative.exe"));
+        typePath(""); QTest::keyClick(window, Qt::Key_Return);
+        QVERIFY(draft->issue().isEmpty()); QVERIFY(!draft->dirty());
+        QVERIFY(item("saveExternalPlayers")->isEnabled());
+        QVERIFY(click("saveExternalPlayers")); QTRY_VERIFY(!dialog->property("visible").toBool());
+        QVERIFY(store->current().executable.isEmpty());
+        QVERIFY(click("manageExternalPlayers")); QTRY_VERIFY(dialog->property("opened").toBool());
+        typePath("  \"" + exe + "\"  ");
+        QTest::keyClick(window, Qt::Key_Return); // Validate without leaving the field.
+        QVERIFY(draft->issue().isEmpty()); QVERIFY(store->current().executable.isEmpty());
+        QCOMPARE(item("externalPlayerExecutable-potplayer")->property("text").toString(), QFileInfo(exe).canonicalFilePath());
+        QVERIFY(click("saveExternalPlayers"));
+        QTRY_VERIFY(!dialog->property("visible").toBool()); QCOMPARE(store->current().executable, QFileInfo(exe).canonicalFilePath());
+        QVERIFY(item("manageExternalPlayers")->hasActiveFocus());
+        QVERIFY(click("manageExternalPlayers")); QTRY_VERIFY(dialog->property("opened").toBool());
+        typePath(""); QVERIFY(click("saveExternalPlayers"));
+        QTRY_VERIFY(!dialog->property("visible").toBool()); QVERIFY(store->current().executable.isEmpty());
+        { ExternalPlayerStore loaded(directory.path()); QVERIFY(loaded.current().executable.isEmpty()); }
+        QVERIFY(click("manageExternalPlayers")); QTRY_VERIFY(dialog->property("opened").toBool());
+        typePath(exe); QVERIFY(click("saveExternalPlayers")); QTRY_VERIFY(!dialog->property("visible").toBool());
+        const auto evidence = qEnvironmentVariable("DANMAKU_VIDEO_UI_ARTIFACTS");
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            settings->setValue("theme", theme); QTest::qWait(80);
+            QVERIFY(click("manageExternalPlayers")); QTRY_VERIFY(dialog->property("opened").toBool());
+            QTest::qWait(80);
+            auto* scroll = item("externalPlayerScrollView"); auto* bar = item("externalPlayerScrollBar"); QVERIFY(scroll && bar);
+            auto* flick = scroll->property("contentItem").value<QQuickItem*>(); QVERIFY(flick);
+            QVERIFY(flick->property("contentHeight").toDouble() <= flick->height() + 1);
+            // A single preset has no overflow: wheel input must not move the list or the page.
+            auto* body = scroll->parentItem(); QVERIFY(body);
+            const auto middle = scroll->y() + scroll->height()/2;
+            const QList<QPoint> points{scroll->mapToScene(QPointF(scroll->width()/2, scroll->height()/2)).toPoint(),
+                body->mapToScene(QPointF(2, middle)).toPoint(),
+                bar->mapToScene(QPointF(-4, bar->height()/2)).toPoint(),
+                bar->mapToScene(QPointF(bar->width()/2, bar->height()/2)).toPoint(),
+                body->mapToScene(QPointF(body->width()-2, middle)).toPoint()};
+            for (const auto& point : points) for (bool pixel : {false, true}) {
+                QWheelEvent wheel(QPointF(point), window->mapToGlobal(point), pixel ? QPoint(0,-35) : QPoint(),
+                    pixel ? QPoint() : QPoint(0,-120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                QCoreApplication::sendEvent(window, &wheel); QTest::qWait(20);
+                QCOMPARE(flick->property("contentY").toDouble(), 0.0);
+            }
+            if (!evidence.isEmpty()) { QVERIFY(QDir().mkpath(evidence)); QVERIFY(window->grabWindow().save(evidence + "/presets-" + theme + ".png")); }
+            QVERIFY(click("cancelExternalPlayers")); QTRY_VERIFY(!dialog->property("visible").toBool());
+        }
+        QVERIFY(click("manageExternalPlayers")); QTRY_VERIFY(dialog->property("opened").toBool());
+        QVERIFY(click("cancelExternalPlayers")); QTRY_VERIFY(!dialog->property("visible").toBool());
+        QStringList candidates;
+        for (int i = 0; i < 16; ++i) {
+            const auto folder = directory.filePath(QString("installation-%1").arg(i)); QVERIFY(QDir().mkdir(folder));
+            const auto path = QDir(folder).filePath("PotPlayerMini64.exe"); QVERIFY(QFile::copy(exe, path)); candidates.append(path);
+        }
+        auto* pane = draft->parent();
+        draft = new ExternalPlayerDraft(store, pane, [candidates] { return candidates; });
+        QVERIFY(pane->setProperty("editor", QVariant::fromValue(static_cast<QObject*>(draft))));
+        QVERIFY(click("manageExternalPlayers")); QTRY_VERIFY(dialog->property("opened").toBool());
+        QVERIFY(click("discoverPlayerButton-potplayer")); QCOMPARE(draft->candidates().size(), 16);
+        QVERIFY(!draft->dirty()); QCOMPARE(store->current().executable, QFileInfo(exe).canonicalFilePath());
+        auto* combo = item("externalPlayerCandidates-potplayer"); QVERIFY(combo && combo->isVisible());
+        combo->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4);
+        auto* popup = combo->property("popup").value<QObject*>(); QVERIFY(popup);
+        QTRY_VERIFY(popup->property("opened").toBool());
+        QTest::keyClick(window, Qt::Key_End); QTest::keyClick(window, Qt::Key_Return);
+        QTRY_VERIFY(!popup->property("visible").toBool()); QCOMPARE(combo->property("currentIndex").toInt(), 15);
+        QVERIFY(click("useDiscoveredPlayer-potplayer")); QVERIFY(draft->dirty());
+        QCOMPARE(draft->editing().value("executable").toString(), QFileInfo(candidates.last()).canonicalFilePath());
+        QCOMPARE(store->current().executable, QFileInfo(exe).canonicalFilePath());
+        draft->chooseExecutable(directory.filePath("invalid.exe")); QVERIFY(!draft->issue().isEmpty());
+        QCOMPARE(draft->editing().value("executable").toString(), QFileInfo(candidates.last()).canonicalFilePath());
+        window->setProperty("selectedPage", 0); QTRY_VERIFY(!dialog->property("visible").toBool());
+        QCOMPARE(store->profiles().size(), 1); QVERIFY(!draft->dirty());
+        QCOMPARE(warnings.size(), 0); backend.stop(); window->close();
+    }
     void videoDropWorkflow() {
         QTemporaryDir directory;
         const auto touch = [&](const QString& name) {
             QFile file(directory.filePath(name));
             if (!file.open(QIODevice::WriteOnly)) return QString();
-            file.write("fixture"); file.close(); return file.fileName();
+            file.write(name.endsWith(".exe") ? playerExecutableFixture() : QByteArray("fixture")); file.close(); return file.fileName();
         };
         const auto exe = touch("PotPlayerMini64.exe");
         const auto videoFile = touch(QStringLiteral("Test - 01 [% & #].mp4"));
@@ -375,9 +510,8 @@ private slots:
         for (const auto& theme : {QString("light"), QString("dark")}) {
             settings->setValue("theme", theme); window->resize(800, 600);
             window->setProperty("selectedPage", 3); QTest::qWait(80);
-            auto* discover = window->findChild<QQuickItem*>("discoverPotPlayerButton"); QVERIFY(discover); QVERIFY(discover->isVisible());
-            discover->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
-            QCOMPARE(settings->values()["potPlayerPath"].toString(), QFileInfo(exe).canonicalFilePath());
+            auto* manage = window->findChild<QQuickItem*>("manageExternalPlayers"); QVERIFY(manage); QVERIFY(manage->isVisible());
+            QCOMPARE(qobject_cast<ExternalPlayerStore*>(backend.players())->current().executable, QFileInfo(exe).canonicalFilePath());
             if (!evidence.isEmpty()) {
                 QVERIFY(QDir().mkpath(evidence));
                 QVERIFY(window->grabWindow().save(evidence + "/settings-" + theme + ".png"));
@@ -3969,4 +4103,3 @@ int main(int argc, char** argv) {
     return QTest::qExec(&tests, argc, argv);
 }
 #include "UiWorkflowTests.moc"
-

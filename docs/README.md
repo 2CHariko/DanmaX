@@ -11,6 +11,7 @@ docs/
 ├── USER_GUIDE.md                           # 最终用户实操教程与常见问题 (FAQ)
 ├── CONFIGURATION.md                        # 21 项配置参数全量字典速查与编辑规范
 ├── settings.example.ini                    # 首次生成之完整 UTF-8 INI 模板
+├── EXTERNAL_PLAYERS.md                     # 外部播放器接口、自定义配置与旧路径迁移
 ├── CPP_QT_ARCHITECTURE.md                 # C++20 / Qt 6 核心架构设计与数据流
 ├── UI_DESIGN_SYSTEM.md                    # Qt 官方 FluentWinUI3 规范与控件约束
 ├── PACKAGING.md                           # 真正静态单 EXE 便携打包与运行模型

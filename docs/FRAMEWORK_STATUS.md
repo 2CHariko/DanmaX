@@ -1,5 +1,54 @@
 # C++ 重构交付状态
 
+## 路径错误去重与空值保存（2026-10-17）
+
+- 移除预设卡片底部重复错误，路径下方单一状态位置统一显示校验／选择／发现错误；保存失败的焦点定位同步调整，配置写入等全局错误仍保留独立提示。
+- 保存按钮不再依赖草稿 dirty，未修改的空路径、非法输入清空回原空值及将已保存有效路径清空，均可保存。空路径表示打开视频时自动发现；非空仍严格验证，非法输入不提交生效配置。
+- Release 原生管理专项 **3 passed、0 failed，7.476 秒**；Debug 原生 150% DPI＋放大文字 **3 passed、0 failed，15.484 秒**。覆盖单一错误位置、非法路径拒绝、未修改空值保存、清空修正错误、已配置路径清空及重新读取、浅深主题和既有长候选选择，无 QML 警告。本轮仅调整 QML，未重跑完整 CTest 或真实视频集成。
+
+- Debug／Release 开发运行目录已更新并通过部署后冒烟，EXE 与构建 SHA-256 一致；核对 `out/validation/player-errors/runtime-hashes.json`，日志 `out/player-errors-run-{debug,release}.log`。改动尚未提交。
+
+## 手动输入播放器路径（2026-10-17）
+
+- 预设程序路径支持直接输入或粘贴，回车／失焦后验证；点击保存也先提交尚未结束的输入，避免保存旧值。首尾空白和成对双引号会移除，有效路径规范化；清空恢复自动发现。复用预设的文件存在／可读、名称、PE x64 及身份校验。
+- 无效手输保留草稿文字供修正，提示原因且保存失败，不修改生效路径；文件选择仍采用校验失败保留上一草稿路径的行为。保存／取消和启动前再次校验保持不变。
+- Release／Debug 路径及视频专项各 **17 passed、0 failed、1 skipped**，新增带引号有效输入、相对路径拒绝及保存失败保留原配置断言。Release 原生管理专项 **3 passed、0 failed，5.497 秒**；Debug 150% DPI＋放大文字同项 **3 passed、0 failed，12.689 秒**，通过真实文本输入事件验证错误内容保留、直接点保存校验、回车规范化、修正后保存、浅深主题和既有候选选择，无 QML 警告。没有重复真实视频集成或完整 CTest；既有实机边界见下节。
+
+- Debug／Release 开发运行目录已更新并通过部署后冒烟，EXE 与构建 SHA-256 一致；记录 `out/validation/manual-player-path/runtime-hashes.json`，日志 `out/manual-player-path-run-{debug,release}.log`。改动未提交。
+
+## 外部播放器预设收敛与路径验证（2026-10-17）
+
+- 外部播放器仅提供代码注册的固定预设，当前为 PotPlayer x64。管理弹窗保留默认项、程序路径、验证状态、自动发现和手动选择；移除自定义增删、名称、JSON 参数、SMTC ID 与同步开关。启动和同步规则由适配器维护，领域时钟与渲染器不变。
+- 使用新 `player-presets.json` 仅保存默认预设与路径，不读取或迁移旧 `external-players.json`／INI 路径字段，不删除旧文件。草稿保存、取消、修订冲突和原子写入保留；无效选择保留原路径，保存失败不提交生效配置。
+- 选择、保存和启动前验证绝对可读文件、预设文件名、Windows PE x64 GUI 程序结构及可用产品身份元数据。拒绝文本改名、错误架构、DLL、截断／越界段与失效路径；这不是签名可信认证。自动发现候选经相同校验和去重，多个有效安装须明确选择；已保存路径失效不静默切换安装。
+- Release／Debug 视频与配置专项均 **17 passed、0 failed、1 skipped**，覆盖草稿取消、无效路径保留、固定规则不被字段覆写、持久化、修订冲突、写入失败、多个候选选择、旧文件不导入、保存前不影响事务及启动前文件替换。跳过需显式启用的真实视频项。
+- Release 原生配置／拖放最终 **4 passed、0 failed，11.344 秒**；Debug 原生 150% DPI＋放大文字 **4 passed、0 failed，28.375 秒**。验证浅深主题、保存／取消、只读路径与状态、多个候选的长下拉末项键盘选择、无溢出时内容及各侧留白的角度／像素滚轮、不重复提交和离开设置页丢弃。原生截图 `out/validation/player-presets/native-final/`、`debug-150/` 已目视检查；没有扩大宣称所有高对比度／混合 DPI 或资源管理器物理拖入验收。
+- Debug 使用用户指定 KitaujiSub 第 1 集执行真实 PotPlayer 集成，**3 passed、0 failed，9.033 秒**。自动发现已安装的 `PotPlayerMini64.exe` 并通过新增验证；SMTC 有效、自动载入 **2760 条**、覆盖层可见、13 个活动快照及实际文字像素通过。本轮不需同名确认；证据 `out/validation/player-presets/real-potplayer/`，独立弹幕截图不表示桌面视频合成验收。
+
+- Release 界面／视频／两种应用冒烟 CTest 首次 **3/4，112.38 秒**；界面内部 **26 passed、1 failed、3 skipped**。唯一失败为未修改的 `nativeTopmostMaintenance` 健康状态预期零层级调整，实际 3 次，单独复查同样失败。开发运行更新发现旧 Debug 应用仍在运行，关闭旧实例后该项单独复查 **3 passed、0 failed，1.458 秒**。这一结果支持窗口竞争的解释，未改动层级实现；不将首次批次记为全部通过，也没有重复整个界面套件。
+- Debug／Release 开发运行目录已更新并通过部署后冒烟，运行 EXE 与对应构建 SHA-256 一致；核对 `out/validation/player-presets/runtime-hashes.json`，日志 `out/preset-run-{debug,release}.log`。未重打静态发行包，修改尚未提交。
+
+## 外部播放器管理弹窗（2026-10-16）
+
+- 设置页改为单张播放器摘要卡片与“管理播放器”入口，移除平铺的配置字段及过期打开状态。模态管理弹窗采用收起列表、单独的默认项单选、单项展开编辑和高级设置；底部保存／取消固定，内容采用统一 AppScrollBar 独立留白通道。
+- 新增 `ExternalPlayerDraft` Qt 列表模型，编辑 ID 与默认 ID 分开；增删、路径选择／发现和字段修改均不触发生效配置。保存一次性完成全列表校验、原子写入与运行配置变更；取消、Escape、离开设置页丢弃草稿。保存失败保留输入并定位条目，以内存修订号拒绝覆盖其他操作更新后的配置。模型逐项通知，不在每次输入时重建列表。
+- Release／Debug 视频与配置专项均 **18 passed、0 failed、1 skipped**，覆盖草稿取消、编辑不改默认项、校验失败保留草稿、原子保存、重新读取、默认删除回退、修订冲突、写入失败及保存之前不取消控制器打开事务；跳过需显式启用的真实视频项。没有重做上节接口阶段的真实播放器集成。
+- 首轮界面检查发现测试只遍历 QObject 父子关系而未覆盖 Repeater 的视觉子项，补充视觉树查找；随后发现新视口的角度／像素滚轮路径不一致，统一为窗口内完整视口处理，边缘继续复用 AppScrollBar。最终原生专项覆盖内容、左侧留白、内容与滚动条之间、滑块／轨道和最外侧留白的角度／像素事件；像素输入断言精确位移以排除重复滚动，并验证滑块拖动、固定动作区、模态拖放阻断及键盘焦点恢复。浅深截图位于 `out/validation/player-manager/`，已目视检查。
+- 最终 Release 界面／视频／两种应用冒烟 CTest **4/4，116.06 秒**，完整界面内部 **27 passed、0 failed、3 skipped，110.716 秒**；跳过显式真实会话和两项未获前台焦点的原生检查。Debug 原生 150% DPI＋放大文字最终配置／拖放专项 **4 passed、0 failed，27.619 秒**，补强 Tab 焦点自动滚入视口后复跑通过。本轮没有执行完整 Debug／Release 全量 CTest，也未扩大高对比度、混合 DPI 换屏或物理跨进程拖拽验收。
+- Debug／Release 开发运行目录均已更新并通过部署后冒烟，EXE 与最新构建 SHA-256 一致；证据 `out/validation/player-manager/runtime-hashes.json`，日志 `out/player-manager-run-{debug,release}.log`。未重打静态发行包，改动尚未提交。
+
+## 外部播放器接口与配置（2026-10-16）
+
+- 新增运行时 `IExternalPlayerAdapter`、注册表与公共 Windows 进程服务。PotPlayer 专属发现／校验／参数／来源规则移入适配器，`VideoOpenService` 统一管理打开事务；支持注册新适配器，无新增第三方依赖，核心时钟、轨道与渲染器不改动。
+- 新增版本化原子 `external-players.json`，保存默认配置及最多 32 项播放器配置，首次导入旧 INI 的 PotPlayer 路径。设置支持默认选择、自定义配置增删、名称、EXE、JSON 参数列表、SMTC 来源与同步开关。自定义默认仅打开，停止旧弹幕工作流，不将进程启动视为媒体确认；启用同步后保留基线、新鲜度、同名确认和实例冲突保护。配置变更取消事务，未知／非法文件保留且阻止启动，写入失败不提交配置；读写共同限制 1 MiB，避免生成下一次无法读取的文件。
+- 原生 Release 的配置／拖放专项 **4 passed、0 failed，8.427 秒**；Debug 原生 150% DPI＋放大文字 **4 passed、0 failed，23.173 秒**，已目视检查浅深主题和响应式堆叠。覆盖键盘编辑、默认项下拉、开关、删除、实际滚轮与外侧留白，证据 `out/validation/external-players/ui-*`。
+- Debug 真实 PotPlayer 集成 **3 passed、0 failed，8.202 秒**：用户指定 KitaujiSub 第 1 集，自动发现真实 EXE、SMTC 有效、自动载入 2760 条、覆盖层可见、8 个活动快照及实际文字像素通过。此轮记录 `sameTitleAcknowledgedByTest=false`，证据 `out/validation/external-players/real-potplayer/`，截图只包含独立弹幕覆盖层；不代表播放器与弹幕的桌面合成验收。
+- 首次完整 Release CTest 为 **19/20，246.13 秒**；界面内部 **26 passed、1 failed、3 skipped**，唯一失败是原有详情页 `largestBatch <= 8` 分帧观测断言，单独复跑 **3 passed、0 failed，2.322 秒**。未修改详情页生产逻辑，也未将该批次记为全量通过。
+- 加入配置读写容量一致性检查后，Release 完整界面复跑已通过 **27 passed、0 failed、3 skipped，103.61 秒**；新增默认项实际键盘切换也通过。此后补强非法配置禁止回退启动，最终 Debug 视频／配置专项 **15 passed、0 failed、1 skipped，1.373 秒**，跳过显式真实视频项；本轮未执行完整 Debug CTest。
+- 上述容量检查后的 Release 完整 CTest 最终为 **20/20，243.27 秒**。非法配置阻止启动的收尾保护随后单独构建，视频及两种应用冒烟专项 **3/3，5.05 秒**，视频内部 **15 passed、0 failed、1 skipped**；不把收尾前完整批次描述成该保护又完整跑过所有测试。
+- Debug／Release 开发运行目录已通过 `scripts/run.ps1 -NoBuild -SmokeTest` 更新并退出 0，EXE 与最新构建 SHA-256 一致；记录 `out/validation/external-players/runtime-hashes.json`，日志 `out/external-player-run-{debug,release}.log`。未重打静态发行包，改动尚未提交。
+- 自定义播放器通过可注入进程及媒体样本测试，不宣称其他实际播放器均支持同步。非 SMTC／IPC 时间源、运行时 DLL 插件、资源管理器跨进程拖入、高对比度、混合 DPI 换屏及正式静态发布包未扩大验收。接口和操作说明见 [EXTERNAL_PLAYERS.md](EXTERNAL_PLAYERS.md)。
+
 ## 全窗口视频拖放与背景模糊（2026-10-16）
 
 - 后续快速视觉调整：遮罩改用主题底色，深色／浅色不透明度提高至 75%／80%，模糊上限 24 → 40，饱和度调整 -0.65。Release 原生拖放专项 **3 passed、0 failed，5.983 秒**，浅深截图已目视检查，证据 `out/validation/global-video-drop/thicker/`；此调整未重跑下述完整 CTest，Debug 运行目录仍为调整前版本。
@@ -423,7 +472,6 @@ XML、下载和缓存通过同一弹幕提交入口载入；在线准备与失�
 本轮已验证：动态 Release 构建、应用两项 smoke 通过；全量 CTest 首次 12/13，下拉框键盘测试 currentIndex=57（预期 58），未修改交互逻辑，单独复跑 ui_workflow 通过。ICO 16/20/24/32/40/48/64/128/256 九帧可解码且透明角/不透明中心检查通过；已目视检查圆角预览，EXE 产品信息为 DanmaX，Windows 可提取内嵌图标。
 
 静态包 `out/packages/DanmaX-static-20261008-053538-513/DanmaX.exe` 构建及导入审计通过；部署检查 8/8，证据 `out/validation/static-20261008-053604-711/`。本轮未重新打包 CAB 格式，也未完成 Explorer 图标缓存刷新、所有 DPI 下任务栏外观或干净机器验收。
-
 
 ## 仓库名称与归档分支（2026-10-08）
 

@@ -4,7 +4,7 @@
 
 namespace PotPlayerLauncher {
 QString discover();
+QStringList discoverCandidates();
 QString validate(const QString& path);
 QString preflight(const QString& path);
-QString launch(const QString& path, const QStringList& arguments);
 }

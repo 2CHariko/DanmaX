@@ -24,6 +24,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
       metadata_(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       automatic_(dataDirectory, cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       videoOpen_(this, std::move(videoHooks)),
+      players_(dataDirectory, this),
       monitor_(this),
       foregroundQuery_(foregroundQuery ? std::move(foregroundQuery) : ForegroundQuery(MediaMonitor::targetForeground)),
       mainForegroundQuery_(mainForegroundQuery ? std::move(mainForegroundQuery) : MainForegroundQuery([](QWindow* window) {
@@ -40,7 +41,11 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     file_ = settings_.values()["lastFile"].toString();
     library_.setServers(settings_.values()["danmakuServers"].toStringList());
     connect(&videoOpen_, &VideoOpenService::playerPathSelected, this, [this](const QString& path) {
-        settings_.setValue("potPlayerPath", path);
+        players_.setExecutable(path);
+    });
+    connect(&players_, &ExternalPlayerStore::changed, this, [this] { videoOpen_.configureProfile(players_.current()); });
+    connect(&videoOpen_, &VideoOpenService::launchOnlyOpening, this, [this] {
+        stop(); emit requestNavigateToPage(1);
     });
     connect(&videoOpen_, &VideoOpenService::opening, this, [this](const QString& id) {
         QScopedValueRollback guard(bindingVideo_, true);
@@ -276,7 +281,7 @@ void AppController::clearError() {
 }
 void AppController::configure() {
     const auto s = settings_.values();
-    videoOpen_.configurePath(s["potPlayerPath"].toString());
+    videoOpen_.configureProfile(players_.current());
     if (!bindingVideo_ && (lastSettings_.value("targetSession") != s["targetSession"] ||
         lastSettings_.value("automaticDanmaku") != s["automaticDanmaku"])) videoOpen_.cancel();
     library_.setServers(s["danmakuServers"].toStringList());

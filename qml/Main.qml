@@ -237,9 +237,9 @@ ApplicationWindow {
     FileDialog {
         id: missingPlayerDialog
         objectName: "missingPlayerDialog"
-        title: "选择 PotPlayer，随后继续打开视频"
+        title: "选择 " + root.backend.videoOpen.playerName + "，随后继续打开视频"
         fileMode: FileDialog.OpenFile
-        nameFilters: ["PotPlayer (PotPlayerMini64.exe)"]
+        nameFilters: [root.backend.videoOpen.executableFilter]
         onAccepted: root.backend.videoOpen.choosePlayer(selectedFile)
         onRejected: root.backend.videoOpen.cancel()
     }

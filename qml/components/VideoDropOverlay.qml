@@ -111,7 +111,8 @@ Item {
         }
         Label {
             Layout.fillWidth: true
-            text: "使用 PotPlayer 打开并自动匹配弹幕"
+            text: "使用 " + feedback.backend.videoOpen.playerName
+                + (feedback.backend.videoOpen.synchronizes ? " 打开并自动匹配弹幕" : " 打开视频（仅打开）")
             font.pixelSize: Ui.bodySize
             color: Ui.secondaryText
             horizontalAlignment: Text.AlignHCenter

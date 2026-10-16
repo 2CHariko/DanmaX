@@ -5,6 +5,7 @@
 #include "application/DanmakuLibrary.h"
 #include "application/AutomaticDanmaku.h"
 #include "application/VideoOpenService.h"
+#include "infrastructure/ExternalPlayerStore.h"
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
 #include "platform/windows/MediaMonitor.h"
@@ -29,6 +30,7 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* library READ library CONSTANT)
     Q_PROPERTY(QObject* automatic READ automatic CONSTANT)
     Q_PROPERTY(QObject* videoOpen READ videoOpen CONSTANT)
+    Q_PROPERTY(QObject* players READ players CONSTANT)
     Q_PROPERTY(QObject* metadata READ metadata CONSTANT)
     Q_PROPERTY(QObject* uiPreferences READ uiPreferences CONSTANT)
     Q_PROPERTY(QObject* toolbarPointer READ toolbarPointer CONSTANT)
@@ -77,6 +79,7 @@ class AppController final : public QObject {
     QObject* library() { return &library_; }
     QObject* automatic() { return &automatic_; }
     QObject* videoOpen() { return &videoOpen_; }
+    QObject* players() { return &players_; }
     QObject* metadata() { return &metadata_; }
     QObject* uiPreferences() { return &uiPreferences_; }
     QObject* toolbarPointer() { return &toolbarPointer_; }
@@ -205,6 +208,7 @@ class AppController final : public QObject {
     AnimeMetadataService metadata_;
     AutomaticDanmaku automatic_;
     VideoOpenService videoOpen_;
+    ExternalPlayerStore players_;
     bool bindingVideo_{};
     bool automaticCommit_{}, automaticSource_{};
     SystemUiPreferences uiPreferences_;

@@ -1,6 +1,6 @@
 # DanmaX 配置文件说明 (settings.ini)
 
-DanmaX 采用纯 UTF-8 编码的 `settings.ini` 文件作为统一配置存储。静态便携版默认将配置文件保存在与 `DanmaX.exe` 同级的目录下；开发运行配置与日志位于 `out/run/<预设>/`。首次运行应用会自动生成带有完整中文注释的配置文件模板。默认配置模板请参考 [settings.example.ini](settings.example.ini)。
+DanmaX 的常规设置保存在纯 UTF-8 编码的 `settings.ini`，外部播放器预设路径与默认项另存于同目录的 `player-presets.json`，详见 [EXTERNAL_PLAYERS.md](EXTERNAL_PLAYERS.md)。静态便携版默认将配置文件保存在与 `DanmaX.exe` 同级的目录下；开发运行配置与日志位于 `out/run/<预设>/`。首次运行应用会自动生成带有完整中文注释的 INI 模板。默认配置模板请参考 [settings.example.ini](settings.example.ini)。
 
 > **格式注意**：DanmaX 0.2+ 不再读取或迁移历史版本的 `settings.json` 或旧版 `config.ini`。新版本从干净的 `settings.ini` 或代码内置默认值启动。
 
@@ -30,7 +30,6 @@ DanmaX 采用纯 UTF-8 编码的 `settings.ini` 文件作为统一配置存储�
 | `[Sync]` | `timeOffset` | 浮点数 | -120.0 ~ 120.0 (秒) | `0.0` | 仅跟随播放器使用。正值提前出现，负值延后出现；独立模式忽略此值，保留供下次跟随使用。 |
 | `[Sync]` | `targetSession` | 字符串 | SMTC 来源应用 ID | `""` | 播放页选择后记住；会话消失时等待相同 ID，再次出现自动连接，不切换其他播放器。留空取消绑定。 |
 | `[Sync]` | `automaticDanmaku` | 布尔值 | `true`, `false` | `false` | 开启标题识别、缓存优先匹配、在线唯一匹配下载及连续切集。手动来源操作／停止会暂停本次运行的自动匹配。 |
-| `[Player]` | `potPlayerPath` | 字符串 | 64 位 PotPlayer EXE 的绝对路径 | 空 | 打开视频时使用的程序路径；留空自动发现，便携版可手选。与 `targetSession` 的 SMTC 来源应用 ID 分开保存。已保存路径失效时不静默换用其他安装。 |
 | `[Window]` | `screenIndex` | 整数 | 0 ~ 32 | `0` | 覆盖层所在显示器索引。索引超出实际屏幕数时自动回退主显示器。 |
 | `[Window]` | `onTop` | 整数 | `0`, `1` | `1` | 0=不置顶，1=置顶。统一使用窗口事件恢复与 100 ms 周期检查，层级正常时不重复提升；同格式旧值 2/3 读取后迁移并保存为 1。 |
 | `[Window]` | `foregroundOnly` | 布尔值 | `true`, `false` | `false` | 仅播放器处于前台时显示覆盖层。适用于同步模式；无法识别时建议关闭。 |

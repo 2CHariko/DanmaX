@@ -87,7 +87,7 @@ QML UI → Application Service → Core
 
 ### 基础设施与应用服务
 
-- 视频打开由 `VideoOpenService` 编排，`PotPlayerLauncher` 负责 Windows 注册表程序发现、实例路径预检和参数列表启动。QML 只提交单个视频 URL；领域核心、帧时钟及渲染器不承担启动逻辑。打开事务先废弃旧自动请求并清除旧弹幕，再按新代次、新鲜度及完整文件名／去扩展名文件名确认所选 PotPlayer 采样；同名媒体需显式确认，多实例或路径冲突拒绝启动。确认后仅在本次运行工作流有效期间启用自动弹幕，不改写全局默认开关；停止、手动来源、换绑定或显式切换开关撤销。播放器独立运行，不因取消或退出 DanmaX 被终止。
+- 视频打开由 `VideoOpenService` 编排，通过 `IExternalPlayerAdapter` 与 `ExternalPlayerRegistry` 接入固定播放器预设，目前只有 PotPlayer x64。适配器维护名称、发现候选、程序格式/架构校验、实例检查、参数和 SMTC 绑定规则，用户只选择路径与默认项。`ExternalPlayerStore` 原子保存 `player-presets.json`，不读取或迁移旧配置。QML 负责草稿管理与 URL 提交；选择、保存和启动前重新验证。同步继续核实原媒体基线、新代次、新鲜度与文件名，同名须确认；配置变化取消事务，不以启动成功代替媒体就绪。详见 [EXTERNAL_PLAYERS.md](EXTERNAL_PLAYERS.md)。
 
 - 自动弹幕由 `AutomaticDanmaku` 编排，仅消费经控制器校验的指定会话快照，使用一个 600ms 单次定时器稳定标题。`MediaTitle` 在基础设施层进行有界文件名／标题解析、简繁与季度归一化，领域核心不依赖 Qt 正则。自动服务使用独立 `DanmakuLibrary` 实例，缓存优先，已确认 ID 优先，非唯一结果交还首页选择；普通搜索和自动请求不互相占用状态。`MediaAssociationStore` 在数据目录以有界、版本化、原子 JSON 保存对应，未知格式保留；默认关闭，用户在播放页显式开启。
 - 文件名识别通过基础设施层 `IMediaTitleParser` 端口接入规则与 Anitomy 适配器，统一输出候选、来源及依据，再由 `HybridMediaTitleParser` 检查特殊片段、范围编号、零集、弱格式和冲突；中文显式集数、小数集数保留规则结果。Anitomy 锁定 C++20 兼容旧版提交，显式准备至 `.deps/anitomy/`，静态链接，不增加运行时 DLL。输入最多 1024 字符、候选最多 16 条；新增本地解析器通过构造函数注册。网络／大语言模型不能阻塞同步解析接口，保留后续异步扩展，见 [ANITOMY_EVALUATION.md](ANITOMY_EVALUATION.md)。

@@ -110,7 +110,11 @@ if(DANMAKU_BUILD_APP)
     danmax_require_anitomy()
     add_library(danmaku_runtime STATIC
         src/application/VideoOpenService.cpp src/application/VideoOpenService.h
+        src/infrastructure/ExternalPlayer.cpp src/infrastructure/ExternalPlayer.h
+        src/infrastructure/ExternalPlayerStore.cpp src/infrastructure/ExternalPlayerStore.h
+        src/infrastructure/ExternalPlayerDraft.cpp src/infrastructure/ExternalPlayerDraft.h
         src/platform/windows/PotPlayerLauncher.cpp src/platform/windows/PotPlayerLauncher.h
+        src/platform/windows/ExternalPlayerProcess.cpp
         src/application/PlaybackRecovery.cpp src/application/PlaybackRecovery.h
         src/infrastructure/MediaTitleParser.cpp src/infrastructure/MediaTitleParser.h
         src/application/AutomaticDanmaku.cpp src/application/AutomaticDanmaku.h
@@ -135,7 +139,7 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/SettingsStore.cpp src/infrastructure/SettingsStore.h
         src/infrastructure/LogModel.cpp src/infrastructure/LogModel.h
         src/infrastructure/ChineseConverter.cpp src/infrastructure/ChineseConverter.h)
-    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi PRIVATE danmax_anitomy)
+    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi version PRIVATE danmax_anitomy)
     target_include_directories(danmaku_runtime PRIVATE "${CMAKE_BINARY_DIR}/generated")
     file(GLOB fluent_icons CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/resources/fluent/*.png")
     qt_add_resources(danmaku_runtime fluent_icons PREFIX "/fluent"
