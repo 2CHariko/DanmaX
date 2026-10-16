@@ -4,6 +4,7 @@
 #include "core/MediaClock.h"
 #include "application/DanmakuLibrary.h"
 #include "application/AutomaticDanmaku.h"
+#include "application/VideoOpenService.h"
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
 #include "platform/windows/MediaMonitor.h"
@@ -27,6 +28,7 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* logs READ logs CONSTANT)
     Q_PROPERTY(QObject* library READ library CONSTANT)
     Q_PROPERTY(QObject* automatic READ automatic CONSTANT)
+    Q_PROPERTY(QObject* videoOpen READ videoOpen CONSTANT)
     Q_PROPERTY(QObject* metadata READ metadata CONSTANT)
     Q_PROPERTY(QObject* uiPreferences READ uiPreferences CONSTANT)
     Q_PROPERTY(QObject* toolbarPointer READ toolbarPointer CONSTANT)
@@ -64,7 +66,7 @@ class AppController final : public QObject {
                            ForegroundQuery foregroundQuery = {}, QString cacheDirectory = {},
                            MainForegroundQuery mainForegroundQuery = {},
                            ToolbarPointerMonitor::CursorQuery cursorQuery = {},
-                           WindowLayerController::Positioner positioner = {});
+                           WindowLayerController::Positioner positioner = {}, VideoOpenService::Hooks videoHooks = {});
     ~AppController() override;
     QObject* settings() {
         return &settings_;
@@ -74,6 +76,7 @@ class AppController final : public QObject {
     }
     QObject* library() { return &library_; }
     QObject* automatic() { return &automatic_; }
+    QObject* videoOpen() { return &videoOpen_; }
     QObject* metadata() { return &metadata_; }
     QObject* uiPreferences() { return &uiPreferences_; }
     QObject* toolbarPointer() { return &toolbarPointer_; }
@@ -150,6 +153,7 @@ class AppController final : public QObject {
     Q_INVOKABLE void togglePause();
     Q_INVOKABLE void seek(double position);
     Q_INVOKABLE void selectSession(const QString& id);
+    Q_INVOKABLE void setAutomaticDanmaku(bool enabled);
     Q_INVOKABLE void exportLogs(const QString& path);
      Q_INVOKABLE void clearError();
      Q_INVOKABLE void clearActiveDanmaku();
@@ -200,6 +204,8 @@ class AppController final : public QObject {
     DanmakuLibrary library_;
     AnimeMetadataService metadata_;
     AutomaticDanmaku automatic_;
+    VideoOpenService videoOpen_;
+    bool bindingVideo_{};
     bool automaticCommit_{}, automaticSource_{};
     SystemUiPreferences uiPreferences_;
     MediaMonitor monitor_;

@@ -2,6 +2,7 @@ import QtQuick
 import "../theme"
 import QtQuick.Controls.FluentWinUI3
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import "../components"
 import "../i18n"
 
@@ -22,6 +23,40 @@ PageFrame {
         }
     }
     function put(key, value) { backend.settings.setValue(key, value) }
+
+    SettingsSection {
+        title: "外部播放器"; Layout.fillWidth: true
+        SettingsRow {
+            title: "PotPlayer 程序路径"
+            description: page.backend.videoOpen.playerPath.length > 0
+                ? page.backend.videoOpen.playerPath : "首次打开视频时自动发现，便携版可手动选择 PotPlayerMini64.exe。"
+            Button {
+                objectName: "discoverPotPlayerButton"
+                text: "自动发现"
+                onClicked: page.backend.videoOpen.discoverPlayer()
+            }
+            Button {
+                objectName: "choosePotPlayerButton"
+                text: "选择程序"
+                onClicked: playerDialog.open()
+            }
+        }
+        Label {
+            Layout.fillWidth: true
+            visible: text.length > 0
+            text: page.backend.videoOpen.status
+            color: Ui.secondaryText
+            wrapMode: Text.WordWrap
+            Accessible.name: text
+        }
+    }
+    FileDialog {
+        id: playerDialog
+        title: "选择 64 位 PotPlayer"
+        fileMode: FileDialog.OpenFile
+        nameFilters: ["PotPlayer (PotPlayerMini64.exe)"]
+        onAccepted: page.backend.videoOpen.choosePlayer(selectedFile)
+    }
 
     SettingsSection {
         title: I18n.settings.appearanceSection; Layout.fillWidth: true

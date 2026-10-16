@@ -16,6 +16,14 @@ QtObject {
     property bool systemAnimationsEnabled: true
     readonly property bool motionEnabled: systemAnimationsEnabled && !highContrast
     readonly property int contentTransitionDuration: 180
+    readonly property int dragFeedbackDuration: 120
+    readonly property int dragBlurMax: 40
+    readonly property real dragBackgroundSaturation: -0.65
+    readonly property int dragSnapshotMaxDimension: 1600
+    readonly property int dragPromptMaxWidth: 640
+    readonly property color dragScrim: highContrast ? colors.window
+        : Qt.rgba(colors.window.r, colors.window.g, colors.window.b, dark ? 0.75 : 0.80)
+    readonly property color dragFallbackSurface: colors.window
     readonly property int skeletonDelay: 150
     readonly property color skeletonFill: highContrast ? colors.windowText
         : (dark ? Qt.rgba(1, 1, 1, 0.10) : Qt.rgba(0, 0, 0, 0.08))

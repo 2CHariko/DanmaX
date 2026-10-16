@@ -28,6 +28,8 @@ PageFrame {
     title: I18n.player.title
     description: I18n.player.description
 
+    VideoOpenPane { backend: page.backend }
+
     function formatTime(value) {
         const seconds = Math.max(0, Math.floor(value || 0))
         const minutes = Math.floor(seconds / 60)
@@ -609,9 +611,9 @@ PageFrame {
                 description: I18n.player.automaticHint
                 Switch {
                     objectName: "automaticDanmakuSwitch"
-                    checked: page.backend.settings.values.automaticDanmaku
+                    checked: page.backend.automatic.enabled
                     Accessible.name: I18n.player.automaticTitle
-                    onToggled: page.backend.settings.setValue("automaticDanmaku", checked)
+                    onToggled: page.backend.setAutomaticDanmaku(checked)
                 }
             }
             Label {

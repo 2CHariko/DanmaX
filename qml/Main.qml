@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls.FluentWinUI3
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import QWindowKit 1.0
 import "components"
 import "pages"
@@ -55,18 +56,18 @@ ApplicationWindow {
     color: "transparent"
     background: Rectangle {
         color: Ui.windowSurface
-
-        Rectangle {
-            anchors.left: parent.left
-            anchors.leftMargin: (root.compact ? 48 : 200) + 1
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            color: Ui.contentAreaSurface
-        }
     }
     function navigate(page) { selectedPage = page; pages.children[page].focusHeading() }
 
+    Item {
+        id: mainScene
+        objectName: "mainScene"
+        anchors.fill: parent
+        Rectangle {
+            anchors.fill: parent
+            anchors.leftMargin: (root.compact ? 48 : 200) + 1
+            color: Ui.contentAreaSurface
+        }
     RowLayout {
         anchors.fill: parent
         spacing: 0
@@ -215,11 +216,36 @@ ApplicationWindow {
             }
         }
     }
+    }
+
+    VideoDropOverlay {
+        anchors.fill: parent
+        z: 10
+        backend: root.backend
+        backgroundSource: mainScene
+        // This is a sibling of the captured UI, outside the popup overlay.
+        enabled: root.visible && root.visibility !== Window.Minimized
+            && !root.Overlay.overlay.children.some(item => item.visible)
+            && !missingPlayerDialog.visible
+    }
 
     MatchingRecoveryDialog {
         backend: root.backend
         onOpenSettings: { root.navigate(3); Qt.callLater(settingsPage.focusOnlineSettings) }
         onManualSourceLoaded: { root.sourceTab = 0; playerPage.selectSourceTab(0); root.navigate(1) }
+    }
+    FileDialog {
+        id: missingPlayerDialog
+        objectName: "missingPlayerDialog"
+        title: "选择 PotPlayer，随后继续打开视频"
+        fileMode: FileDialog.OpenFile
+        nameFilters: ["PotPlayer (PotPlayerMini64.exe)"]
+        onAccepted: root.backend.videoOpen.choosePlayer(selectedFile)
+        onRejected: root.backend.videoOpen.cancel()
+    }
+    Connections {
+        target: root.backend.videoOpen
+        function onPlayerRequired() { missingPlayerDialog.open() }
     }
     OverlayWindow { id: overlay; backend: root.backend; visible: root.backend.overlayVisible }
     ToolbarWindow { id: toolbarWindow; backend: root.backend; overlayWindow: overlay }

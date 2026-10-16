@@ -16,12 +16,14 @@
 #include <cmath>
 AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQuery foregroundQuery,
                              QString cacheDirectory, MainForegroundQuery mainForegroundQuery,
-                             ToolbarPointerMonitor::CursorQuery cursorQuery, WindowLayerController::Positioner positioner)
+                             ToolbarPointerMonitor::CursorQuery cursorQuery, WindowLayerController::Positioner positioner,
+                             VideoOpenService::Hooks videoHooks)
     : QObject(parent), settings_(dataDirectory),
       logs_(dataDirectory),
       library_(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       metadata_(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       automatic_(dataDirectory, cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
+      videoOpen_(this, std::move(videoHooks)),
       monitor_(this),
       foregroundQuery_(foregroundQuery ? std::move(foregroundQuery) : ForegroundQuery(MediaMonitor::targetForeground)),
       mainForegroundQuery_(mainForegroundQuery ? std::move(mainForegroundQuery) : MainForegroundQuery([](QWindow* window) {
@@ -37,7 +39,32 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
             [this](const QString& message) { logs_.append("WARN", message); });
     file_ = settings_.values()["lastFile"].toString();
     library_.setServers(settings_.values()["danmakuServers"].toStringList());
+    connect(&videoOpen_, &VideoOpenService::playerPathSelected, this, [this](const QString& path) {
+        settings_.setValue("potPlayerPath", path);
+    });
+    connect(&videoOpen_, &VideoOpenService::opening, this, [this](const QString& id) {
+        QScopedValueRollback guard(bindingVideo_, true);
+        automatic_.reset(); automaticSource_ = false;
+        discardLoad(); library_.cancel(); resetPlayback(true); manual_ = false;
+        setDanmakuVisible(true);
+        settings_.setValue("targetSession", id);
+        mediaGeneration_ = monitor_.select(id, true);
+        connectionObservedAt_ = 0; targetSessionConnected_ = false;
+        configure(); error_.clear();
+        emit requestNavigateToPage(1); emit stateChanged();
+    });
+    connect(&videoOpen_, &VideoOpenService::confirmed, this, [this] {
+        automatic_.reset(); configure();
+    });
+    connect(&videoOpen_, &VideoOpenService::cancelled, this, [this] {
+        const bool clearSource = automaticSource_;
+        automatic_.reset(); configure(); automatic_.suspend();
+        if (clearSource) resetPlayback(false);
+        automaticSource_ = false;
+    });
+    connect(&videoOpen_, &VideoOpenService::failed, this, &AppController::fail);
     connect(&library_, &DanmakuLibrary::operationStarted, this, [this] {
+        videoOpen_.cancel();
         automatic_.suspend(); automaticSource_ = false;
     });
     connect(&automatic_, &AutomaticDanmaku::contentInvalidated, this, [this] {
@@ -249,10 +276,14 @@ void AppController::clearError() {
 }
 void AppController::configure() {
     const auto s = settings_.values();
+    videoOpen_.configurePath(s["potPlayerPath"].toString());
+    if (!bindingVideo_ && (lastSettings_.value("targetSession") != s["targetSession"] ||
+        lastSettings_.value("automaticDanmaku") != s["automaticDanmaku"])) videoOpen_.cancel();
     library_.setServers(s["danmakuServers"].toStringList());
     metadata_.setShowChineseAnime(s["homeShowChineseAnime"].toBool());
-    automatic_.configure(s["automaticDanmaku"].toBool(), s["danmakuServers"].toStringList());
-    if (!s["automaticDanmaku"].toBool()) automaticSource_ = false;
+    automatic_.configure(!videoOpen_.pending() && (s["automaticDanmaku"].toBool() || videoOpen_.active()),
+                         s["danmakuServers"].toStringList());
+    if (!automatic_.enabled()) automaticSource_ = false;
     logs_.configure(s["logToFile"].toBool(), s["logLevel"].toString());
     if (lastSettings_.value("targetSession") != s["targetSession"]) {
         automatic_.reset();
@@ -454,6 +485,7 @@ void AppController::loadFile(const QString& input) {
     });
 }
 void AppController::cancelLoad() {
+    videoOpen_.cancel();
     automatic_.suspend(); automaticSource_ = false;
     discardLoad();
     library_.cancel();
@@ -477,7 +509,7 @@ void AppController::start(bool manual) {
         fail(QStringLiteral("请先载入有效弹幕文件"));
         return;
     }
-    if (!automaticCommit_) { automatic_.suspend(); automaticSource_ = false; }
+    if (!automaticCommit_) { videoOpen_.cancel(); automatic_.suspend(); automaticSource_ = false; }
     manual_ = manual;
     position_ = 0;
     duration_ = manual ? loadedDuration_ : 0;
@@ -506,12 +538,14 @@ void AppController::start(bool manual) {
     emit metricsChanged();
 }
 void AppController::stop() {
+    videoOpen_.cancel();
     automatic_.suspend(); automaticSource_ = false;
     library_.cancel();
     discardLoad();
     resetPlayback(false);
 }
 void AppController::unload() {
+    videoOpen_.cancel();
     automatic_.suspend(); automaticSource_ = false;
     library_.cancel();
     discardLoad();
@@ -519,7 +553,7 @@ void AppController::unload() {
 }
 void AppController::setManualMode(bool manual) {
     if (running_ || manual_ == manual) return;
-    if (manual) { automatic_.suspend(); automaticSource_ = false; }
+    if (manual) { videoOpen_.cancel(); automatic_.suspend(); automaticSource_ = false; }
     manual_ = manual;
     emit stateChanged();
 }
@@ -629,7 +663,14 @@ void AppController::seek(double position) {
     emit metricsChanged();
 }
 void AppController::selectSession(const QString& id) {
+    if (!bindingVideo_) videoOpen_.cancel();
     settings_.setValue("targetSession", id.trimmed());
+}
+void AppController::setAutomaticDanmaku(bool enabled) {
+    videoOpen_.cancel();
+    settings_.setValue("automaticDanmaku", enabled);
+    configure();
+    if (enabled) automatic_.retry();
 }
 void AppController::setPlaybackState(PlaybackState state) {
     playbackState_ = state;
@@ -681,7 +722,8 @@ void AppController::onSample(const MediaSample& s) {
         }
         if (connected) disconnectCleanup_.stop();
         else if (running_ && !manual_ && !disconnectedContentCleared_ && !disconnectCleanup_.isActive()) disconnectCleanup_.start();
-        if (!manual_) automatic_.observe(s);
+        videoOpen_.observe(s);
+        if (!manual_ && !videoOpen_.pending()) automatic_.observe(s);
     }
     if (!running_ || manual_ || s.generation != mediaGeneration_ ||
         s.id != settings_.values()["targetSession"].toString() ||
@@ -958,6 +1000,7 @@ void AppController::showMainWindow() {
     windowLayers_.invalidate();
 }
 void AppController::showOnlineDanmakuForAnime(const QString& animeTitle, const QString& episodeTitle, double episodeNumber) {
+    videoOpen_.cancel();
     automatic_.suspend();
     showMainWindow();
     emit requestOnlineDanmakuSearch();

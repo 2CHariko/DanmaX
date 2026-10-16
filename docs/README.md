@@ -33,6 +33,7 @@ docs/
 - **[完整配置示例 (settings.example.ini)](settings.example.ini)**：包含每个字段详尽中文注释的默认配置文件。
 
 ### 2.2 架构设计与界面规范
+- **[拖入视频与 PotPlayer 联动调研 (POTPLAYER_DROP_OPEN_RESEARCH.md)](POTPLAYER_DROP_OPEN_RESEARCH.md)**：保留调研基线及实施记录；已实现单视频拖入、程序发现／绑定、会话确认和自动弹幕，含指定样本真实播放器验证及尚未验收边界。
 - **[C++ / Qt 架构设计 (CPP_QT_ARCHITECTURE.md)](CPP_QT_ARCHITECTURE.md)**：阐述纯 C++20 领域核心（时钟、时间轴、防重叠物理轨道调度）与 Qt Quick 场景图渲染分层架构。
 - **[FluentWinUI3 界面规范 (UI_DESIGN_SYSTEM.md)](UI_DESIGN_SYSTEM.md)**：阐述编译期锁定 Qt 官方 FluentWinUI3 样式、响应式布局、4 单位网格、统一弹出层与键盘焦点支持。
 - **[看板娘设计设定集 (MASCOT_DESIGN.md)](MASCOT_DESIGN.md)**：官方拟人化形象“艾克斯（DanmaX）”的视觉人设、功能映射、二游立绘 Prompt 与 UI 状态差分规范。

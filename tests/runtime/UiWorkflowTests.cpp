@@ -30,6 +30,11 @@
 #include <QBuffer>
 #include <QScopeGuard>
 #include <QProcess>
+#include <QMimeData>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
 #include <cmath>
 #include <memory>
 #include <vector>
@@ -242,6 +247,145 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void videoDropWorkflow() {
+        QTemporaryDir directory;
+        const auto touch = [&](const QString& name) {
+            QFile file(directory.filePath(name));
+            if (!file.open(QIODevice::WriteOnly)) return QString();
+            file.write("fixture"); file.close(); return file.fileName();
+        };
+        const auto exe = touch("PotPlayerMini64.exe");
+        const auto videoFile = touch(QStringLiteral("Test - 01 [% & #].mp4"));
+        int launches = 0;
+        VideoOpenService::Hooks hooks{[&] { return exe; }, [](const QString&) { return QString(); },
+            [&](const QString&, const QStringList& args) {
+                if (args != QStringList{QFileInfo(videoFile).canonicalFilePath(), "/current"}) return QString("bad arguments");
+                ++launches; return QString();
+            }};
+        AppController backend(directory.path(), nullptr, {}, directory.filePath("cache"), {}, {}, {}, hooks);
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        auto* monitor = backend.findChild<MediaMonitor*>();
+        disconnect(monitor, &MediaMonitor::sampleReceived, &backend, nullptr);
+        auto* video = qobject_cast<VideoOpenService*>(backend.videoOpen());
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        window->show(); QVERIFY(QTest::qWaitForWindowExposed(window)); QTest::qWait(80);
+        auto* drop = window->findChild<QQuickItem*>("videoDropArea"); QVERIFY(drop); QVERIFY(drop->isEnabled());
+        auto* feedback = window->findChild<QQuickItem*>("videoDropOverlay"); QVERIFY(feedback);
+        auto* home = window->findChild<QObject*>("homePage"); QVERIFY(home);
+        QVERIFY(!home->findChild<QObject*>("openVideoButton"));
+        QCOMPARE(drop->mapToScene(QPointF()), QPointF());
+        QCOMPARE(drop->size(), window->size());
+        const auto evidence = qEnvironmentVariable("DANMAKU_VIDEO_UI_ARTIFACTS");
+        if (!evidence.isEmpty()) QVERIFY(QDir().mkpath(evidence));
+        QMimeData previewMime; previewMime.setUrls({QUrl::fromLocalFile(videoFile)});
+        const auto leave = [&] {
+            QDragLeaveEvent event; QCoreApplication::sendEvent(window, &event);
+        };
+        const auto enter = [&](QPoint point) {
+            QDragEnterEvent event(point, Qt::CopyAction, &previewMime, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(window, &event);
+        };
+        // All main-window areas remain the same target while the UI is captured.
+        for (int pageIndex = 0; pageIndex < 5; ++pageIndex) {
+            window->setProperty("selectedPage", pageIndex); QTest::qWait(30);
+            enter(QPoint(20, 20));
+            QVERIFY(feedback->property("dragActive").toBool()); QVERIFY(drop->isEnabled());
+            QCOMPARE(feedback->property("fileName").toString(), QFileInfo(videoFile).fileName());
+            for (const auto& point : {QPoint(20, 150), QPoint(window->width() / 2, 22),
+                    QPoint(window->width() - 24, 20), QPoint(window->width() / 2, window->height() / 2),
+                    QPoint(window->width() - 3, window->height() - 3)}) {
+                QDragMoveEvent event(point, Qt::CopyAction, &previewMime, Qt::LeftButton, Qt::NoModifier);
+                QCoreApplication::sendEvent(window, &event);
+                QVERIFY(feedback->property("dragActive").toBool());
+            }
+            QTest::qWait(180);
+            QCOMPARE(feedback->property("blurLoaded").toBool(), feedback->property("blurSupported").toBool());
+            QCOMPARE(launches, 0);
+            leave();
+            QVERIFY(!feedback->property("dragActive").toBool());
+            QTRY_VERIFY(!feedback->property("blurLoaded").toBool());
+            QTRY_VERIFY(!window->findChild<QObject*>("videoDropSnapshot"));
+        }
+        window->setProperty("selectedPage", 0); window->resize(800, 600); QTest::qWait(80);
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            settings->setValue("theme", theme); QTest::qWait(180);
+            if (!evidence.isEmpty()) QVERIFY(window->grabWindow().save(evidence + "/home-" + theme + ".png"));
+            enter(QPoint(20, 120)); QTest::qWait(200);
+            if (!evidence.isEmpty()) QVERIFY(window->grabWindow().save(evidence + "/drag-" + theme + ".png"));
+            if (feedback->property("blurSupported").toBool()) {
+                auto* snapshot = window->findChild<QObject*>("videoDropSnapshot"); QVERIFY(snapshot);
+                QVERIFY(!snapshot->property("live").toBool());
+                const auto texture = snapshot->property("textureSize").toSize();
+                QVERIFY(texture.width() <= 1600 && texture.height() <= 1600);
+                auto* heading = home->findChild<QQuickItem*>("pageHeading"); QVERIFY(heading);
+                const auto original = heading->property("text");
+                const auto frozen = window->grabWindow();
+                heading->setProperty("text", QStringLiteral("背景已经更新但拖放截图保持冻结"));
+                QTest::qWait(160);
+                const QRect strip(0, 80, std::min(600, frozen.width()), 60);
+                QCOMPARE(window->grabWindow().copy(strip), frozen.copy(strip));
+                heading->setProperty("text", original);
+            }
+            window->resize(1080, 760); QTest::qWait(80);
+            QVERIFY(feedback->property("dragActive").toBool()); QCOMPARE(drop->size(), window->size());
+            QTest::keyClick(window, Qt::Key_Escape);
+            QTRY_VERIFY(!feedback->property("dragActive").toBool());
+            QTRY_VERIFY(!feedback->property("blurLoaded").toBool()); leave();
+            window->resize(800, 600);
+        }
+        enter(QPoint(20, 120)); QVERIFY(feedback->property("dragActive").toBool());
+        window->hide(); QVERIFY(!feedback->property("dragActive").toBool());
+        QVERIFY(!feedback->property("blurLoaded").toBool()); leave();
+        window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
+        QVERIFY(drop->isEnabled());
+        const auto dropAt = [&](const QList<QUrl>& urls, Qt::DropActions actions = Qt::CopyAction) {
+            QMimeData mime; mime.setUrls(urls);
+            const QPoint pos(20, 20); // Drop on the sidebar/brand area, outside page content.
+            QDragEnterEvent enter(pos, actions, &mime, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(window, &enter);
+            QDropEvent event(pos, actions, &mime, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(window, &event);
+        };
+        dropAt({QUrl::fromLocalFile(videoFile)}, Qt::MoveAction); QCOMPARE(launches, 0);
+        QVERIFY(!feedback->property("dragActive").toBool());
+        dropAt({QUrl::fromLocalFile(videoFile), QUrl::fromLocalFile(videoFile)}); QCOMPARE(launches, 0);
+        QVERIFY(!feedback->property("dragActive").toBool());
+        dropAt({QUrl::fromLocalFile(videoFile)}); QCOMPARE(launches, 0); QVERIFY(video->pending());
+        MediaSample before; before.id = "PotPlayerMini64.exe"; before.generation = monitor->generation();
+        before.observedAt = MediaMonitor::monotonicSeconds();
+        QVERIFY(QMetaObject::invokeMethod(&backend, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, before)));
+        QCOMPARE(launches, 1);
+        QVERIFY(!feedback->property("dragActive").toBool()); QVERIFY(!feedback->property("blurLoaded").toBool());
+        QCOMPARE(window->property("currentPageName").toString(), QString("player"));
+        QTest::qWait(60);
+        auto* page = window->findChild<QObject*>("playerPage"); QVERIFY(page);
+        auto* cancel = page->findChild<QQuickItem*>("cancelVideoOpenButton"); QVERIFY(cancel); QVERIFY(cancel->isVisible());
+        cancel->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        QVERIFY(!video->pending());
+        // The actual window overlay must suppress drops into an open popup.
+        auto* recovery = window->findChild<QObject*>("matchingRecoveryDialog"); QVERIFY(recovery);
+        QVERIFY(QMetaObject::invokeMethod(recovery, "open")); QTest::qWait(80);
+        QVERIFY(!drop->isEnabled()); dropAt({QUrl::fromLocalFile(videoFile)}); QCOMPARE(launches, 1);
+        QVERIFY(QMetaObject::invokeMethod(recovery, "close")); QTRY_VERIFY_WITH_TIMEOUT(drop->isEnabled(), 1500);
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            settings->setValue("theme", theme); window->resize(800, 600);
+            window->setProperty("selectedPage", 3); QTest::qWait(80);
+            auto* discover = window->findChild<QQuickItem*>("discoverPotPlayerButton"); QVERIFY(discover); QVERIFY(discover->isVisible());
+            discover->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+            QCOMPARE(settings->values()["potPlayerPath"].toString(), QFileInfo(exe).canonicalFilePath());
+            if (!evidence.isEmpty()) {
+                QVERIFY(QDir().mkpath(evidence));
+                QVERIFY(window->grabWindow().save(evidence + "/settings-" + theme + ".png"));
+            }
+        }
+        QCOMPARE(warnings.size(), 0);
+        backend.stop(); window->close();
+    }
     void detailPreparationLifecycle() {
         QQmlEngine engine; QSignalSpy warnings(&engine, &QQmlEngine::warnings);
         QQmlComponent component(&engine);

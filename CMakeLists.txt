@@ -109,6 +109,8 @@ if(DANMAKU_BUILD_APP)
     include(cmake/Anitomy.cmake)
     danmax_require_anitomy()
     add_library(danmaku_runtime STATIC
+        src/application/VideoOpenService.cpp src/application/VideoOpenService.h
+        src/platform/windows/PotPlayerLauncher.cpp src/platform/windows/PotPlayerLauncher.h
         src/application/PlaybackRecovery.cpp src/application/PlaybackRecovery.h
         src/infrastructure/MediaTitleParser.cpp src/infrastructure/MediaTitleParser.h
         src/application/AutomaticDanmaku.cpp src/application/AutomaticDanmaku.h
@@ -182,6 +184,14 @@ if(DANMAKU_BUILD_APP)
             set_tests_properties(ui_workflow PROPERTIES TIMEOUT 240 ENVIRONMENT "QT_QUICK_BACKEND=software")
         endif()
         add_executable(online_danmaku_tests tests/runtime/OnlineDanmakuTests.cpp)
+        add_executable(video_open_tests tests/runtime/VideoOpenTests.cpp)
+        target_link_libraries(video_open_tests PRIVATE danmaku_runtime Qt6::Test)
+        danmaku_compile_options(video_open_tests)
+        if(DANMAKU_STATIC_QT)
+            qt_import_plugins(video_open_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin Qt6::QSchannelBackendPlugin)
+        endif()
+        add_test(NAME video_open COMMAND video_open_tests -o "${CMAKE_BINARY_DIR}/video-open-tests.txt,txt")
+        set_tests_properties(video_open PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
         add_executable(automatic_danmaku_tests tests/runtime/AutomaticDanmakuTests.cpp)
         target_link_libraries(automatic_danmaku_tests PRIVATE danmaku_runtime Qt6::Test)
         target_compile_definitions(automatic_danmaku_tests PRIVATE DANMAKU_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
