@@ -11,6 +11,14 @@ PageFrame {
     required property Item searchField
     function focusFirstSearchResult() { searchPane.focusFirstResult() }
     signal openDanmakuForAnime(string title, string episodeTitle, real episodeNumber)
+    signal openSettings()
+    signal openPlayer()
+    function showOnlineDanmaku() {
+        onlineSearch.expanded = true
+        Qt.callLater(() => {
+            if (page.visible && onlineSearch.expanded) page.reveal(onlineSearch.toggleButton)
+        })
+    }
     property real detailSubjectId: 0
     function showDetails(anime) {
         if (!anime || !(Number(anime.id) > 0)) return
@@ -79,6 +87,23 @@ PageFrame {
         metadata: page.backend.metadata
         onDetailsRequested: anime => page.showDetails(anime)
         onRevealRequested: item => page.reveal(item)
+    }
+    Disclosure {
+        id: onlineSearch
+        objectName: "homeOnlineSearch"
+        title: I18n.home.onlineDanmaku
+        OnlineDanmakuPane {
+            objectName: "homeOnlineDanmakuPane"
+            Layout.fillWidth: true
+            library: page.backend.library
+            onOpenSettings: page.openSettings()
+        }
+    }
+    Connections {
+        target: page.backend.library
+        function onSourceReady() {
+            if (page.visible && onlineSearch.expanded) page.openPlayer()
+        }
     }
     Shortcut {
         objectName: "homeAnimeSearchShortcut"

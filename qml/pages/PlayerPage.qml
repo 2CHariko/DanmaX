@@ -11,8 +11,16 @@ PageFrame {
     required property QtObject backend
     property int sourceTab: 0
     readonly property bool effectiveManual: backend.manualMode
+    readonly property var sessionChoices: {
+        const choices = page.backend.sessions.slice()
+        const saved = page.backend.settings.values.targetSession
+        if (saved.length > 0 && !choices.some(entry => entry.id === saved))
+            choices.unshift({ id: saved, label: I18n.format(I18n.player.savedSessionWaiting, saved) })
+        return choices
+    }
+    readonly property color playerConnectionColor: effectiveManual ? Ui.secondaryText
+        : backend.targetSessionConnected ? Ui.successText : Ui.cautionText
     readonly property string blockedReason: backend.loading ? I18n.player.blockedLoading : backend.total <= 0 ? I18n.player.blockedNoDanmaku : !effectiveManual && backend.settings.values.targetSession.length === 0 ? I18n.player.blockedNoSession : ""
-    signal openSettings()
     title: I18n.player.title
     description: I18n.player.description
 
@@ -113,32 +121,30 @@ PageFrame {
                             radius: 11
                             implicitHeight: 22
                             implicitWidth: playerBadgeRow.implicitWidth + 16
-                            color: page.effectiveManual ? (Ui.dark ? Qt.rgba(1, 1, 1, 0.06) : Qt.rgba(0, 0, 0, 0.05))
-                                 : (page.backend.settings.values.targetSession.length > 0
-                                    ? (Ui.dark ? Qt.rgba(0.42, 0.80, 0.37, 0.15) : Qt.rgba(0.06, 0.49, 0.06, 0.10))
-                                    : (Ui.dark ? Qt.rgba(0.92, 0.64, 0, 0.15) : Qt.rgba(0.74, 0.29, 0.04, 0.10)))
+                            width: Math.min(implicitWidth, parent.width)
+                            color: Ui.cardBackground
                             border.width: 1
-                            border.color: page.effectiveManual ? Ui.cardBorder
-                                        : (page.backend.settings.values.targetSession.length > 0 ? (Ui.dark ? "#6CCB5F" : "#107C10") : (Ui.dark ? "#EAA300" : "#BC4B09"))
+                            border.color: page.playerConnectionColor
 
                             RowLayout {
                                 id: playerBadgeRow
                                 anchors.centerIn: parent
+                                width: Math.min(implicitWidth, parent.width - 16)
                                 spacing: 5
                                 Rectangle {
                                     width: 6; height: 6; radius: 3
-                                    color: page.effectiveManual ? Ui.secondaryText
-                                         : (page.backend.settings.values.targetSession.length > 0 ? (Ui.dark ? "#6CCB5F" : "#107C10") : (Ui.dark ? "#EAA300" : "#BC4B09"))
+                                    color: page.playerConnectionColor
                                 }
                                 Label {
                                     id: playerBadgeText
+                                    objectName: "playerConnectionBadge"
+                                    Layout.fillWidth: true
                                     text: page.effectiveManual ? I18n.player.playerBadgeManual
                                          : (page.backend.settings.values.targetSession.length > 0
-                                            ? I18n.format(I18n.player.playerBadgeConnected, page.backend.settings.values.targetSession)
+                                            ? I18n.format(page.backend.targetSessionConnected ? I18n.player.playerBadgeConnected : I18n.player.savedSessionWaiting, page.backend.settings.values.targetSession)
                                             : I18n.player.playerBadgeWaiting)
                                     font.pixelSize: Ui.captionSize
-                                    color: page.effectiveManual ? Ui.secondaryText
-                                         : (page.backend.settings.values.targetSession.length > 0 ? (Ui.dark ? "#6CCB5F" : "#107C10") : (Ui.dark ? "#EAA300" : "#BC4B09"))
+                                    color: page.playerConnectionColor
                                     elide: Text.ElideRight
                                 }
                             }
@@ -364,12 +370,11 @@ PageFrame {
         TabBar {
             id: sourceTabs
             objectName: "danmakuSourceTabs"
-            onCurrentIndexChanged: if (currentIndex === 2) page.backend.library.refreshCache()
+            onCurrentIndexChanged: if (currentIndex === 1) page.backend.library.refreshCache()
             currentIndex: page.sourceTab
             Layout.fillWidth: true
             Accessible.name: I18n.player.sourceTabsAccessible
             TabButton { objectName: "sourceLocalTab"; text: I18n.player.sourceLocalTab; icon.color: palette.buttonText }
-            TabButton { text: I18n.player.sourceOnlineTab; icon.color: palette.buttonText }
             TabButton { text: I18n.player.sourceCachedTab; icon.color: palette.buttonText }
         }
 
@@ -435,7 +440,8 @@ PageFrame {
                             }
 
                             Label {
-                                text: page.backend.filePath.length > 0 ? page.backend.filePath : I18n.player.localSectionTitle
+                                text: page.backend.filePath.length > 0 && page.backend.sourceTitle === page.backend.filePath
+                                    ? page.backend.filePath : I18n.player.loadedDanmakuCardTitle
                                 font.pixelSize: Ui.captionSize
                                 color: Ui.secondaryText
                                 elide: Text.ElideMiddle
@@ -515,16 +521,8 @@ PageFrame {
             }
         }
 
-        // --- 在线搜索与缓存面板 ---
-        OnlineDanmakuPane {
-            visible: sourceTabs.currentIndex === 1
-            Layout.fillWidth: true
-            library: page.backend.library
-            onOpenSettings: page.openSettings()
-        }
-
         CachedDanmakuPane {
-            visible: sourceTabs.currentIndex === 2
+            visible: sourceTabs.currentIndex === 1
             Layout.fillWidth: true
             library: page.backend.library
         }
@@ -564,8 +562,9 @@ PageFrame {
 
             AppComboBox {
                 id: sessionBox
+                objectName: "targetSessionChoice"
                 Layout.fillWidth: true
-                model: page.backend.sessions
+                model: page.sessionChoices
                 textRole: "label"
                 valueRole: "id"
                 displayText: currentIndex >= 0 ? currentText : I18n.player.sessionWaitPlaceholder
@@ -582,6 +581,23 @@ PageFrame {
                 color: Ui.secondaryText
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
+            }
+
+            Label {
+                objectName: "savedPlayerStatus"
+                visible: page.backend.settings.values.targetSession.length > 0
+                text: I18n.format(page.backend.targetSessionConnected ? I18n.player.playerBadgeConnected : I18n.player.savedSessionWaiting,
+                    page.backend.settings.values.targetSession)
+                color: page.playerConnectionColor
+                wrapMode: Text.WrapAnywhere
+                Layout.fillWidth: true
+                Accessible.role: Accessible.StaticText
+            }
+            Button {
+                objectName: "forgetTargetSession"
+                visible: page.backend.settings.values.targetSession.length > 0
+                text: I18n.player.forgetSession
+                onClicked: page.backend.selectSession("")
             }
 
             Disclosure {

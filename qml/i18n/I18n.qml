@@ -58,6 +58,7 @@ QtObject {
         expandTags: "展开",
         collapseTags: "收起",
         description: "浏览放送日历，查找番剧并匹配剧集弹幕。",
+        onlineDanmaku: "在线弹幕搜索",
         heroWatchNow: "搜索弹幕",
         heroDetails: "番剧详情",
         heroRatingFormat: "★ %1",
@@ -110,7 +111,6 @@ QtObject {
         description: "选择弹幕来源，连接播放器，然后开始播放。",
         sourceTabsAccessible: "弹幕来源",
         sourceLocalTab: "本地 XML",
-        sourceOnlineTab: "在线搜索",
         sourceCachedTab: "已缓存",
 
         // 本地 XML 来源
@@ -131,11 +131,13 @@ QtObject {
         manualMode: "独立播放",
         sessionWaitPlaceholder: "等待媒体会话，请先在播放器中播放视频",
         sessionAccessible: "目标播放器",
-        sessionHint: "自动刷新媒体会话，跟随播放器的暂停和跳转。",
+        sessionHint: "选择后自动记住此播放器；暂未打开或关闭后会继续等待，再次播放时自动连接。开始弹幕后跟随暂停和跳转。",
+        savedSessionWaiting: "等待已保存的播放器：%1",
+        forgetSession: "取消绑定",
         sessionIdTitle: "手动指定应用 ID",
         sessionIdPlaceholder: "播放器应用 ID",
         sessionIdAccessible: "播放器应用 ID",
-        sessionIdHint: "Windows 媒体会话标识（AUMID），例如 PotPlayer64 或应用包名；留空则自动匹配。",
+        sessionIdHint: "填写播放器实际提供的 Windows 媒体会话标识（AUMID）。保存后持续等待该应用；留空取消绑定。",
         manualHint: "使用独立时间轴，可在下方暂停或调整进度。",
 
         // 播放控制
@@ -164,7 +166,7 @@ QtObject {
         danmakuBadgeNotLoaded: "未载入弹幕",
         danmakuBadgeReady: "%1 条弹幕",
         playerBadgeConnected: "已连接：%1",
-        playerBadgeWaiting: "等待播放器中",
+        playerBadgeWaiting: "尚未绑定播放器",
         playerBadgeManual: "独立播放模式",
         danmakuBadgeAccessible: "弹幕载入状态",
         playerBadgeAccessible: "播放器连接状态",
@@ -343,7 +345,7 @@ QtObject {
         addServerBtn: "添加服务地址",
         saveBtn: "保存",
         cancelBtn: "取消",
-        onlineBottomHint: "缓存长期保留，可在播放页离线选择、重新下载或删除；本版本不提供在线账号登录。",
+        onlineBottomHint: "缓存长期保留，可在播放页离线选择或删除，在首页重新下载；本版本不提供在线账号登录。",
         serverEmptyPlaceholderTitle: "未配置任何在线弹幕服务器",
         serverEmptyPlaceholderDesc: "点击下方按钮添加第三方服务地址",
 

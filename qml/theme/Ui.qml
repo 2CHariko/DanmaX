@@ -55,6 +55,8 @@ QtObject {
     readonly property color cardBackgroundHover: highContrast ? colors.highlight : (dark ? Qt.rgba(1, 1, 1, 0.08) : Qt.rgba(0.95, 0.95, 0.95, 0.90))
     readonly property color cardBorder: highContrast ? colors.windowText : (dark ? Qt.rgba(1, 1, 1, 0.08) : Qt.rgba(0, 0, 0, 0.06))
     readonly property color accentColor: highContrast ? colors.highlight : (dark ? "#60CDFF" : "#005FB8")
+    readonly property color successText: highContrast ? colors.windowText : (dark ? "#6CCB5F" : "#107C10")
+    readonly property color cautionText: highContrast ? colors.windowText : (dark ? "#EAA300" : "#BC4B09")
     readonly property int sectionHeaderSize: Math.round(15 * textScale)
     readonly property int captionSize: Math.round(12 * textScale)
     readonly property int cardGap: 4

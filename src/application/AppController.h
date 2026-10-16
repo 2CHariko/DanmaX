@@ -30,6 +30,7 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* toolbarPointer READ toolbarPointer CONSTANT)
     Q_PROPERTY(QString sourceTitle READ sourceTitle NOTIFY stateChanged)
     Q_PROPERTY(QVariantList sessions READ sessions NOTIFY sessionsChanged)
+    Q_PROPERTY(bool targetSessionConnected READ targetSessionConnected NOTIFY stateChanged)
     Q_PROPERTY(QStringList screens READ screens NOTIFY screensChanged)
     Q_PROPERTY(QStringList fontFamilies READ fontFamilies NOTIFY fontFamiliesChanged)
     Q_PROPERTY(QString status READ status NOTIFY stateChanged)
@@ -77,6 +78,7 @@ class AppController final : public QObject {
     QVariantList sessions() const {
         return sessions_;
     }
+    bool targetSessionConnected() const { return targetSessionConnected_; }
     QStringList screens() const;
     Q_INVOKABLE QObject* screenForName(const QString& name) const;
     QStringList fontFamilies();
@@ -192,6 +194,8 @@ class AppController final : public QObject {
     AnimeMetadataService metadata_;
     SystemUiPreferences uiPreferences_;
     MediaMonitor monitor_;
+    bool targetSessionConnected_{};
+    double connectionObservedAt_{};
     ForegroundQuery foregroundQuery_;
     MainForegroundQuery mainForegroundQuery_;
     danmaku::Engine engine_;

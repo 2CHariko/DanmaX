@@ -929,3 +929,21 @@ Windows 10/早期 Windows 11、系统透明开关与节能切换、高对比度�
 - 将分页控制器重构为标题行右侧紧凑操作组：`AppComboBox` 采用固定自适应紧凑宽度（`136 * Ui.textScale`），前后翻页按钮紧贴两侧并采用等高正方形图标按钮（`32×32`），通过 `RowLayout` 弹性空白靠右对齐。多页时展示，单页（<= 100 集）自动隐藏，纵向直接省出一整行视口高度。
 - Debug、Release 主程序及 ui_workflow_tests 目标构建通过。Windows 默认图形后端运行 `railScrollingAndEpisodeRanges` 与 `homePageWorkflow`：Debug 下 **3 passed、0 failed、0 skipped，6.928 秒**（rail-range）与 **19.030 秒**（workflow）；Release 在 `QT_SCALE_FACTOR=1.5`、13.5pt 字体下 **3 passed、0 failed、0 skipped，3.989 秒**（rail-range）与 **10.596 秒**（workflow）。断言覆盖分页下拉框紧凑宽度（< 180px）、翻页按钮正方形几何、标题行右侧相对定位、F4 快捷键下拉展开、末页切换、Light/Dark 切换及原有滚动/弹幕流程；无 QML 引擎警告。
 - Debug、Release 开发运行目录已通过 `run.ps1 -NoBuild -SmokeTest` 更新并启动，日志为对应构建目录的 `pagination-run.log`。修改尚未提交 Git。
+
+## 番剧详情先开后载与选集分帧准备（2026-10-16）
+
+- 首页先显示详情弹窗，`opened` 后再请求详情和剧集并启用加载占位；打开途中关闭不再发起延后的请求。沿用缓存快速命中不闪骨架的策略。
+- 当前页剧集使用一个 `FrameAnimation` 增量追加，每帧最多 8 项、目标批次预算 2ms；首批可先交互，预留完整网格高度，后续追加不推移页面。相同剧集页的状态刷新保留现有控件，换页丢弃旧快照；关闭停止追加，页面隐藏立即释放已准备的控件。减少动画模式仍分帧准备，不为各按钮增加动画或定时器。
+- Release 主程序与 UI 测试构建通过。CTest `ui_workflow` 通过：24 passed、0 failed、1 skipped（需显式启用的真实媒体会话用例）；`anime_metadata` 通过：45 passed、0 failed。D3D11、150% DPI 与 13.5pt 字体下的详情生命周期、首页和分页交互另有 5 passed、0 failed；覆盖浅深主题、窗口缩小、滚轮/滑块、长下拉、键盘选集、空列表、换页/关闭/隐藏及减少动画。关闭相关断言等待实际可见状态结束，分页紧凑度按缩放后的固有宽度校验。
+- 100 集固定样本短测：原先集中创建 33–45ms，优化后各轮最大批次 2–4ms；GUI 最大心跳间隔从初测 35.5–49.0ms 变为复测 12.6–13.93ms，全部控件在 217–269ms 内逐步准备，首批先行可用。环境为 Ryzen 5 5600、RTX 4070、Qt 6.11.0 Release/D3D11、1080×760 窗口、DPR 1、约 165Hz、无活动弹幕和封面下载。桌面分辨率由初测 1920×1080 变为复测 2560×1440，故为本机前后短测，不宣称所有显示条件锁定的严格性能比较；心跳也不等同 GPU 帧时间。
+- Release 开发运行目录 `out/run/windows-release/` 已更新，启动冒烟检查退出码为 0。报告及原始数据位于 `out/validation/detail-latency/OPTIMIZED.md`、`optimized-d3d11.json`，缩放日志 `optimized-scaled.txt`，最终启动记录 `release-smoke-final.txt`。本轮未重打发布包，不扩大真实 SMTC、多显示器、高对比度/Narrator、实际公网长文本番剧或长期性能验收范围。
+
+## 首页在线弹幕与指定播放器等待（2026-10-16）
+
+- 播放页移除在线搜索标签，仅保留本地 XML／已缓存；首页“在线弹幕搜索”展开区复用原在线组件与整页滚动，承接搜索、歧义选择、下载、重新下载、进度、取消和错误。详情选集展开该区，唯一匹配沿用自动下载；载入成功进入播放页并保持就绪，由用户开始播放。缓存导航及验证命令同步更新：`--source-tab xml|cache`，首页在线入口使用 `--online-search`。
+- 沿用持久保存的 `targetSession`，会话缺席时下拉仍保留该 ID 的等待项，可在弹幕就绪后开始等待；恢复时按所选应用的实际位置与播放／暂停状态同步，不自动改选其他应用。新增取消绑定；修正“留空自动匹配”的错误提示。连接徽章依据有效且新鲜的媒体快照，空闲时也能更新；关闭／异常状态和采样超时撤销连接标记，拒绝其他应用及失效代次的样本。未新增自动识别视频、自动切集或自动下载策略。
+- Debug／Release 主程序和 UI 测试构建通过。Release 全量 CTest **18/18 通过，199.35 秒**；其中 UI **23 passed、0 failed、3 skipped**（真实会话需显式启用，另两项原生前台策略因桌面未授予焦点跳过），在线 **24 passed、0 failed**。新增集成测试使用本地 HTTP 与注入媒体样本，覆盖首页同名候选的键盘选择、成功载入导航、配置跨启动恢复、空闲连接、缺席时开始等待、关闭／暂停恢复、其他应用拒绝、采样超时及取消绑定持久化。
+- 随后的提示文字、徽章宽度及延后定位保护调整，经 Release 默认图形后端的首页／播放／下拉及留白滚轮专项 **7 passed、0 failed**，正常缩放 **36.373 秒**、`QT_SCALE_FACTOR=1.5` 与 13.5pt 字体 **39.002 秒**；覆盖浅深主题、缩窗、键盘、长下拉、滚轮和滑块交互，无 QML 引擎警告。Debug 首页与播放工作流另有 **5 passed、0 failed，56.986 秒**。报告位于 `out/analysis/home-online-player/`，截图位于 `out/validation/home-online-player/`。
+- 本轮未新增真实播放器重启／重连、触控板惯性、混合 DPI 换屏、高对比度／Narrator 或长期性能验收；注入快照和本地模拟服务不替代这些实机边界。未重新打正式发布包，原有未提交的详情分帧准备验收记录保留。
+- 最后补齐截图前的页面定位及其他应用反例，并避免首页在线导航误切隐藏的缓存标签、触发多余缓存扫描。两种配置重新构建通过；最终 Release 原生后端、150% 缩放与放大文字的新增联动用例 **3 passed、0 failed，6.006 秒**（含初始化／清理），已目视复核浅深主题截图。此后未重复运行全量 CTest，最终导航改动由该专项覆盖。
+- Debug／Release 开发运行目录均通过 `run.ps1 -NoBuild -SmokeTest` 更新并启动，退出码为 0，EXE SHA-256 与各自最终构建产物一致。记录为 `out/analysis/home-online-player/run-debug.txt`、`run-release.txt`、`runtime-hashes.json`；修改尚未提交 Git。

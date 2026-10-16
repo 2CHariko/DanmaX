@@ -132,7 +132,7 @@ class OnlineDanmakuTests final : public QObject {
         QCOMPARE(controller.total(), 2);
         QCOMPARE(navigation.count(), 1);
         QCOMPARE(navigation.first().at(0).toInt(), 1);
-        QCOMPARE(navigation.first().at(1).toInt(), 2);
+        QCOMPARE(navigation.first().at(1).toInt(), 1);
         QVERIFY(!library->busy());
         QVERIFY(library->error().isEmpty());
         QTRY_VERIFY(!library->scanning());
@@ -516,9 +516,13 @@ class OnlineDanmakuTests final : public QObject {
         writeBytes(QDir(cacheRoot).filePath("danmaku/" + damagedKey + ".json"), "broken");
         for (const auto& source : {"online", "cache"}) {
             QProcess process;
+            QStringList arguments{"--smoke-test", "--seconds", "3", "--page", source == QString("online") ? "home" : "player",
+                "--data-dir", root.filePath(QString(source) + "-data"), "--cache-dir", cacheRoot,
+                "--window-width", "520", "--theme", source == QString("cache") ? "dark" : "light"};
+            if (source == QString("online")) arguments << "--online-search";
+            else arguments << "--source-tab" << "cache";
             process.start(QDir(QCoreApplication::applicationDirPath()).filePath("DanmaX.exe"),
-                {"--smoke-test", "--seconds", "3", "--page", "player", "--source-tab", source, "--data-dir", root.filePath(QString(source) + "-data"),
-                 "--cache-dir", cacheRoot, "--window-width", "520", "--theme", source == QString("cache") ? "dark" : "light"});
+                arguments);
             QVERIFY(process.waitForStarted()); QVERIFY(process.waitForFinished(15000));
             QCOMPARE(process.exitStatus(), QProcess::NormalExit);
             QVERIFY2(process.exitCode() == 0, process.readAllStandardError().constData());

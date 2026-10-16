@@ -107,7 +107,8 @@ int main(int argc, char* argv[]) {
     parser.addOption({"media-session", "Select a real SMTC session (read only)", "id"});
     parser.addOption({"file", "Load an XML file on startup", "path"});
     parser.addOption({"page", "Initial page: home, player, logs, settings, about", "page", "home"});
-    parser.addOption({"source-tab", "Initial source tab: xml, online, cache (UI validation)", "tab", "xml"});
+    parser.addOption({"source-tab", "Initial player source tab: xml, cache (UI validation)", "tab", "xml"});
+    parser.addOption({"online-search", "Open online danmaku search on the home page (UI validation)"});
     parser.addOption({"theme", "Theme for isolated UI validation", "theme"});
     parser.addOption({"window-width", "Width for layout validation", "pixels"});
     parser.addOption({"capture-state", "UI smoke capture state: settings-middle, font-popup, diagnostics-group, cache-group or metadata-cache-group", "state"});
@@ -116,6 +117,8 @@ int main(int argc, char* argv[]) {
         const QStringList pageNames{"home", "player", "logs", "settings", "about"};
         const int initialPage = pageNames.indexOf(parser.value("page"));
         if (initialPage < 0) throw std::runtime_error("Unknown initial page");
+        if (parser.value("source-tab") != "xml" && parser.value("source-tab") != "cache")
+            throw std::runtime_error("Unknown player source tab; use --online-search for home search");
         const auto paths =
             AppPaths::prepare(app.applicationFilePath(), parser.value("data-dir"), parser.value("cache-dir"));
         qmlRegisterType<DanmakuItem>("DanmaX.Native", 1, 0, "DanmakuCanvas");
@@ -141,12 +144,13 @@ int main(int argc, char* argv[]) {
             app.exit(1);
         });
         engine.setInitialProperties({{"backdrop", QVariant::fromValue(&backdrop)}, {"backend", QVariant::fromValue(&controller)},
-                                     {"sourceTab", parser.value("source-tab") == "online" ? 1 : parser.value("source-tab") == "cache" ? 2 : 0},
+                                     {"sourceTab", parser.value("source-tab") == "cache" ? 1 : 0},
                                      {"selectedPage", initialPage}});
         QWK::registerTypes(&engine);
         engine.loadFromModule("DanmaX", "Main");
         if (creationFailed || engine.rootObjects().isEmpty())
             return 1;
+        if (parser.isSet("online-search")) controller.showOnlineDanmakuForAnime({});
         int windowIndex = 0;
         for (auto* window : app.allWindows()) {
             if (auto* quickWindow = qobject_cast<QQuickWindow*>(window)) {

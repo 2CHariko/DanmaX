@@ -44,9 +44,12 @@ ApplicationWindow {
             root.requestActivate()
         }
         function onRequestNavigateToPage(page, tab) {
-            root.sourceTab = tab
-            if (page === 1) playerPage.selectSourceTab(tab)
+            if (page === 1) {
+                root.sourceTab = tab
+                playerPage.selectSourceTab(tab)
+            }
             root.navigate(page)
+            if (page === 0 && tab === 1) homePage.showOnlineDanmaku()
         }
     }
     // Keep the swapchain alpha-capable across live material preference changes.
@@ -185,6 +188,11 @@ ApplicationWindow {
                         objectName: "homePage"
                         backend: root.backend
                         searchField: homeSearch
+                        onOpenPlayer: { root.sourceTab = 0; playerPage.selectSourceTab(0); root.navigate(1) }
+                        onOpenSettings: {
+                            root.navigate(3)
+                            Qt.callLater(settingsPage.focusOnlineSettings)
+                        }
                         onOpenDanmakuForAnime: (title, episodeTitle, episodeNumber) => {
                             root.backend.showOnlineDanmakuForAnime(title, episodeTitle, episodeNumber)
                         }
@@ -194,10 +202,6 @@ ApplicationWindow {
                         objectName: "playerPage"
                         backend: root.backend
                         sourceTab: root.sourceTab
-                        onOpenSettings: {
-                            root.navigate(3)
-                            Qt.callLater(settingsPage.focusOnlineSettings)
-                        }
                     }
                     LogsPage {
                         backend: root.backend

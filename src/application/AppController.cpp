@@ -93,7 +93,13 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
         }
     });
     metricsTimer_.setInterval(1000);
-    connect(&metricsTimer_, &QTimer::timeout, this, &AppController::updateMetrics);
+    connect(&metricsTimer_, &QTimer::timeout, this, [this] {
+        if (targetSessionConnected_ && MediaMonitor::monotonicSeconds() - connectionObservedAt_ > 2.5) {
+            targetSessionConnected_ = false;
+            emit stateChanged();
+        }
+        updateMetrics();
+    });
     metricsTime_.start();
     metricsTimer_.start();
     configure();
@@ -209,6 +215,8 @@ void AppController::configure() {
     logs_.configure(s["logToFile"].toBool(), s["logLevel"].toString());
     if (lastSettings_.value("targetSession") != s["targetSession"]) {
         mediaGeneration_ = monitor_.select(s["targetSession"].toString(), true);
+        targetSessionConnected_ = false;
+        connectionObservedAt_ = 0;
         if (!manual_) {
             mediaIdentity_.clear();
             syncConnected_ = false;
@@ -569,7 +577,7 @@ void AppController::seek(double position) {
     emit metricsChanged();
 }
 void AppController::selectSession(const QString& id) {
-    settings_.setValue("targetSession", id);
+    settings_.setValue("targetSession", id.trimmed());
 }
 void AppController::setPlaybackState(PlaybackState state) {
     playbackState_ = state;
@@ -602,6 +610,22 @@ void AppController::exportLogs(const QString& path) {
         fail(QStringLiteral("日志导出失败"));
 }
 void AppController::onSample(const MediaSample& s) {
+    // Connection health also matters before the user starts the overlay.
+    // An application ID in settings (or in the session list) is not a healthy sample.
+    const double connectionAge = MediaMonitor::monotonicSeconds() - s.observedAt;
+    if (s.generation == mediaGeneration_ &&
+        s.id == settings_.values()["targetSession"].toString() && !s.id.isEmpty() &&
+        std::isfinite(s.observedAt) && s.observedAt > connectionObservedAt_ &&
+        connectionAge >= 0 && connectionAge <= 2.5) {
+        connectionObservedAt_ = s.observedAt;
+        const bool connected = s.found && s.playback != MediaSample::Playback::Closed &&
+            s.playback != MediaSample::Playback::Changing && s.playback != MediaSample::Playback::Unknown &&
+            std::isfinite(s.position) && std::isfinite(s.duration);
+        if (targetSessionConnected_ != connected) {
+            targetSessionConnected_ = connected;
+            emit stateChanged();
+        }
+    }
     if (!running_ || manual_ || s.generation != mediaGeneration_ ||
         s.id != settings_.values()["targetSession"].toString() ||
         !std::isfinite(s.observedAt) || s.observedAt <= lastSampleObservedAt_)
@@ -881,10 +905,10 @@ void AppController::showOnlineDanmakuForAnime(const QString& animeTitle, const Q
             library_.searchAnimeForEpisode(animeTitle.trimmed(), episodeTitle, episodeNumber);
         else library_.searchAnime(animeTitle.trimmed());
     }
-    emit requestNavigateToPage(1, 1);
+    emit requestNavigateToPage(0, 1);
 }
 void AppController::loadCachedDanmaku(const QString& key) {
     if (key.isEmpty()) return;
     library_.loadCached(key);
-    emit requestNavigateToPage(1, 2);
+    emit requestNavigateToPage(1, 1);
 }
