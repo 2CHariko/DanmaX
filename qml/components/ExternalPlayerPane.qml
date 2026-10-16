@@ -193,7 +193,7 @@ SettingsSection {
                                     }
                                 }
                                 Label {
-                                    text: "使用预设启动规则，打开后通过 SMTC 同步弹幕"
+                                    text: "使用预设启动规则 · " + card.profile.synchronizationLabel
                                     Layout.fillWidth: true
                                     wrapMode: Text.WordWrap
                                     color: Ui.secondaryText
@@ -246,6 +246,7 @@ SettingsSection {
                                     Button {
                                         objectName: "discoverPlayerButton-" + card.profile.id
                                         text: "自动发现"
+                                        visible: card.profile.canDiscover
                                         onClicked: { pane.editor.edit(card.profile.id); pane.editor.discover() }
                                     }
                                 }

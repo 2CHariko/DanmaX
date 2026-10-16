@@ -30,7 +30,7 @@ QString preflight(const QString& path, const QStringList& processNames) {
     if (count > 1) return QStringLiteral("存在多个播放器实例，请保留一个后重试");
     return error;
 }
-QString launch(const QString& path, const QStringList& arguments) {
+QString launch(const QString& path, const QStringList& arguments, qint64* pid, const QMap<QString, QString>& overrides) {
     QProcess process;
     process.setProgram(path);
     process.setArguments(arguments);
@@ -43,9 +43,11 @@ QString launch(const QString& path, const QStringList& arguments) {
         arguments->inheritHandles = false;
     });
     auto environment = QProcessEnvironment::systemEnvironment();
-    for (const auto* key : {"QTDIR", "QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH", "QML_IMPORT_PATH", "QML2_IMPORT_PATH"})
+    for (const auto* key : {"QTDIR", "QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH", "QML_IMPORT_PATH", "QML2_IMPORT_PATH",
+                           "QT_QPA_PLATFORM", "QT_QUICK_BACKEND", "QT_SCALE_FACTOR", "QML_DISK_CACHE_PATH"})
         environment.remove(QString::fromLatin1(key));
+    for (auto it = overrides.begin(); it != overrides.end(); ++it) environment.insert(it.key(), it.value());
     process.setProcessEnvironment(environment);
-    return process.startDetached() ? QString() : QStringLiteral("无法启动播放器：") + process.errorString();
+    return process.startDetached(pid) ? QString() : QStringLiteral("无法启动播放器：") + process.errorString();
 }
 }

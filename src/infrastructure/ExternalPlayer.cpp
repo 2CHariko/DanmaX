@@ -1,5 +1,6 @@
 #include "infrastructure/ExternalPlayer.h"
 #include "platform/windows/PotPlayerLauncher.h"
+#include "platform/windows/VlcLauncher.h"
 #include <QFileInfo>
 
 namespace {
@@ -18,9 +19,25 @@ class PotPlayerAdapter final : public IExternalPlayerAdapter {
     QStringList arguments(const ExternalPlayerProfile&, const QString& file) const override { return {file, "/current"}; }
     QString sessionId(const ExternalPlayerProfile&) const override { return "PotPlayerMini64.exe"; }
 };
+class VlcAdapter final : public IExternalPlayerAdapter {
+  public:
+    QString id() const override { return "vlc"; }
+    QString displayName() const override { return "VLC"; }
+    bool managedPlayback() const override { return true; }
+    QString synchronizationLabel() const override { return QStringLiteral("本地 HTTP 同步"); }
+    QString executableFilter() const override { return QStringLiteral("VLC (vlc.exe)"); }
+    bool canDiscover() const override { return true; }
+    QStringList discoverCandidates() const override { return VlcLauncher::discoverCandidates(); }
+    QString discover() const override { const auto paths = discoverCandidates(); return paths.size() == 1 ? paths.first() : QString(); }
+    QString validate(const QString& path) const override { return VlcLauncher::validate(path); }
+    QString preflight(const ExternalPlayerProfile&) const override { return {}; }
+    QStringList arguments(const ExternalPlayerProfile&, const QString&) const override { return {}; }
+    QString sessionId(const ExternalPlayerProfile&) const override { return {}; }
+};
 }
 ExternalPlayerRegistry::ExternalPlayerRegistry() {
     add(std::make_unique<PotPlayerAdapter>());
+    add(std::make_unique<VlcAdapter>());
 
 }
 bool ExternalPlayerRegistry::add(std::unique_ptr<IExternalPlayerAdapter> adapter) {

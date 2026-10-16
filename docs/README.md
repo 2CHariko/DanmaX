@@ -11,7 +11,7 @@ docs/
 ├── USER_GUIDE.md                           # 最终用户实操教程与常见问题 (FAQ)
 ├── CONFIGURATION.md                        # 21 项配置参数全量字典速查与编辑规范
 ├── settings.example.ini                    # 首次生成之完整 UTF-8 INI 模板
-├── EXTERNAL_PLAYERS.md                     # 外部播放器接口、自定义配置与旧路径迁移
+├── EXTERNAL_PLAYERS.md                     # 外部播放器预设、路径验证与管理弹窗
 ├── CPP_QT_ARCHITECTURE.md                 # C++20 / Qt 6 核心架构设计与数据流
 ├── UI_DESIGN_SYSTEM.md                    # Qt 官方 FluentWinUI3 规范与控件约束
 ├── PACKAGING.md                           # 真正静态单 EXE 便携打包与运行模型
@@ -34,6 +34,7 @@ docs/
 - **[完整配置示例 (settings.example.ini)](settings.example.ini)**：包含每个字段详尽中文注释的默认配置文件。
 
 ### 2.2 架构设计与界面规范
+- **[VLC 接入调研与实施 (VLC_INTEGRATION_RESEARCH.md)](VLC_INTEGRATION_RESEARCH.md)**：本机 3.0.23 的 SMTC 检查、Lua HTTP 精确状态探针、正式后端与真实视频自动弹幕验证；区分已验证能力和待验收范围。
 - **[拖入视频与 PotPlayer 联动调研 (POTPLAYER_DROP_OPEN_RESEARCH.md)](POTPLAYER_DROP_OPEN_RESEARCH.md)**：保留调研基线及实施记录；已实现单视频拖入、程序发现／绑定、会话确认和自动弹幕，含指定样本真实播放器验证及尚未验收边界。
 - **[C++ / Qt 架构设计 (CPP_QT_ARCHITECTURE.md)](CPP_QT_ARCHITECTURE.md)**：阐述纯 C++20 领域核心（时钟、时间轴、防重叠物理轨道调度）与 Qt Quick 场景图渲染分层架构。
 - **[FluentWinUI3 界面规范 (UI_DESIGN_SYSTEM.md)](UI_DESIGN_SYSTEM.md)**：阐述编译期锁定 Qt 官方 FluentWinUI3 样式、响应式布局、4 单位网格、统一弹出层与键盘焦点支持。

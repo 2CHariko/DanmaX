@@ -336,8 +336,8 @@ private slots:
             QTest::qWait(80);
             auto* scroll = item("externalPlayerScrollView"); auto* bar = item("externalPlayerScrollBar"); QVERIFY(scroll && bar);
             auto* flick = scroll->property("contentItem").value<QQuickItem*>(); QVERIFY(flick);
-            QVERIFY(flick->property("contentHeight").toDouble() <= flick->height() + 1);
-            // A single preset has no overflow: wheel input must not move the list or the page.
+            const bool overflowing = flick->property("contentHeight").toDouble() > flick->height() + 1;
+            // Test the complete viewport and margins with both wheel event forms.
             auto* body = scroll->parentItem(); QVERIFY(body);
             const auto middle = scroll->y() + scroll->height()/2;
             const QList<QPoint> points{scroll->mapToScene(QPointF(scroll->width()/2, scroll->height()/2)).toPoint(),
@@ -346,14 +346,35 @@ private slots:
                 bar->mapToScene(QPointF(bar->width()/2, bar->height()/2)).toPoint(),
                 body->mapToScene(QPointF(body->width()-2, middle)).toPoint()};
             for (const auto& point : points) for (bool pixel : {false, true}) {
+                flick->setProperty("contentY", 0);
                 QWheelEvent wheel(QPointF(point), window->mapToGlobal(point), pixel ? QPoint(0,-35) : QPoint(),
                     pixel ? QPoint() : QPoint(0,-120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
                 QCoreApplication::sendEvent(window, &wheel); QTest::qWait(20);
-                QCOMPARE(flick->property("contentY").toDouble(), 0.0);
+                if (overflowing) QVERIFY(flick->property("contentY").toDouble() > 0);
+                else QCOMPARE(flick->property("contentY").toDouble(), 0.0);
+                if (overflowing && pixel) QCOMPARE(flick->property("contentY").toDouble(), std::min(35.0,
+                    flick->property("contentHeight").toDouble() - flick->height()));
             }
+            if (overflowing) {
+                flick->setProperty("contentY", 0); bar->setProperty("active", true); QTest::qWait(80);
+                const auto thumb = bar->mapToScene(QPointF(bar->width()/2, bar->height()*bar->property("size").toDouble()/2)).toPoint();
+                QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, thumb);
+                QTest::mouseMove(window, thumb + QPoint(0, 60), 50);
+                QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, thumb + QPoint(0, 60));
+                QVERIFY(flick->property("contentY").toDouble() > 0);
+            }
+            flick->setProperty("contentY", 0);
             if (!evidence.isEmpty()) { QVERIFY(QDir().mkpath(evidence)); QVERIFY(window->grabWindow().save(evidence + "/presets-" + theme + ".png")); }
             QVERIFY(click("cancelExternalPlayers")); QTRY_VERIFY(!dialog->property("visible").toBool());
         }
+        QVERIFY(click("manageExternalPlayers")); QTRY_VERIFY(dialog->property("opened").toBool());
+        QVERIFY(item("externalPlayerExecutable-vlc"));
+        QVERIFY(click("defaultPlayer-vlc")); QVERIFY(click("saveExternalPlayers"));
+        QTRY_VERIFY(!dialog->property("visible").toBool()); QCOMPARE(store->selectedId(), QString("vlc"));
+        QVERIFY(qobject_cast<VideoOpenService*>(backend.videoOpen())->synchronizes());
+        QVERIFY(click("manageExternalPlayers")); QTRY_VERIFY(dialog->property("opened").toBool());
+        QVERIFY(click("defaultPlayer-potplayer")); QVERIFY(click("saveExternalPlayers"));
+        QTRY_VERIFY(!dialog->property("visible").toBool());
         QVERIFY(click("manageExternalPlayers")); QTRY_VERIFY(dialog->property("opened").toBool());
         QVERIFY(click("cancelExternalPlayers")); QTRY_VERIFY(!dialog->property("visible").toBool());
         QStringList candidates;
@@ -368,7 +389,7 @@ private slots:
         QVERIFY(click("discoverPlayerButton-potplayer")); QCOMPARE(draft->candidates().size(), 16);
         QVERIFY(!draft->dirty()); QCOMPARE(store->current().executable, QFileInfo(exe).canonicalFilePath());
         auto* combo = item("externalPlayerCandidates-potplayer"); QVERIFY(combo && combo->isVisible());
-        combo->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4);
+        combo->forceActiveFocus(); QTest::qWait(80); QTest::keyClick(window, Qt::Key_F4);
         auto* popup = combo->property("popup").value<QObject*>(); QVERIFY(popup);
         QTRY_VERIFY(popup->property("opened").toBool());
         QTest::keyClick(window, Qt::Key_End); QTest::keyClick(window, Qt::Key_Return);
@@ -379,7 +400,7 @@ private slots:
         draft->chooseExecutable(directory.filePath("invalid.exe")); QVERIFY(!draft->issue().isEmpty());
         QCOMPARE(draft->editing().value("executable").toString(), QFileInfo(candidates.last()).canonicalFilePath());
         window->setProperty("selectedPage", 0); QTRY_VERIFY(!dialog->property("visible").toBool());
-        QCOMPARE(store->profiles().size(), 1); QVERIFY(!draft->dirty());
+        QCOMPARE(store->profiles().size(), 2); QVERIFY(!draft->dirty());
         QCOMPARE(warnings.size(), 0); backend.stop(); window->close();
     }
     void videoDropWorkflow() {
@@ -1035,7 +1056,7 @@ Window {
         recoveryBar->setProperty("position", 0.0);
         window->resize(1080, 760); QTest::qWait(100);
         auto* combo = find(panel, "animeChoice"); QVERIFY(combo);
-        combo->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4);
+        combo->forceActiveFocus(); QTest::qWait(80); QTest::keyClick(window, Qt::Key_F4);
         auto* popup = combo->property("popup").value<QObject*>(); QVERIFY(popup);
         QTRY_VERIFY(popup->property("opened").toBool());
         auto* list = qobject_cast<QQuickItem*>(popup->property("contentItem").value<QObject*>()); QVERIFY(list);

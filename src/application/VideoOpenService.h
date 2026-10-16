@@ -29,7 +29,7 @@ class VideoOpenService final : public QObject {
     QString playerPath() const { return playerPath_; }
     QString playerName() const { return profile_.name; }
     bool canDiscover() const { return adapter() && adapter()->canDiscover(); }
-    bool synchronizes() const { return adapter() && !adapter()->sessionId(profile_).isEmpty(); }
+    bool synchronizes() const { return adapter() && (adapter()->managedPlayback() || !adapter()->sessionId(profile_).isEmpty()); }
     QString executableFilter() const;
     QString status() const { return status_; }
     bool pending() const { return pending_; }
@@ -46,6 +46,8 @@ class VideoOpenService final : public QObject {
     Q_INVOKABLE void discoverPlayer();
     Q_INVOKABLE void cancel();
     Q_INVOKABLE void confirmCurrent();
+    void backendPrepared(const QString& sessionId);
+    void backendFailed(const QString& error);
   signals:
     void changed();
     void playerPathSelected(QString path);
@@ -55,6 +57,8 @@ class VideoOpenService final : public QObject {
     void cancelled();
     void failed(QString error);
     void launchOnlyOpening();
+    void managedOpenRequested(QString adapter, QString executable, QString video);
+    void managedOpenCancelled();
   private:
     static QString videoPath(const QVariantList& files);
     bool matchesTarget(const MediaSample& sample) const;

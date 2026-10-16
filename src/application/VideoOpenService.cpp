@@ -16,7 +16,7 @@ VideoOpenService::VideoOpenService(QObject* parent, Hooks hooks, int timeoutMs, 
     : QObject(parent), registry_(std::move(registry)), hooks_(std::move(hooks)) {
     deadline_.setSingleShot(true); deadline_.setInterval(timeoutMs);
     connect(&deadline_, &QTimer::timeout, this, [this] {
-        fail(QStringLiteral("未能确认目标视频已就绪；请检查 %1 的 SMTC 来源 ID、时间轴和媒体标题，或关闭其他实例后重试").arg(playerName()));
+        fail(QStringLiteral("未能确认目标视频已就绪；请检查 %1 的连接、播放状态及媒体信息后重试").arg(playerName()));
     });
 }
 QString VideoOpenService::videoPath(const QVariantList& files) {
@@ -85,6 +85,12 @@ void VideoOpenService::open(const QVariantList& files) {
     auto error = adapter()->validate(playerPath_);
     if (error.isEmpty()) error = preflight();
     if (!error.isEmpty()) { emit failed(error); return; }
+    if (adapter()->managedPlayback()) {
+        cancel(); video_ = path; pending_ = true; awaitingBaseline_ = false; transactionSession_.clear(); baselineTitle_.clear();
+        openedAt_ = MediaMonitor::monotonicSeconds(); deadline_.start();
+        status_ = QStringLiteral("正在启动并连接 %1…").arg(playerName()); emit changed();
+        emit managedOpenRequested(profile_.adapter, playerPath_, path); return;
+    }
     transactionSession_ = adapter()->sessionId(profile_);
     if (transactionSession_.isEmpty()) {
         cancel(); emit launchOnlyOpening(); video_ = path;
@@ -123,7 +129,7 @@ void VideoOpenService::observe(const MediaSample& sample) {
     if (!matchesTarget(sample)) return;
     const auto title = normalizedTitle(sample.title);
     // SMTC has no full path: same-title content cannot prove a completed handoff.
-    if (title == baselineTitle_) {
+    if (!adapter()->managedPlayback() && title == baselineTitle_) {
         status_ = QStringLiteral("当前媒体与目标文件同名；请确认 %1 画面后选择“使用当前视频”").arg(playerName());
         emit changed(); return;
     }
@@ -139,6 +145,10 @@ bool VideoOpenService::matchesTarget(const MediaSample& sample) const {
     if (age < 0 || age > 2.5) return false;
     const auto title = normalizedTitle(sample.title);
     const QFileInfo file(video_);
+    if (adapter()->managedPlayback()) {
+        const QUrl uri(sample.mediaUri);
+        return uri.isLocalFile() && QFileInfo(uri.toLocalFile()).canonicalFilePath().compare(file.canonicalFilePath(), Qt::CaseInsensitive) == 0;
+    }
     return title == normalizedTitle(file.fileName()) || title == normalizedTitle(file.completeBaseName());
 }
 bool VideoOpenService::needsConfirmation() const {
@@ -151,7 +161,15 @@ void VideoOpenService::confirmCurrent() {
 void VideoOpenService::cancel() {
     const bool wasOpen = pending_ || active_ || needsPlayer_;
     deadline_.stop(); pending_ = active_ = needsPlayer_ = awaitingBaseline_ = false; waitingFile_.clear(); video_.clear();
-    if (wasOpen) { status_ = QStringLiteral("已取消视频弹幕工作流"); emit changed(); emit cancelled(); }
+    if (wasOpen) { emit managedOpenCancelled(); status_ = QStringLiteral("已取消视频弹幕工作流"); emit changed(); emit cancelled(); }
+}
+void VideoOpenService::backendPrepared(const QString& sessionId) {
+    if (!pending_ || !adapter() || !adapter()->managedPlayback() || sessionId.isEmpty()) return;
+    transactionSession_ = sessionId; status_ = QStringLiteral("等待 %1 确认目标视频…").arg(playerName());
+    emit opening(sessionId); emit changed();
+}
+void VideoOpenService::backendFailed(const QString& error) {
+    if (pending_ && adapter() && adapter()->managedPlayback()) fail(error);
 }
 void VideoOpenService::fail(const QString& error) {
     cancel(); status_ = error; emit changed(); emit failed(error);

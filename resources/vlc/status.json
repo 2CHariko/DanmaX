@@ -1,0 +1,41 @@
+<?vlc
+-- DanmaX bridge protocol 1. Uses the player's existing Lua and JSON facilities.
+local json = require "httprequests"
+local command = _GET["command"] or "status"
+local item = vlc.input.item()
+local uri = item and item:uri() or ""
+local playlist_id = tostring(vlc.playlist.current())
+local ok = true
+local previous_item = ""
+if command == "open" then
+    local target = _GET["uri"] or ""
+    local operation = _GET["operation"] or ""
+    if #operation > 0 and #operation <= 64 and #target <= 32768 and string.sub(target, 1, 7) == "file://" then
+        if danmax_open_operation ~= operation then
+            danmax_previous_item = playlist_id
+            danmax_open_operation = operation
+            vlc.playlist.add({{path=target}})
+        end
+        previous_item = danmax_previous_item
+    else ok = false end
+elseif command == "pause" or command == "resume" then
+    if item and uri == _GET["expected_uri"] and playlist_id == _GET["expected_item"] then
+        local state = vlc.playlist.status()
+        if (command == "pause" and state == "playing") or (command == "resume" and state == "paused") then
+            vlc.playlist.pause()
+        end
+    else ok = false end
+elseif command ~= "status" then ok = false end
+item = vlc.input.item()
+local input = vlc.object.input()
+local result = {protocol=1, request=_GET["request"] or "", ok=ok, previous_item=previous_item, found=(item ~= nil and input ~= nil)}
+if result.found then
+    result.uri = item:uri()
+    result.item = tostring(vlc.playlist.current())
+    result.position = vlc.var.get(input, "time") / 1000000
+    result.duration = item:duration()
+    result.rate = vlc.var.get(input, "rate")
+    result.state = vlc.playlist.status()
+end
+json.printTableAsJson(result)
+?>

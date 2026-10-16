@@ -115,6 +115,13 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/ExternalPlayerDraft.cpp src/infrastructure/ExternalPlayerDraft.h
         src/platform/windows/PotPlayerLauncher.cpp src/platform/windows/PotPlayerLauncher.h
         src/platform/windows/ExternalPlayerProcess.cpp
+        src/platform/windows/PlayerExecutable.cpp src/platform/windows/PlayerExecutable.h
+        src/platform/windows/VlcLauncher.cpp src/platform/windows/VlcLauncher.h
+        src/platform/windows/PlayerProcessIdentity.cpp src/platform/windows/PlayerProcessIdentity.h
+        src/infrastructure/MediaPlaybackBackend.h
+        src/infrastructure/VlcHttpBackend.cpp src/infrastructure/VlcHttpBackend.h
+        src/infrastructure/VlcProtocol.cpp src/infrastructure/VlcProtocol.h
+        src/platform/windows/SmtcBackend.cpp src/platform/windows/SmtcBackend.h
         src/application/PlaybackRecovery.cpp src/application/PlaybackRecovery.h
         src/infrastructure/MediaTitleParser.cpp src/infrastructure/MediaTitleParser.h
         src/application/AutomaticDanmaku.cpp src/application/AutomaticDanmaku.h
@@ -139,7 +146,9 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/SettingsStore.cpp src/infrastructure/SettingsStore.h
         src/infrastructure/LogModel.cpp src/infrastructure/LogModel.h
         src/infrastructure/ChineseConverter.cpp src/infrastructure/ChineseConverter.h)
-    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi version PRIVATE danmax_anitomy)
+    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi version iphlpapi ws2_32 PRIVATE danmax_anitomy)
+    qt_add_resources(danmaku_runtime vlc_bridge PREFIX "/vlc"
+        BASE "${CMAKE_SOURCE_DIR}/resources/vlc" FILES "${CMAKE_SOURCE_DIR}/resources/vlc/status.json")
     target_include_directories(danmaku_runtime PRIVATE "${CMAKE_BINARY_DIR}/generated")
     file(GLOB fluent_icons CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/resources/fluent/*.png")
     qt_add_resources(danmaku_runtime fluent_icons PREFIX "/fluent"
@@ -189,12 +198,18 @@ if(DANMAKU_BUILD_APP)
         endif()
         add_executable(online_danmaku_tests tests/runtime/OnlineDanmakuTests.cpp)
         add_executable(video_open_tests tests/runtime/VideoOpenTests.cpp)
+        add_executable(vlc_playback_tests tests/runtime/VlcPlaybackTests.cpp)
+        target_link_libraries(vlc_playback_tests PRIVATE danmaku_runtime Qt6::Test)
+        danmaku_compile_options(vlc_playback_tests)
         target_link_libraries(video_open_tests PRIVATE danmaku_runtime Qt6::Test)
         danmaku_compile_options(video_open_tests)
         if(DANMAKU_STATIC_QT)
+            qt_import_plugins(vlc_playback_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin Qt6::QSchannelBackendPlugin)
             qt_import_plugins(video_open_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin Qt6::QSchannelBackendPlugin)
         endif()
         add_test(NAME video_open COMMAND video_open_tests -o "${CMAKE_BINARY_DIR}/video-open-tests.txt,txt")
+        add_test(NAME vlc_playback COMMAND vlc_playback_tests -o "${CMAKE_BINARY_DIR}/vlc-playback-tests.txt,txt")
+        set_tests_properties(vlc_playback PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
         set_tests_properties(video_open PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
         add_executable(automatic_danmaku_tests tests/runtime/AutomaticDanmakuTests.cpp)
         target_link_libraries(automatic_danmaku_tests PRIVATE danmaku_runtime Qt6::Test)

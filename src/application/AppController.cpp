@@ -25,7 +25,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
       automatic_(dataDirectory, cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
       videoOpen_(this, std::move(videoHooks)),
       players_(dataDirectory, this),
-      monitor_(this),
+      monitor_(this, QDir(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory).filePath("players/vlc")),
       foregroundQuery_(foregroundQuery ? std::move(foregroundQuery) : ForegroundQuery(MediaMonitor::targetForeground)),
       mainForegroundQuery_(mainForegroundQuery ? std::move(mainForegroundQuery) : MainForegroundQuery([](QWindow* window) {
           return window && window->handle() && MediaMonitor::windowOrOwnerForeground(window->winId());
@@ -47,12 +47,22 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     connect(&videoOpen_, &VideoOpenService::launchOnlyOpening, this, [this] {
         stop(); emit requestNavigateToPage(1);
     });
+    connect(&videoOpen_, &VideoOpenService::managedOpenRequested, this,
+            [this](const QString& adapter, const QString& executable, const QString& video) {
+        const auto result = monitor_.openManaged(adapter, executable, video);
+        if (!result.error.isEmpty()) videoOpen_.backendFailed(result.error);
+        else videoOpen_.backendPrepared(result.sessionId);
+    });
+    connect(&videoOpen_, &VideoOpenService::managedOpenCancelled, &monitor_, &MediaMonitor::cancelManagedOpen);
     connect(&videoOpen_, &VideoOpenService::opening, this, [this](const QString& id) {
         QScopedValueRollback guard(bindingVideo_, true);
         automatic_.reset(); automaticSource_ = false;
-        discardLoad(); library_.cancel(); resetPlayback(true); manual_ = false;
+        discardLoad(); library_.cancel(); manual_ = false;
         setDanmakuVisible(true);
         settings_.setValue("targetSession", id);
+        // Reset against the new backend. Resetting the old selection first
+        // would discard the managed backend's newly prepared open command.
+        resetPlayback(true);
         mediaGeneration_ = monitor_.select(id, true);
         connectionObservedAt_ = 0; targetSessionConnected_ = false;
         configure(); error_.clear();

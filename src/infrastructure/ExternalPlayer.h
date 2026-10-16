@@ -1,6 +1,7 @@
 #pragma once
 #include <QString>
 #include <QStringList>
+#include <QMap>
 #include <memory>
 #include <vector>
 
@@ -19,6 +20,8 @@ class IExternalPlayerAdapter {
     virtual ~IExternalPlayerAdapter() = default;
     virtual QString id() const = 0;
     virtual QString displayName() const { return id(); }
+    virtual bool managedPlayback() const { return false; }
+    virtual QString synchronizationLabel() const { return QStringLiteral("SMTC 同步"); }
     virtual QString executableFilter() const { return QStringLiteral("播放器 (*.exe)"); }
     virtual bool canDiscover() const { return false; }
     virtual QString discover() const { return {}; }
@@ -40,6 +43,7 @@ class ExternalPlayerRegistry {
 };
 
 namespace ExternalPlayerProcess {
-QString launch(const QString& executable, const QStringList& arguments);
+QString launch(const QString& executable, const QStringList& arguments, qint64* pid = nullptr,
+               const QMap<QString, QString>& environment = {});
 QString preflight(const QString& executable, const QStringList& processNames);
 }

@@ -10,7 +10,9 @@
 QVariantMap ExternalPlayerStore::toMap(const ExternalPlayerProfile& p) {
     ExternalPlayerRegistry registry; const auto* adapter = registry.find(p.adapter);
     return {{"id", p.id}, {"adapter", p.adapter}, {"name", p.name}, {"executable", p.executable},
-        {"synchronize", adapter && !adapter->sessionId(p).isEmpty()}};
+        {"synchronize", adapter && (adapter->managedPlayback() || !adapter->sessionId(p).isEmpty())},
+        {"synchronizationLabel", adapter ? adapter->synchronizationLabel() : QString()},
+        {"canDiscover", adapter && adapter->canDiscover()}};
 }
 ExternalPlayerStore::ExternalPlayerStore(const QString& directory, QObject* parent)
     : QObject(parent), profiles_(ExternalPlayerRegistry().presets()), path_(QDir(directory).filePath("player-presets.json")) {

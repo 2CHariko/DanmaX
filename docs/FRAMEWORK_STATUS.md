@@ -1,5 +1,16 @@
 # C++ 重构交付状态
 
+## VLC 3.x 媒体后端与正式预设（2026-10-17）
+
+- 新增 VLC 3.x x64 固定预设，保留 App Paths 自动发现、手动选择／输入、空路径保存和启动前验证；要求有效 x64 VLC 及完整 Lua HTTP 组件。管理窗口按预设显示同步方式，不增加端口、密码或自定义参数设置。PotPlayer 默认项及已保存路径保持既有语义。
+- `MediaPlaybackBackend` 统一采样与明确暂停／恢复；`MediaMonitor` 路由 `SmtcBackend` 与异步 `VlcHttpBackend`，后者使用自有 Lua 精确状态端点。受控实例仅回环监听、随机认证、核对端口所属 PID＋进程创建时间，有界请求／响应、代次与媒体身份保护。完整 URI＋新播放列表项确认打开；普通 VLC 不接管，退出应用不关闭播放器。没有新第三方依赖，领域时钟、轨道和渲染器不变。
+- Release 完整 CTest **21/21，260.29 秒**；界面内部 **27 passed、0 failed、3 skipped**，跳过显式真实会话及未获前台焦点的原生专项。Release／Debug VLC 协议专项各 **7 passed、0 failed、1 skipped**，PotPlayer／配置专项各 **17 passed、0 failed、1 skipped**；真实视频项需显式启用。覆盖 URI 特殊字符、精确时间、媒体身份变化、陈旧控制、迟到响应、错误端口归属、超限响应和持久化。
+- Debug 原生 **150% DPI＋放大文字**管理／拖放专项 **4 passed、0 failed，34.371 秒**，包括两个预设默认切换、浅深主题、内容及两侧留白的角度／像素滚轮、滑块拖动、键盘和长候选末项。`out/validation/vlc-integration/debug-150/` 截图已目视检查，无 QML 警告。不扩大为高对比度或混合 DPI 验收。
+- Release 使用用户提供的 KitaujiSub 第 1 集，真实 VLC 集成 **3 passed、0 failed，5.781 秒**：自动发现、完整 URI、时长 **1420.086 秒**、自动载入 **2760 条**、实际弹幕文字像素、暂停冻结、恢复，以及同一受控实例重开同一文件均通过。首次联调暴露旧绑定重置提前清除待打开视频，修正绑定／重置顺序后通过。证据 `out/vlc-real-release-final.txt`、`out/validation/vlc-integration/release-real-final/`；仅关闭测试建立的 VLC，未关闭普通实例。
+- 真实 PotPlayer 首次回归连接／自动载入成功，但固定截图时间落在弹幕间隙，实际文字断言失败；实机测试改为最多等待 10 秒活动弹幕后再截取，保留像素断言。最终 **3 passed、0 failed，2.988 秒**，2760 条、6 个活动快照、实际文字像素通过；同名媒体由测试显式确认，未宣称自动确认。证据 `out/validation/vlc-integration/real-potplayer-final/`。真实截图均为独立弹幕窗口，不代表桌面视频合成验收。
+- 尚未验收 VLC 4、精简 Lua 安装、长时漂移、全屏、多显示器混合 DPI 与桌面视频合成。实现和连接细节见 [EXTERNAL_PLAYERS.md](EXTERNAL_PLAYERS.md)，保留调研与探针见 [VLC_INTEGRATION_RESEARCH.md](VLC_INTEGRATION_RESEARCH.md)。
+- Debug／Release 开发运行目录已更新且部署后冒烟通过，EXE 与构建 SHA-256 一致；记录 `out/validation/vlc-integration/runtime-hashes.json`、`out/vlc-run-{debug,release}.log`。实机等待调整后 Release `video_open` CTest 单独复跑通过。未重打静态发行包，修改尚未提交。
+
 ## 路径错误去重与空值保存（2026-10-17）
 
 - 移除预设卡片底部重复错误，路径下方单一状态位置统一显示校验／选择／发现错误；保存失败的焦点定位同步调整，配置写入等全局错误仍保留独立提示。
