@@ -174,6 +174,29 @@ int main(int argc, char** argv) {
         check(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "Create INI fixture");
         check(file.write(bytes) == bytes.size(), "Write INI fixture");
     };
+    for (int oldValue = 0; oldValue <= 3; ++oldValue) {
+        QTemporaryDir migration;
+        configFixture(migration.path(), "[Meta]\nformatVersion=1\n[Window]\nonTop=" + QByteArray::number(oldValue) +
+            "\n[Danmaku]\nspeed=333\n");
+        SettingsStore settings(migration.path());
+        check(settings.error().isEmpty() && settings.values()["onTop"].toInt() == (oldValue != 0) &&
+                  settings.values()["speed"].toInt() == 333, "Normalize legacy topmost settings without losing other fields");
+        QFile file(migration.filePath("settings.ini"));
+        check(file.open(QIODevice::ReadOnly), "Read migrated INI");
+        const auto bytes = file.readAll();
+        check(!bytes.contains("onTop=2") && !bytes.contains("onTop=3"), "Persist migration to the single topmost mode");
+        check(!settings.setValue("onTop", 2) && !settings.setValue("onTop", 3) &&
+                  !settings.setValue("onTop", -1) && !settings.setValue("onTop", 0.5), "Reject removed and invalid topmost choices");
+    }
+    for (const auto& original : {QByteArray("[Meta]\nformatVersion=2\n[Window]\nonTop=3\n"),
+                                 QByteArray("[Meta]\nformatVersion=1\n[Window]\nonTop=2\n[Danmaku]\nspeed=0\n")}) {
+        QTemporaryDir invalidMigration;
+        configFixture(invalidMigration.path(), original);
+        SettingsStore settings(invalidMigration.path());
+        QFile file(invalidMigration.filePath("settings.ini"));
+        check(!settings.error().isEmpty() && file.open(QIODevice::ReadOnly) && file.readAll() == original,
+              "Topmost migration never overwrites invalid settings or an unsupported format");
+    }
     {
         QTemporaryDir manual;
         configFixture(manual.path(), QStringLiteral(

@@ -29,6 +29,7 @@
 #include <QSaveFile>
 #include <QBuffer>
 #include <QScopeGuard>
+#include <QProcess>
 #include <cmath>
 #include <memory>
 #include <vector>
@@ -2093,6 +2094,127 @@ ApplicationWindow {
         QCOMPARE(warnings.count(), 0);
     }
 
+    void nativeTopmostMaintenance() {
+#if defined(Q_OS_WIN)
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString channel = directory.filePath("competitor");
+        QProcess competitor;
+        competitor.start(QCoreApplication::applicationFilePath(), {"--layer-competitor", channel});
+        QVERIFY(competitor.waitForStarted());
+        auto cleanup = qScopeGuard([&] { competitor.kill(); competitor.waitForFinished(); });
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(channel + ".ready"), 5000);
+        QFile ready(channel + ".ready");
+        QVERIFY(ready.open(QIODevice::ReadOnly));
+        const auto other = reinterpret_cast<HWND>(quintptr(ready.readAll().toULongLong()));
+        QVERIFY(IsWindow(other));
+        const auto above = [](HWND upper, HWND lower) {
+            for (auto window = GetWindow(lower, GW_HWNDPREV); window; window = GetWindow(window, GW_HWNDPREV))
+                if (window == upper) return true;
+            return false;
+        };
+        QWindow overlay, toolbar;
+        overlay.setFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus | Qt::WindowTransparentForInput);
+        overlay.setGeometry(180, 180, 600, 400);
+        toolbar.setFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
+        toolbar.setTransientParent(&overlay);
+        toolbar.setGeometry(200, 180, 300, 48);
+        overlay.show(); toolbar.show();
+        const auto overlayHandle = reinterpret_cast<HWND>(overlay.winId());
+        const auto toolbarHandle = reinterpret_cast<HWND>(toolbar.winId());
+        WindowLayerController layers;
+        layers.attach(nullptr, &overlay, &toolbar);
+        QVERIFY(layers.reconcile(true, false, true));
+        auto* watchdog = layers.findChild<QTimer*>("windowLayerWatchdog");
+        auto* events = layers.findChild<QTimer*>("windowLayerEvents");
+        QVERIFY(watchdog && events && watchdog->isActive());
+        QCOMPARE(watchdog->interval(), 100);
+        QTest::qWait(200);
+        const auto foreground = GetForegroundWindow();
+        QSignalSpy adjustments(&layers, &WindowLayerController::orderAdjusted);
+        QTest::qWait(300);
+        QCOMPARE(adjustments.count(), 0); // Healthy checks must not issue positioning calls.
+        auto command = [&](const QByteArray& value) {
+            QSaveFile file(channel + ".command");
+            if (!file.open(QIODevice::WriteOnly) || file.write(value) != value.size()) return false;
+            return file.commit();
+        };
+        auto acknowledged = [&](const QByteArray& value) {
+            QFile file(channel + ".ack");
+            return file.open(QIODevice::ReadOnly) && file.readAll() == value;
+        };
+        // Prove external SHOW events recover the whole group without waiting
+        // for the watchdog, including when WS_EX_TOPMOST never disappeared.
+        watchdog->setInterval(5000);
+        QElapsedTimer latency;
+        latency.start();
+        QVERIFY(command("raise-event"));
+        QTRY_VERIFY_WITH_TIMEOUT(acknowledged("raise-event"), 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(above(overlayHandle, other) && adjustments.count() > 0, 2000);
+        const auto eventRecoveryMs = latency.elapsed();
+        QVERIFY(above(toolbarHandle, overlayHandle));
+        QVERIFY(GetWindowLongPtrW(overlayHandle, GWL_EXSTYLE) & WS_EX_TOPMOST);
+        QCOMPARE(GetForegroundWindow(), foreground);
+
+        // Block event delivery to exercise the independent periodic fallback.
+        events->blockSignals(true);
+        watchdog->setInterval(100);
+        adjustments.clear();
+        latency.restart();
+        QVERIFY(command("raise-watchdog"));
+        QTRY_VERIFY_WITH_TIMEOUT(acknowledged("raise-watchdog"), 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(above(overlayHandle, other) && adjustments.count() > 0, 2000);
+        const auto watchdogRecoveryMs = latency.elapsed();
+        QCOMPARE(GetForegroundWindow(), foreground);
+        events->blockSignals(false);
+
+        // A reset topmost bit and a damaged internal order also need recovery.
+        QVERIFY(SetWindowPos(overlayHandle, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE));
+        QTRY_VERIFY(GetWindowLongPtrW(overlayHandle, GWL_EXSTYLE) & WS_EX_TOPMOST);
+        QTRY_VERIFY(GetWindowLongPtrW(toolbarHandle, GWL_EXSTYLE) & WS_EX_TOPMOST);
+        QTRY_VERIFY(above(toolbarHandle, overlayHandle));
+
+        QVERIFY(layers.reconcile(false, false, true));
+        QVERIFY(!watchdog->isActive() && !events->isActive());
+        QVERIFY(!(GetWindowLongPtrW(overlayHandle, GWL_EXSTYLE) & WS_EX_TOPMOST));
+        QVERIFY(!(GetWindowLongPtrW(toolbarHandle, GWL_EXSTYLE) & WS_EX_TOPMOST));
+        adjustments.clear();
+        QVERIFY(command("raise-disabled"));
+        QTRY_VERIFY_WITH_TIMEOUT(acknowledged("raise-disabled"), 2000);
+        QTest::qWait(250);
+        QVERIFY(above(other, overlayHandle));
+        QCOMPARE(adjustments.count(), 0);
+
+        QVERIFY(layers.reconcile(true, false, true));
+        overlay.hide();
+        QTRY_VERIFY(!watchdog->isActive());
+        overlay.show(); toolbar.show();
+        QVERIFY(layers.reconcile(true, false, true));
+        QVERIFY(watchdog->isActive());
+        layers.attach(nullptr, nullptr, nullptr);
+        QVERIFY(!watchdog->isActive() && !events->isActive());
+        QCOMPARE(GetForegroundWindow(), foreground);
+        const auto output = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/topmost/") +
+#if defined(QT_DEBUG)
+            "debug";
+#else
+            "release";
+#endif
+        QDir().mkpath(output);
+        QFile report(output + "/maintenance.json");
+        QVERIFY(report.open(QIODevice::WriteOnly));
+        QVERIFY(report.write(QJsonDocument(QJsonObject{{"eventRecoveryMs", eventRecoveryMs},
+            {"watchdogRecoveryMs", watchdogRecoveryMs}, {"externalProcess", true},
+            {"healthyChecksDoNotRaise", true}, {"foregroundPreserved", true},
+            {"watchdogIntervalMs", 100}, {"activeDanmakuCount", 0},
+            {"scene", "Native window ordering only; no text or danmaku rendering"},
+            {"logicalScreenWidth", overlay.screen()->size().width()},
+            {"logicalScreenHeight", overlay.screen()->size().height()},
+            {"devicePixelRatio", overlay.devicePixelRatio()}, {"refreshRateHz", overlay.screen()->refreshRate()},
+            {"disabledAndDetachedStopMaintenance", true}}).toJson()) > 0);
+#endif
+    }
+
     void nativeLayerOrderingWithoutActivation() {
 #if defined(Q_OS_WIN)
         QQuickWindow panel, overlay, toolbar;
@@ -2119,7 +2241,7 @@ ApplicationWindow {
         layers.attach(&panel, &overlay, &toolbar);
         const auto panelHandle = reinterpret_cast<HWND>(panel.winId());
         const auto overlayHandle = reinterpret_cast<HWND>(overlay.winId());
-        for (int strategy = 0; strategy < 4; ++strategy) {
+        for (int strategy = 0; strategy < 2; ++strategy) {
             overlay.setFlag(Qt::WindowStaysOnTopHint, strategy > 0);
             toolbar.setFlag(Qt::WindowStaysOnTopHint, strategy > 0);
             toolbar.show();
@@ -2149,23 +2271,23 @@ ApplicationWindow {
             WS_POPUP | WS_CAPTION, 280, 280, 240, 100, dialog.window, nullptr, probeClass.hInstance, nullptr)};
         QVERIFY(nested.window);
         ShowWindow(nested.window, SW_SHOWNOACTIVATE);
-        QVERIFY(layers.reconcile(3, true, true, true));
+        QVERIFY(layers.reconcile(1, true, true, true));
         QVERIFY(above(nested.window, dialog.window));
         QVERIFY(above(dialog.window, panelHandle));
         QVERIFY(above(dialog.window, reinterpret_cast<HWND>(toolbar.winId())));
         QVERIFY(above(reinterpret_cast<HWND>(toolbar.winId()), panelHandle));
         QVERIFY(above(panelHandle, overlayHandle));
         QCOMPARE(GetForegroundWindow(), foreground);
-        QVERIFY(layers.reconcile(3, false, false));
+        QVERIFY(layers.reconcile(1, false, false));
         QVERIFY(!(GetWindowLongPtrW(panelHandle, GWL_EXSTYLE) & WS_EX_TOPMOST));
         QVERIFY(!(GetWindowLongPtrW(dialog.window, GWL_EXSTYLE) & WS_EX_TOPMOST));
         QVERIFY(!(GetWindowLongPtrW(nested.window, GWL_EXSTYLE) & WS_EX_TOPMOST));
         DestroyWindow(nested.window);
         DestroyWindow(dialog.window);
-        QVERIFY(layers.reconcile(3, true, true));
+        QVERIFY(layers.reconcile(1, true, true));
         panel.destroy();
         panel.create(); panel.show();
-        QVERIFY(layers.reconcile(3, true, true));
+        QVERIFY(layers.reconcile(1, true, true));
         const auto recreated = reinterpret_cast<HWND>(panel.winId());
         QVERIFY(GetWindowLongPtrW(recreated, GWL_EXSTYLE) & WS_EX_TOPMOST);
         QVERIFY(above(recreated, overlayHandle));
@@ -2180,7 +2302,7 @@ ApplicationWindow {
         QDir().mkpath(evidence);
         QFile report(evidence + "/native-order.json");
         QVERIFY(report.open(QIODevice::WriteOnly));
-        const QJsonObject result{{"strategies", 4}, {"nestedOwners", true}, {"surfaceRecreated", true},
+        const QJsonObject result{{"strategies", 2}, {"nestedOwners", true}, {"surfaceRecreated", true},
             {"baselineRestored", true}, {"foregroundPreserved", true}, {"foregroundPolicySimulated", true},
             {"toolbarAbovePanel", true}, {"dialogsAboveToolbar", true}};
         QVERIFY(report.write(QJsonDocument(result).toJson()) > 0);
@@ -2344,7 +2466,7 @@ ApplicationWindow {
             return false;
         };
         auto* settings = qobject_cast<SettingsStore*>(backend.settings());
-        for (int strategy = 0; strategy < 4; ++strategy) {
+        for (int strategy = 0; strategy < 2; ++strategy) {
             QVERIFY(settings->setValue("onTop", strategy));
             QTest::qWait(1100);
             QVERIFY(above(owner, nativeOverlay));
@@ -2780,7 +2902,7 @@ ApplicationWindow {
         QTRY_COMPARE(window->property("phase").toString(), QString("shown"));
         click(pinButton);
         QVERIFY(bar->property("pinned").toBool());
-        for (int strategy = 0; strategy < 4; ++strategy) {
+        for (int strategy = 0; strategy < 2; ++strategy) {
             QVERIFY(settings->setValue("onTop", strategy));
             QTest::qWait(1100);
             QCOMPARE(overlay.flags().testFlag(Qt::WindowStaysOnTopHint), strategy > 0);
@@ -3377,6 +3499,30 @@ ApplicationWindow {
         };
         activate(find("navigation3"));
         QCOMPARE(window->property("selectedPage").toInt(), 3);
+        auto* onTop = find("onTopChoice");
+        QVERIFY(onTop);
+        QCOMPARE(onTop->property("count").toInt(), 2);
+        QCOMPARE(onTop->property("currentIndex").toInt(), 1);
+        auto* settingsPage = find("settingsPage");
+        auto* onTopPopup = onTop->property("popup").value<QObject*>();
+        QVERIFY(settingsPage && onTopPopup);
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            QVERIFY(settings->setValue("theme", theme));
+            QVERIFY(QMetaObject::invokeMethod(settingsPage, "reveal", Q_ARG(QVariant, QVariant::fromValue(onTop))));
+            onTop->forceActiveFocus();
+            QTest::keyClick(window, Qt::Key_F4);
+            QTRY_VERIFY(onTopPopup->property("opened").toBool());
+            QVERIFY(window->grabWindow().save(output + "/on-top-popup-" + theme + ".png"));
+            QTest::keyClick(window, Qt::Key_Home);
+            QTest::keyClick(window, Qt::Key_Return);
+            QTRY_COMPARE(settings->values()["onTop"].toInt(), 0);
+            QTest::keyClick(window, Qt::Key_F4);
+            QTRY_VERIFY(onTopPopup->property("opened").toBool());
+            QTest::keyClick(window, Qt::Key_End);
+            QTest::keyClick(window, Qt::Key_Return);
+            QTRY_COMPARE(settings->values()["onTop"].toInt(), 1);
+        }
+        QVERIFY(QMetaObject::invokeMethod(settingsPage, "focusHeading"));
         activate(find("micaSwitch"));
         QVERIFY(!settings->values().value("micaEnabled").toBool());
         activate(find("micaSwitch"));
@@ -3632,6 +3778,39 @@ ApplicationWindow {
 };
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
+#if defined(Q_OS_WIN)
+    if (app.arguments().size() == 3 && app.arguments().at(1) == "--layer-competitor") {
+        const auto channel = app.arguments().at(2);
+        QWindow window;
+        window.setFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
+        window.setGeometry(180, 180, 600, 400);
+        window.create();
+        const auto handle = reinterpret_cast<HWND>(window.winId());
+        QSaveFile ready(channel + ".ready");
+        if (!ready.open(QIODevice::WriteOnly)) return 2;
+        ready.write(QByteArray::number(quintptr(handle)));
+        if (!ready.commit()) return 3;
+        QByteArray previous;
+        QTimer commands;
+        QObject::connect(&commands, &QTimer::timeout, &app, [&] {
+            QFile file(channel + ".command");
+            if (!file.open(QIODevice::ReadOnly)) return;
+            const auto command = file.readAll();
+            if (command.isEmpty() || command == previous) return;
+            previous = command;
+            if (command.startsWith("raise")) {
+                window.show();
+                SetWindowPos(handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+            QSaveFile ack(channel + ".ack");
+            if (ack.open(QIODevice::WriteOnly)) { ack.write(command); ack.commit(); }
+        });
+        commands.start(10);
+        // Do not leave a topmost helper behind if CTest terminates its parent.
+        QTimer::singleShot(15000, &app, &QCoreApplication::quit);
+        return app.exec();
+    }
+#endif
 
     QFont font = app.font();
     font.setFamilies({"Segoe UI", "Microsoft YaHei UI"});

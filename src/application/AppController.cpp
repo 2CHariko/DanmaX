@@ -211,7 +211,7 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
     connect(overlay_, &QWindow::widthChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::heightChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::visibleChanged, this, [this](bool shown) {
-        windowLayers_.reconcile(settings_.values()["onTop"].toInt(), panelForeground_, desiredOverlayAllowed_);
+        windowLayers_.reconcile(settings_.values()["onTop"].toBool(), panelForeground_, desiredOverlayAllowed_);
         toolbarPointer_.setEnabled(toolbarAllowed_ && shown);
         snapshotDirty_ = true;
         if (shown && running_ && visible_ && renderer_) {
@@ -327,7 +327,7 @@ bool AppController::updatePresentationVisibility(bool forceForeground, bool noti
     const double connectionAge = MediaMonitor::monotonicSeconds() - connectionObservedAt_;
     const bool mediaAvailable = targetSessionConnected_ && connectionAge >= 0 && connectionAge <= 2.5;
     desiredOverlayAllowed_ = running_ && (manual_ || mediaAvailable) && (!checkForeground || foreground_ || panelForeground_);
-    const bool layerReady = windowLayers_.reconcile(settings_.values()["onTop"].toInt(),
+    const bool layerReady = windowLayers_.reconcile(settings_.values()["onTop"].toBool(),
                                                    panelForeground_, desiredOverlayAllowed_);
     const bool show = desiredOverlayAllowed_ && (!panelForeground_ || layerReady);
     const bool toolbarAllowed = show;
@@ -379,7 +379,7 @@ void AppController::updateWindow() {
         overlay_->setScreen(screen);
     if (overlay_->geometry() != screen->geometry())
         overlay_->setGeometry(screen->geometry());
-    const bool top = s["onTop"].toInt() > 0;
+    const bool top = s["onTop"].toBool();
     if (overlay_->flags().testFlag(Qt::WindowStaysOnTopHint) != top)
         overlay_->setFlag(Qt::WindowStaysOnTopHint, top);
     if (toolbarWindow_) {
@@ -562,7 +562,7 @@ void AppController::resetPlayback(bool unloadSource) {
     timer_.stop();
     running_ = playing_ = visible_ = demo_ = false;
     toolbarAllowed_ = desiredOverlayAllowed_ = false;
-    windowLayers_.reconcile(settings_.values()["onTop"].toInt(), false, false);
+    windowLayers_.reconcile(settings_.values()["onTop"].toBool(), false, false);
     toolbarPointer_.setEnabled(false);
     awaitingInitialExposure_ = false;
     snapshotDirty_ = true;
@@ -857,7 +857,6 @@ void AppController::updateMetrics() {
         metrics_["height"] = overlay_->height();
         metrics_["dpr"] = overlay_->devicePixelRatio();
     }
-    windowLayers_.reconcile(settings_.values()["onTop"].toInt(), panelForeground_, desiredOverlayAllowed_, true);
     updatePresentationVisibility();
     emit metricsChanged();
 }

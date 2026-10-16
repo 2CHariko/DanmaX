@@ -6,8 +6,13 @@
 #include <algorithm>
 #include <vector>
 #include <windows.h>
+#include <dwmapi.h>
+#include <map>
 
 namespace {
+// OUTOFCONTEXT callbacks run on the registering GUI thread. Each controller
+// owns its hooks; there is no process-wide singleton or cross-thread Qt access.
+thread_local std::map<HWINEVENTHOOK, QPointer<WindowLayerController>> eventTargets;
 // Raising an owned toolbar must not also raise its owner (the full-screen
 // overlay) above the panel. Keep each owner's already reconciled position.
 constexpr unsigned positioningFlags = SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER;
@@ -50,9 +55,19 @@ WindowLayerController::WindowLayerController(QObject* parent, Positioner positio
             reinterpret_cast<HWND>(after), 0, 0, 0, 0, flags);
     };
     if (qGuiApp) qGuiApp->installEventFilter(this);
+    maintenanceTimer_.setInterval(100);
+    maintenanceTimer_.setParent(this);
+    maintenanceTimer_.setObjectName(QStringLiteral("windowLayerWatchdog"));
+    eventTimer_.setSingleShot(true);
+    eventTimer_.setInterval(16);
+    eventTimer_.setParent(this);
+    eventTimer_.setObjectName(QStringLiteral("windowLayerEvents"));
+    connect(&maintenanceTimer_, &QTimer::timeout, this, &WindowLayerController::maintain);
+    connect(&eventTimer_, &QTimer::timeout, this, &WindowLayerController::maintain);
 }
 
 WindowLayerController::~WindowLayerController() {
+    stopMaintenance();
     if (qGuiApp) qGuiApp->removeEventFilter(this);
     restoreMain();
 }
@@ -92,6 +107,7 @@ bool WindowLayerController::restoreMain() {
 }
 
 void WindowLayerController::attach(QWindow* main, QWindow* overlay, QWindow* toolbar) {
+    stopMaintenance();
     restoreMain();
     for (auto* window : {main_.data(), overlay_.data(), toolbar_.data()}) {
         if (!window) continue;
@@ -107,10 +123,102 @@ void WindowLayerController::attach(QWindow* main, QWindow* overlay, QWindow* too
         if (!window) continue;
         connect(window, &QObject::destroyed, this, [this] {
             dirty_ = true;
+            if (!overlay_) stopMaintenance();
             if (!main_) { baselineHandle_ = 0; modified_ = false; }
             scheduleInvalidation();
         });
     }
+}
+
+void WindowLayerController::stopMaintenance() {
+    maintenanceTimer_.stop();
+    eventTimer_.stop();
+    for (const auto id : eventHooks_) {
+        const auto hook = reinterpret_cast<HWINEVENTHOOK>(id);
+        eventTargets.erase(hook);
+        UnhookWinEvent(hook);
+    }
+    eventHooks_.clear();
+}
+
+void WindowLayerController::updateMaintenance() {
+    if (!injected_ && QGuiApplication::platformName() != "windows") { stopMaintenance(); return; }
+    const bool enabled = onTop_ && overlayAllowed_ && overlay_ && overlay_->isVisible();
+    if (!enabled) { stopMaintenance(); return; }
+    if (maintenanceTimer_.isActive()) return;
+    maintenanceTimer_.start();
+    if (injected_ || QGuiApplication::platformName() != "windows") return;
+    bool complete = true;
+    for (const DWORD event : {DWORD(EVENT_SYSTEM_FOREGROUND), DWORD(EVENT_SYSTEM_MINIMIZEEND),
+                              DWORD(EVENT_OBJECT_SHOW), DWORD(EVENT_OBJECT_REORDER)}) {
+        const auto hook = SetWinEventHook(event, event, nullptr,
+            [](HWINEVENTHOOK hook, DWORD event, HWND window, LONG object, LONG, DWORD, DWORD) {
+                const auto target = eventTargets.find(hook);
+                if (target == eventTargets.end() || !target->second) return;
+                if (event >= EVENT_OBJECT_CREATE && object != OBJID_WINDOW) return;
+                if (!window || !IsWindow(window)) return;
+                auto* self = target->second.data();
+                if (!self->eventTimer_.isActive()) self->eventTimer_.start();
+            }, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        if (hook) {
+            eventTargets.emplace(hook, this);
+            eventHooks_.push_back(reinterpret_cast<quintptr>(hook));
+        } else complete = false;
+    }
+    if (!complete)
+        emit operationFailed(QStringLiteral("窗口事件监听未全部建立；继续使用周期层级检查"));
+}
+
+void WindowLayerController::maintain() {
+    // Refresh policy on an actual foreground transition, without forcing the
+    // media adapter's foreground lookup on every healthy watchdog tick.
+    QPointer<WindowLayerController> alive(this);
+    if (reinterpret_cast<quintptr>(GetForegroundWindow()) != foregroundHandle_) emit invalidated();
+    if (!alive || !maintenanceTimer_.isActive()) return;
+    const bool wasReady = ready_;
+    reconcile(onTop_, panelForeground_, overlayAllowed_, true);
+    if (alive && wasReady != ready_) emit invalidated();
+}
+
+bool WindowLayerController::needsRepair(bool panel) const {
+    if (injected_) return true; // Injected positioners need not change native state.
+    std::vector<quintptr> group{handle(overlay_)}; // bottom to top
+    if (panel) group.push_back(handle(main_));
+    if (toolbar_ && toolbar_->isVisible()) {
+        group.push_back(handle(toolbar_));
+        for (const auto& owned : visibleOwnedWindows(group.back())) group.push_back(owned.handle);
+    }
+    if (panel)
+        for (const auto& owned : visibleOwnedWindows(handle(main_))) group.push_back(owned.handle);
+
+    std::vector<HWND> windows;
+    EnumWindows([](HWND window, LPARAM data) -> BOOL {
+        reinterpret_cast<std::vector<HWND>*>(data)->push_back(window);
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&windows));
+    auto previous = windows.end();
+    for (const auto id : group) {
+        const auto window = reinterpret_cast<HWND>(id);
+        if (!ourWindow(id) || !(GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST)) return true;
+        const auto current = std::find(windows.begin(), windows.end(), window);
+        if (current == windows.end() || (previous != windows.end() && current >= previous)) return true;
+        previous = current;
+    }
+    // Only competing, visible topmost windows above the overlay and on its
+    // monitor area matter. A topmost flag alone does not prove correct Z order.
+    const auto overlay = reinterpret_cast<HWND>(group.front());
+    RECT bounds{};
+    if (!GetWindowRect(overlay, &bounds)) return true;
+    for (const auto window : windows) {
+        if (window == overlay) break;
+        if (ourWindow(reinterpret_cast<quintptr>(window)) || !IsWindowVisible(window) || IsIconic(window) ||
+            !(GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST)) continue;
+        DWORD cloaked{};
+        if (SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) continue;
+        RECT other{}, overlap{};
+        if (GetWindowRect(window, &other) && IntersectRect(&overlap, &bounds, &other)) return true;
+    }
+    return false;
 }
 
 void WindowLayerController::scheduleInvalidation() {
@@ -150,25 +258,25 @@ bool WindowLayerController::eventFilter(QObject* watched, QEvent* event) {
         dirty_ = true;
         // Show is synchronous: correct Z order before the first rendered frame.
         if (event->type() == QEvent::Show)
-            reconcile(strategy_, panelForeground_, overlayAllowed_);
+            reconcile(onTop_, panelForeground_, overlayAllowed_);
         scheduleInvalidation();
     }
     return false;
 }
 
-bool WindowLayerController::reconcile(int strategy, bool panelForeground, bool overlayAllowed, bool periodic) {
-    strategy = std::clamp(strategy, 0, 3);
+bool WindowLayerController::reconcile(bool onTop, bool panelForeground, bool overlayAllowed, bool checkOrder) {
     const auto foreground = reinterpret_cast<quintptr>(GetForegroundWindow());
-    const bool changed = dirty_ || strategy != strategy_ || panelForeground != panelForeground_ ||
+    const bool changed = dirty_ || onTop != onTop_ || panelForeground != panelForeground_ ||
                          overlayAllowed != overlayAllowed_ || (panelForeground && foreground != foregroundHandle_);
-    const bool strategyChanged = strategy != strategy_;
-    strategy_ = strategy;
+    onTop_ = onTop;
     panelForeground_ = panelForeground;
     overlayAllowed_ = overlayAllowed;
     foregroundHandle_ = foreground;
     if (reconciling_) { dirty_ = true; return ready_; }
-    // Strategies 0/1 have no periodic raise; only 2/3 actively keep the group on top.
-    if (!changed && ready_ && (!periodic || strategy < 2)) return ready_;
+    updateMaintenance();
+    const bool panel = panelForeground && overlayAllowed && main_ && main_->isVisible() &&
+                       main_->windowState() != Qt::WindowMinimized;
+    if (!changed && ready_ && (!checkOrder || !onTop || !needsRepair(panel))) return ready_;
     QScopedValueRollback guard(reconciling_, true);
     dirty_ = false;
     if (!injected_ && QGuiApplication::platformName() != "windows") return ready_ = true;
@@ -179,25 +287,21 @@ bool WindowLayerController::reconcile(int strategy, bool panelForeground, bool o
         baselineTopmost_ = topmost(main_);
         modified_ = false;
     }
-    const bool panel = panelForeground && overlayAllowed && main_ && main_->isVisible() &&
-                       main_->windowState() != Qt::WindowMinimized;
     bool success = true;
-    if (!panel || strategy == 0) success = restoreMain();
+    if (!panel || !onTop) success = restoreMain();
     if (panel && !modified_) baselineTopmost_ = topmost(main_);
 
     if (overlayAllowed && overlay_ && overlay_->isVisible()) {
         const auto overlayId = handle(overlay_);
-        if (strategy == 3 && (periodic || strategyChanged))
-            success = position(overlayId, insertion(HWND_NOTOPMOST)) && success;
-        if (strategy > 1 || (strategy == 1 && !topmost(overlay_)))
+        if (onTop)
             success = position(overlayId, insertion(HWND_TOPMOST)) && success;
-        if (strategy == 0 && topmost(overlay_))
+        if (!onTop && topmost(overlay_))
             success = position(overlayId, insertion(HWND_NOTOPMOST)) && success;
     }
 
     if (panel) {
-        modified_ = modified_ || (strategy > 0 && !baselineTopmost_);
-        const auto after = insertion(strategy > 0 || baselineTopmost_ ? HWND_TOPMOST : HWND_TOP);
+        modified_ = modified_ || (onTop && !baselineTopmost_);
+        const auto after = insertion(onTop || baselineTopmost_ ? HWND_TOPMOST : HWND_TOP);
         success = position(mainId, after) && success;
     }
 
@@ -205,19 +309,22 @@ bool WindowLayerController::reconcile(int strategy, bool panelForeground, bool o
     // panel. Its native tips/popups follow it; panel dialogs retain precedence.
     if (overlayAllowed && toolbar_ && toolbar_->isVisible()) {
         const auto toolbarId = handle(toolbar_);
-        const auto after = insertion(strategy > 0 || (panel && baselineTopmost_) ? HWND_TOPMOST : HWND_TOP);
+        if (!onTop && !(panel && baselineTopmost_) && topmost(toolbar_))
+            success = position(toolbarId, insertion(HWND_NOTOPMOST)) && success;
+        const auto after = insertion(onTop || (panel && baselineTopmost_) ? HWND_TOPMOST : HWND_TOP);
         success = position(toolbarId, after) && success;
         for (const auto& owned : visibleOwnedWindows(toolbarId))
             success = position(owned.handle, after) && success;
     }
 
     if (panel) {
-        const auto after = insertion(strategy > 0 || baselineTopmost_ ? HWND_TOPMOST : HWND_TOP);
+        const auto after = insertion(onTop || baselineTopmost_ ? HWND_TOPMOST : HWND_TOP);
         // Native dialogs do not necessarily have a QWindow.
         for (const auto& owned : visibleOwnedWindows(mainId))
             success = position(owned.handle, after) && success;
     }
     ready_ = success;
+    if (success) emit orderAdjusted();
     if (!success && !failureReported_) {
         failureReported_ = true;
         emit operationFailed(QStringLiteral("窗口层级调整失败；面板操作期间暂时隐藏弹幕并重试"));

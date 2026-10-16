@@ -107,7 +107,7 @@ PageFrame {
         title: I18n.settings.syncSection; Layout.fillWidth: true
         SettingsRow { title: I18n.settings.timeOffsetTitle; description: I18n.settings.timeOffsetDesc; SpinBox { from: -1200; to: 1200; value: Math.round(page.values.timeOffset * 10); editable: true; Accessible.name: I18n.settings.timeOffsetAccessible; onValueModified: page.put("timeOffset", value / 10) } }
         SettingsRow { title: I18n.settings.screenTitle; AppComboBox { model: page.backend.screens; currentIndex: Math.min(page.values.screenIndex, count - 1); implicitWidth: 240; Accessible.name: I18n.settings.screenAccessible; onActivated: page.put("screenIndex", currentIndex) } }
-        SettingsRow { title: I18n.settings.onTopTitle; AppComboBox { model: I18n.settings.onTopOptions; currentIndex: page.values.onTop; implicitWidth: 160; Accessible.name: I18n.settings.onTopAccessible; onActivated: page.put("onTop", currentIndex) } }
+        SettingsRow { title: I18n.settings.onTopTitle; AppComboBox { objectName: "onTopChoice"; model: I18n.settings.onTopOptions; currentIndex: page.values.onTop; implicitWidth: 160; Accessible.name: I18n.settings.onTopAccessible; onActivated: page.put("onTop", currentIndex) } }
         SettingsRow { title: I18n.settings.foregroundOnlyTitle; description: I18n.settings.foregroundOnlyDesc; Switch { checked: page.values.foregroundOnly; Accessible.name: I18n.settings.foregroundOnlyAccessible; onToggled: page.put("foregroundOnly", checked) } }
     }
 

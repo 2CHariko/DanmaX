@@ -494,16 +494,15 @@ private slots:
         const auto topmost = ~quintptr(0);
         const auto notTopmost = ~quintptr(1);
         layers.attach(&panel, &overlay, &toolbar);
-        QVERIFY(layers.reconcile(3, true, true, true));
-        QCOMPARE(calls.size(), std::size_t(4));
+        QVERIFY(layers.reconcile(1, true, true, true));
+        QCOMPARE(calls.size(), std::size_t(3));
         QCOMPARE(calls[0].window, overlay.winId());
-        QCOMPARE(calls[0].after, notTopmost);
-        QCOMPARE(calls[1].after, topmost);
-        QCOMPARE(calls[2].window, panel.winId());
+        QCOMPARE(calls[0].after, topmost);
+        QCOMPARE(calls[1].window, panel.winId());
         QCOMPARE(calls.back().window, toolbar.winId());
         for (const auto& call : calls) QCOMPARE(call.flags, unsigned(0x213)); // NOMOVE|NOSIZE|NOACTIVATE|NOOWNERZORDER
         calls.clear();
-        QVERIFY(layers.reconcile(3, false, true, true));
+        QVERIFY(layers.reconcile(1, false, true, true));
         QCOMPARE(calls.front().window, panel.winId());
         QCOMPARE(calls.front().after, notTopmost);
         QCOMPARE(calls.back().window, toolbar.winId());
@@ -531,9 +530,9 @@ private slots:
         panel.setFlag(Qt::WindowStaysOnTopHint, true);
         panel.show();
         layers.attach(&panel, &overlay, &toolbar);
-        QVERIFY(layers.reconcile(2, true, true));
+        QVERIFY(layers.reconcile(1, true, true));
         calls.clear();
-        QVERIFY(layers.reconcile(2, false, false));
+        QVERIFY(layers.reconcile(1, false, false));
         QVERIFY(calls.empty());
     }
 
@@ -561,8 +560,7 @@ private slots:
         QVERIFY(renderer.snapshotCount() > 0);
         QVERIFY(controller.toolbarPointer()->property("enabled").toBool());
         succeed = false;
-        auto* settings = qobject_cast<SettingsStore*>(controller.settings());
-        QVERIFY(settings->setValue("onTop", 2));
+        controller.findChild<WindowLayerController*>()->invalidate();
         QTRY_VERIFY(!controller.overlayVisible());
         const auto hiddenPosition = controller.position();
         QTest::qWait(100);

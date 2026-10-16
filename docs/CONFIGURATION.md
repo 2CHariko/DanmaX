@@ -31,7 +31,7 @@ DanmaX 采用纯 UTF-8 编码的 `settings.ini` 文件作为统一配置存储�
 | `[Sync]` | `targetSession` | 字符串 | SMTC 来源应用 ID | `""` | 播放页选择后记住；会话消失时等待相同 ID，再次出现自动连接，不切换其他播放器。留空取消绑定。 |
 | `[Sync]` | `automaticDanmaku` | 布尔值 | `true`, `false` | `false` | 开启标题识别、缓存优先匹配、在线唯一匹配下载及连续切集。手动来源操作／停止会暂停本次运行的自动匹配。 |
 | `[Window]` | `screenIndex` | 整数 | 0 ~ 32 | `0` | 覆盖层所在显示器索引。索引超出实际屏幕数时自动回退主显示器。 |
-| `[Window]` | `onTop` | 整数 | `0`, `1`, `2`, `3` | `1` | 覆盖层置顶策略。0=不置顶，1=常规置顶，2=定时保持，3=撤销再恢复兼容。 |
+| `[Window]` | `onTop` | 整数 | `0`, `1` | `1` | 0=不置顶，1=置顶。统一使用窗口事件恢复与 100 ms 周期检查，层级正常时不重复提升；同格式旧值 2/3 读取后迁移并保存为 1。 |
 | `[Window]` | `foregroundOnly` | 布尔值 | `true`, `false` | `false` | 仅播放器处于前台时显示覆盖层。适用于同步模式；无法识别时建议关闭。 |
 | `[Diagnostics]` | `debug` | 布尔值 | `true`, `false` | `false` | 是否在覆盖层展示性能与调试统计信息（更新率、内存、图片节点等）。 |
 | `[Diagnostics]` | `debugPosition` | 字符串 | `"top_left"`, `"top_right"`, `"bottom_left"`, `"bottom_right"` | `"top_left"` | 调试统计信息在屏幕上的锚定角落位置。 |

@@ -177,7 +177,9 @@ if(DANMAKU_BUILD_APP)
             file(WRITE "${CMAKE_BINARY_DIR}/ui-source/i18n/qmldir" "singleton I18n 1.0 I18n.qml\n")
             target_compile_definitions(ui_workflow_tests PRIVATE DANMAKU_UI_DIR="${CMAKE_BINARY_DIR}/ui-source")
             add_test(NAME ui_workflow COMMAND ui_workflow_tests -o "${CMAKE_BINARY_DIR}/ui-workflow-tests.txt,txt")
-            set_tests_properties(ui_workflow PROPERTIES TIMEOUT 120 ENVIRONMENT "QT_QUICK_BACKEND=software")
+            # The full GUI suite includes asynchronous workflows and native
+            # cross-process probes; Debug/software runs need more than 120 s.
+            set_tests_properties(ui_workflow PROPERTIES TIMEOUT 240 ENVIRONMENT "QT_QUICK_BACKEND=software")
         endif()
         add_executable(online_danmaku_tests tests/runtime/OnlineDanmakuTests.cpp)
         add_executable(automatic_danmaku_tests tests/runtime/AutomaticDanmakuTests.cpp)

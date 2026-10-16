@@ -2,7 +2,9 @@
 #include <QObject>
 #include <QPointer>
 #include <QWindow>
+#include <QTimer>
 #include <functional>
+#include <vector>
 
 // Owns native Z-order policy without changing Qt flags or activating a window.
 class WindowLayerController final : public QObject {
@@ -13,10 +15,11 @@ public:
     ~WindowLayerController() override;
     void attach(QWindow* main, QWindow* overlay, QWindow* toolbar);
     void invalidate();
-    bool reconcile(int strategy, bool panelForeground, bool overlayAllowed, bool periodic = false);
+    bool reconcile(bool onTop, bool panelForeground, bool overlayAllowed, bool checkOrder = false);
 signals:
     void invalidated();
     void operationFailed(const QString& message);
+    void orderAdjusted();
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 private:
@@ -25,6 +28,10 @@ private:
     bool position(quintptr window, quintptr after);
     bool restoreMain();
     void scheduleInvalidation();
+    void updateMaintenance();
+    void stopMaintenance();
+    void maintain();
+    bool needsRepair(bool panel) const;
     QPointer<QWindow> main_, overlay_, toolbar_;
     Positioner positioner_;
     bool injected_{};
@@ -32,5 +39,7 @@ private:
     quintptr foregroundHandle_{};
     bool baselineTopmost_{}, modified_{}, dirty_{true}, reconciling_{}, queued_{};
     bool panelForeground_{}, overlayAllowed_{}, ready_{true}, failureReported_{};
-    int strategy_{};
+    bool onTop_{};
+    QTimer maintenanceTimer_, eventTimer_;
+    std::vector<quintptr> eventHooks_;
 };

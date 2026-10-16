@@ -64,7 +64,7 @@ const QList<Setting>& schema() {
         {"Window", "screenIndex", 0,
          "弹幕显示器索引，整数 0～32，默认：0（系统枚举的第一台）。\n按播放时的显示器列表选择；显示器断开或索引越界时使用可用显示器。"},
         {"Window", "onTop", 1,
-         "覆盖窗置顶策略，整数 0～3，默认：1。\n0=不置顶；1=置顶；2=周期保持置顶；3=先取消再恢复置顶的兼容策略。\n不保证覆盖独占全屏、受保护视频或其他置顶窗口。"},
+         "覆盖窗置顶，整数 0 或 1，默认：1。\n0=不置顶；1=置顶，使用窗口事件恢复与 100 毫秒周期检查。旧值 2/3 自动迁移为 1。\n不保证覆盖独占全屏、受保护视频或其他置顶窗口。"},
         {"Window", "foregroundOnly", false,
          "仅所选播放器在前台时显示：true=开启，false=关闭，默认：false。\n用于媒体同步模式；无法关联媒体会话与前台窗口时请关闭，独立播放不受此项限制。"},
         {"Diagnostics", "debug", false,
@@ -99,7 +99,7 @@ QVariant checked(const QString& key, const QVariant& value, const QVariant& fall
         {"fontSize", {10, 72}},   {"strokeWidth", {0, 6}},   {"opacity", {0.05, 1}},
         {"speed", {30, 1500}},    {"fixedSeconds", {1, 30}}, {"maxActive", {50, 5000}},
         {"maxTracks", {1, 60}},   {"lineSpacing", {0, 2}},   {"timeOffset", {-120, 120}},
-        {"screenIndex", {0, 32}}, {"onTop", {0, 3}}, {"textureBudgetMiB", {32, 1024}}};
+        {"screenIndex", {0, 32}}, {"onTop", {0, 1}}, {"textureBudgetMiB", {32, 1024}}};
     if (ranges.contains(key)) {
         bool ok;
         const double n = value.toDouble(&ok);
@@ -129,6 +129,11 @@ QVariant checked(const QString& key, const QVariant& value, const QVariant& fall
     return text;
 }
 QVariant checkedIni(const Setting& field, QVariant raw) {
+    if (QString::fromLatin1(field.key) == "onTop") {
+        bool ok{};
+        const double value = raw.toDouble(&ok);
+        if (ok && (value == 2 || value == 3)) raw = 1;
+    }
     if (QString::fromLatin1(field.key) == "danmakuServers") {
         const auto doc = QJsonDocument::fromJson(raw.toString().toUtf8());
         if (!doc.isArray()) return {};
@@ -225,6 +230,7 @@ SettingsStore::SettingsStore(QString directory, QObject* parent)
     connect(&saveTimer_, &QTimer::timeout, this, [this] { save(); });
     QFile file(path_);
     const bool existing = file.exists();
+    bool migratedTopmost = false;
     if (existing) {
         if (!file.open(QIODevice::ReadOnly))
             error_ = file.errorString();
@@ -261,18 +267,24 @@ SettingsStore::SettingsStore(QString directory, QObject* parent)
                     error_ = QStringLiteral("INI 格式或版本无效，已使用默认值；原文件保留，不进行兼容迁移。");
                 else {
                     values_ = std::move(candidate);
+                    const auto oldTopmost = ini.value("Window/onTop").toString();
+                    bool ok{};
+                    const double oldValue = oldTopmost.toDouble(&ok);
+                    migratedTopmost = ok && (oldValue == 2 || oldValue == 3);
                     if (!invalid.isEmpty())
                         error_ = QStringLiteral("以下配置无效，已使用默认值：") + invalid.join(QStringLiteral("、"));
                 }
             }
         }
     }
+    // Windows cannot atomically replace the INI while our read handle is open.
+    file.close();
     preserveOriginal_ = !error_.isEmpty();
     if (qGuiApp)
         connect(qGuiApp->styleHints()->accessibility(), &QAccessibilityHints::contrastPreferenceChanged, this,
                 [this] { applyTheme(); });
     applyTheme();
-    if (!existing)
+    if (!existing || (migratedTopmost && error_.isEmpty()))
         save();
 }
 SettingsStore::~SettingsStore() {
