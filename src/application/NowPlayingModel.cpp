@@ -7,7 +7,7 @@
 namespace { quint64 nextCommand() { static std::atomic<quint64> id{quint64(1) << 59}; return ++id; } }
 NowPlayingModel::NowPlayingModel(AppController* app) : QObject(app), app_(app) {
     connect(this, &NowPlayingModel::playbackRequested, &app_->monitor_, &MediaMonitor::requestPlayback);
-    connect(this, &NowPlayingModel::seekRequested, &app_->monitor_, &MediaMonitor::requestSeek);
+    connect(this, &NowPlayingModel::seekRequested, &app_->seek_, &SeekController::requestSeek);
     connect(&app_->danmaku_, &DanmakuSession::changed, this, &NowPlayingModel::refresh);
     connect(&app_->danmaku_, &DanmakuSession::sourceFailed, this, [this](const QString& error) { error_ = error; emit changed(); });
     deadline_.setSingleShot(true);
@@ -23,9 +23,18 @@ NowPlayingModel::NowPlayingModel(AppController* app) : QObject(app), app_(app) {
         if (!pending_ || id != request_ || desiredPosition_ >= 0) return;
         if (!success) finish(false, error); else { accepted_ = true; if (observed_) finish(true, {}); }
     });
-    connect(&app_->monitor_, &MediaMonitor::seekFinished, this, [this](quint64 id, bool success, const QString& error) {
-        if (!pending_ || id != request_ || desiredPosition_ < 0) return;
-        if (!success) finish(false, error); else { accepted_ = true; if (observed_) finish(true, {}); }
+    connect(&app_->seek_, &SeekController::finished, this, [this](quint64 id, bool success, const QString& error) {
+        if (id != request_ || desiredPosition_ < 0 || ownerGeneration_ != contextId()) return;
+        if (pending_ || success) finish(success, error);
+    });
+    connect(&app_->seek_, &SeekController::landed, this, [this](quint64 id, const MediaSample& actual, bool approximate) {
+        if ((id != request_ || ownerGeneration_ != contextId()) &&
+            !(app_->media_.restoring_ && id == app_->media_.seekRequest_)) return;
+        if (approximate) {
+            const auto seconds = qint64(actual.position);
+            seekNotice_ = QStringLiteral("播放器实际定位至 %1:%2").arg(seconds / 60).arg(seconds % 60, 2, 10, QChar('0'));
+            noticeUntil_ = MediaMonitor::monotonicSeconds() + 5;
+        }
     });
 
 }
@@ -48,7 +57,11 @@ bool NowPlayingModel::fresh() const {
         && (sample_.playback == MediaSample::Playback::Playing || sample_.playback == MediaSample::Playback::Paused);
 }
 bool NowPlayingModel::canPlay() const { return standalone() ? !busy() && count() > 0 : !busy() && fresh() && (playing() ? sample_.canPause : sample_.canPlay); }
-bool NowPlayingModel::canSeek() const { return standalone() ? !busy() && count() > 0 && duration() > 0 : !busy() && fresh() && sample_.canSeek && duration() > 0; }
+bool NowPlayingModel::canSeek() const {
+    if (standalone()) return !busy() && count() > 0 && duration() > 0;
+    const bool available = seekPending() ? active() && expected_.canSeek : fresh() && sample_.canSeek;
+    return (!busy() || seekPending()) && !app_->media_.restoring_ && !app_->media_.loading_ && available && duration() > 0;
+}
 QVariantMap NowPlayingModel::metadata() const { return standalone() ? app_->danmaku_.metadata_ : video() ? app_->media_.contentMetadata_ : QVariantMap{}; }
 QString NowPlayingModel::title() const {
     if (standalone()) {
@@ -82,6 +95,7 @@ QString NowPlayingModel::status() const {
         : count() == 0 ? app_->danmaku_.status() : playing() ? QStringLiteral("正在独立播放弹幕") : QStringLiteral("独立弹幕已暂停");
     if (!video() && openingStandalone()) return QStringLiteral("正在读取独立弹幕 XML…");
     if (pending_) return desiredPosition_ >= 0 ? QStringLiteral("正在确认定位…") : QStringLiteral("正在确认播放状态…");
+    if (!seekNotice_.isEmpty() && MediaMonitor::monotonicSeconds() < noticeUntil_) return seekNotice_;
     if (!video()) return app_->media_.error().isEmpty() ? QStringLiteral("打开视频，或从更多菜单独立播放弹幕") : app_->media_.status();
     if (active() && app_->media_.confirmed_ && !fresh() && !busy()) return QStringLiteral("等待播放器恢复同步，仍可选择弹幕来源");
     if (fresh() && !busy()) return (playing() ? QStringLiteral("正在播放 · ") : QStringLiteral("已暂停 · ")) + app_->media_.status_;
@@ -104,7 +118,7 @@ bool NowPlayingModel::same(const MediaSample& sample) const {
 
 void NowPlayingModel::refresh() {
     if (displayGeneration_ != app_->coordinator_.generation()) {
-        displayGeneration_ = app_->coordinator_.generation(); error_.clear();
+        displayGeneration_ = app_->coordinator_.generation(); error_.clear(); seekNotice_.clear();
     }
     if (pending_ && (ownerGeneration_ != app_->coordinator_.generation() || expected_.generation != app_->mediaGeneration_)) finish(false, {});
     emit changed();
@@ -114,7 +128,7 @@ void NowPlayingModel::observe(const MediaSample& sample) {
     sample_ = sample;
     if (pending_) {
         if (!same(sample)) finish(false, QStringLiteral("播放器内容或连接已改变，已取消操作"));
-        else if (sample.usableTimeline() && sample.observedAt > requestedAt_) {
+        else if (desiredPosition_ < 0 && sample.usableTimeline() && sample.observedAt > requestedAt_) {
             const double advance = sample.playing ? (sample.observedAt - requestedAt_) * sample.rate : 0;
             observed_ = desiredPosition_ >= 0 ? std::abs(sample.position - desiredPosition_ - advance) <= 1 : sample.playing == desiredPlay_;
             if (observed_ && accepted_) finish(true, {});
@@ -123,9 +137,12 @@ void NowPlayingModel::observe(const MediaSample& sample) {
     emit changed();
 }
 void NowPlayingModel::request(bool play, double seconds) {
-    expected_ = sample_; desiredPlay_ = play; desiredPosition_ = seconds; requestedAt_ = MediaMonitor::monotonicSeconds();
+    if (!seekPending() || sample_.usableTimeline()) expected_ = sample_;
+    desiredPlay_ = play; desiredPosition_ = seconds; requestedAt_ = MediaMonitor::monotonicSeconds();
     ownerGeneration_ = app_->coordinator_.generation(); request_ = nextCommand(); pending_ = true; accepted_ = observed_ = false; error_.clear();
-    deadline_.start(seconds >= 0 ? 5000 : 3000); emit changed();
+    seekNotice_.clear();
+    if (seconds < 0) deadline_.start(3000); else deadline_.stop();
+    emit changed();
     if (seconds >= 0) emit seekRequested(expected_, seconds, request_);
     else emit playbackRequested(expected_, play, request_);
 }

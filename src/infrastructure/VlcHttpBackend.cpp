@@ -15,6 +15,7 @@
 #include <QTcpServer>
 #include <QUuid>
 #include <cmath>
+#include <algorithm>
 
 static void initializeVlcBridge() { Q_INIT_RESOURCE(vlc_bridge); }
 VlcHttpBackend::VlcHttpBackend(QString directory, QObject* parent, Hooks hooks)
@@ -36,6 +37,8 @@ VlcHttpBackend::VlcHttpBackend(QString directory, QObject* parent, Hooks hooks)
 }
 VlcHttpBackend::~VlcHttpBackend() {
     discovery_.request_stop(); if (discovery_.joinable()) discovery_.join();
+    closeOwned();
+    for (auto& closing : closing_) if (closing.worker.joinable()) closing.worker.join();
     invalidate();
 }
 void VlcHttpBackend::publishSessions() {
@@ -65,8 +68,27 @@ void VlcHttpBackend::select(const QString& id, quint64 generation) {
     timer_.start(); QTimer::singleShot(0, this, &VlcHttpBackend::poll);
 }
 void VlcHttpBackend::cancelOpen() {
-    pendingOpen_.clear(); openingTarget_.clear(); invalidate();
-    if (!selected_.isEmpty() && selected_ == session_) timer_.start();
+    closeOwned();
+}
+void VlcHttpBackend::closeOwned(const QString& id) {
+    if (session_.isEmpty() || (!id.isEmpty() && id != session_)) return;
+    const auto session = session_, executable = executable_;
+    invalidate(); pendingOpen_.clear(); openingTarget_.clear();
+    session_.clear(); executable_.clear(); password_.clear(); port_ = 0;
+    std::erase_if(closing_, [](const auto& item) { return item.done->load(); });
+    const auto close = hooks_.close ? hooks_.close
+        : std::function<QString(const QString&, const QString&)>(PlayerProcessIdentity::closeNormally);
+    auto done = std::make_shared<std::atomic_bool>(false);
+    closing_.push_back({session, done, std::jthread([this, session, executable, close, done] {
+        const auto error = close(session, executable);
+        QMetaObject::invokeMethod(this, [this, session, error] {
+            if (error.isEmpty()) emit ownedExited(session);
+            else emit closeFailed(error);
+            publishSessions();
+        }, Qt::QueuedConnection);
+        done->store(true);
+    })});
+    publishSessions();
 }
 ManagedPlaybackOpen VlcHttpBackend::open(const QString& executable, const QString& video) {
     const auto issue = VlcLauncher::validate(executable);
@@ -74,7 +96,10 @@ ManagedPlaybackOpen VlcHttpBackend::open(const QString& executable, const QStrin
     if (!QFileInfo(video).isAbsolute() || !QFileInfo(video).isFile()) return {{}, QStringLiteral("视频文件不存在")};
     if (directory_.isEmpty() || !QFileInfo(directory_).isAbsolute()) return {{}, QStringLiteral("VLC 运行目录未配置")};
     const auto canonical = QFileInfo(executable).canonicalFilePath();
+    std::erase_if(closing_, [](const auto& item) { return item.done->load(); });
+    if (closing_.size() >= 4) return {{}, QStringLiteral("旧 VLC 仍在退出，请先完成关闭")};
     const bool reuse = executable_.compare(canonical, Qt::CaseInsensitive) == 0 && alive();
+    if (!reuse) closeOwned();
     invalidate(); pendingOpen_ = QUrl::fromLocalFile(QFileInfo(video).canonicalFilePath()).toString(QUrl::FullyEncoded);
     openingTarget_ = pendingOpen_; openedFromItem_.clear(); operation_ = QUuid::createUuid().toString(QUuid::Id128);
     if (!reuse) {
@@ -149,7 +174,7 @@ void VlcHttpBackend::poll() {
         if (!latest_.found || command.expected.id != selected_ || command.expected.generation != generation_
             || !std::isfinite(age) || age < 0 || age > 2.5 || !command.expected.sameConnection(latest_)
             || command.expected.contentDiffers(latest_) || latestItem_.isEmpty()) {
-            if (command.seek) emit seekFinished(command.request, false, QStringLiteral("媒体或连接已改变"));
+            if (command.seek) reportSeek(command.request, SeekDispatch::Outcome::Rejected, QStringLiteral("媒体或连接已改变，未发送定位"));
             else emit playbackControlFinished(command.request, false, QStringLiteral("媒体或连接已改变"));
             return;
         }
@@ -171,11 +196,13 @@ void VlcHttpBackend::requestSeek(MediaSample expected, double seconds, quint64 r
         || expected.duration <= 0 || expected.duration > 366 * 86400.0 || !std::isfinite(expected.observedAt)
         || seconds < 0 || seconds > expected.duration || commands_.size() >= 8
         || expected.id != selected_ || expected.generation != generation_ || !alive()) {
-        emit seekFinished(request, false, QStringLiteral("定位目标无效或播放器不支持定位")); return;
+        reportSeek(request, SeekDispatch::Outcome::Rejected, QStringLiteral("定位目标无效或播放器不支持定位")); return;
     }
     commands_.push_back({std::move(expected), false, request, seconds, true}); poll();
 }
 void VlcHttpBackend::request(QUrlQuery query, const QString& kind, quint64 control) {
+    const auto before = latest_;
+    const double issuedAt = MediaMonitor::monotonicSeconds();
     const auto requestId = QString::number(++sequence_); query.addQueryItem("request", requestId);
     QUrl url; url.setScheme("http"); url.setHost("127.0.0.1"); url.setPort(port_); url.setPath("/status.json"); url.setQuery(query);
     QNetworkRequest request(url);
@@ -189,7 +216,7 @@ void VlcHttpBackend::request(QUrlQuery query, const QString& kind, quint64 contr
         if (body_.size() + reply->bytesAvailable() > 65536) { reply->abort(); return; }
         body_.append(reply->readAll());
     });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, epoch, requestId, kind, control] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, epoch, requestId, kind, control, before, issuedAt] {
         reply->deleteLater(); if (epoch != epoch_ || reply_ != reply) return;
         reply_.clear(); const auto payload = body_; body_.clear();
         if (!alive()) { unavailable(QStringLiteral("VLC 实例已退出")); return; }
@@ -199,7 +226,7 @@ void VlcHttpBackend::request(QUrlQuery query, const QString& kind, quint64 contr
         if (!decoded) {
             unavailable(QStringLiteral("VLC 接口响应无效或超时，正在重试"));
             if (control) {
-                if (kind == "seek") emit seekFinished(control, false, QStringLiteral("VLC 定位响应无效"));
+                if (kind == "seek") reportSeek(control, SeekDispatch::Outcome::Unknown, QStringLiteral("VLC 定位响应未得到确认，正在核对播放位置"), before, issuedAt, MediaMonitor::monotonicSeconds());
                 else emit playbackControlFinished(control, false, QStringLiteral("VLC 控制响应无效"));
             }
             return;
@@ -233,7 +260,8 @@ void VlcHttpBackend::request(QUrlQuery query, const QString& kind, quint64 contr
         }
         if (control) {
             const auto error = decoded->accepted ? QString() : QStringLiteral("VLC 内容已改变，未执行控制");
-            if (kind == "seek") emit seekFinished(control, decoded->accepted, error);
+            if (kind == "seek") reportSeek(control, decoded->accepted ? SeekDispatch::Outcome::Submitted : SeekDispatch::Outcome::Rejected,
+                error, before, issuedAt, MediaMonitor::monotonicSeconds());
             else emit playbackControlFinished(control, decoded->accepted, error);
         }
     });

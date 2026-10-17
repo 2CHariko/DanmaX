@@ -11,10 +11,13 @@
 
 MediaMonitor::MediaMonitor(QObject* parent, const QString& playerDirectory) : QObject(parent) {
     qRegisterMetaType<MediaSample>();
+    qRegisterMetaType<SeekDispatch>();
     vlc_ = new VlcHttpBackend(playerDirectory, this);
     pot_ = new PotPlayerBackend(this);
     connect(pot_, &PotPlayerBackend::ownedExited, this, &MediaMonitor::ownedPlayerExited);
     connect(pot_, &PotPlayerBackend::closeFailed, this, &MediaMonitor::ownedPlayerCloseFailed);
+    connect(vlc_, &VlcHttpBackend::ownedExited, this, &MediaMonitor::ownedPlayerExited);
+    connect(vlc_, &VlcHttpBackend::closeFailed, this, &MediaMonitor::ownedPlayerCloseFailed);
     backends_ = {vlc_, pot_};
     for (auto* backend : backends_) {
         connect(backend, &MediaPlaybackBackend::sampleReceived, this, [this, backend](MediaSample sample) {
@@ -25,6 +28,7 @@ MediaMonitor::MediaMonitor(QObject* parent, const QString& playerDirectory) : QO
         });
         connect(backend, &MediaPlaybackBackend::playbackControlFinished, this, &MediaMonitor::playbackControlFinished);
         connect(backend, &MediaPlaybackBackend::seekFinished, this, &MediaMonitor::seekFinished);
+        connect(backend, &MediaPlaybackBackend::seekDispatched, this, &MediaMonitor::seekDispatched);
     }
     connect(vlc_, &MediaPlaybackBackend::sessionsChanged, this, [this](QVariantList list) { vlcSessions_ = std::move(list); publishSessions(); });
 }

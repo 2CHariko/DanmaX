@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QSaveFile>
 #include <QProcess>
 #include <QQuickWindow>
@@ -44,6 +45,54 @@ QString write(const QString& directory, const QString& name, const QByteArray& d
 class PotPlayerPlaybackTests final : public QObject {
     Q_OBJECT
 private slots:
+    void timedOutNativeSeekCompletesWithoutDuplicateAndCoalesces() {
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        const auto exe = directory.filePath("PotPlayerMini64.exe"); QVERIFY(QFile::copy(QString::fromUtf8(POTPLAYER_FIXTURE), exe));
+        const auto video = write(directory.path(), "delayed.avi", "fixture");
+        MediaMonitor monitor(nullptr, directory.filePath("cache")); SeekController seek(&monitor);
+        QSignalSpy samples(&monitor, &MediaMonitor::sampleReceived), done(&seek, &SeekController::finished), receipts(&monitor, &MediaMonitor::seekDispatched);
+        const auto opened = monitor.openManaged("potplayer", exe, video); QVERIFY(opened.error.isEmpty());
+        monitor.select(opened.sessionId, true); QTRY_VERIFY(!samples.empty() && latest(samples).found);
+        QCOMPARE(query(window(opened.sessionId), 0x5ff3, 700), 1);
+        seek.requestSeek(latest(samples), 30, 1);
+        QTRY_VERIFY_WITH_TIMEOUT(!done.empty(), 5000); QVERIFY(done.last()[1].toBool());
+        QCOMPARE(qvariant_cast<SeekDispatch>(receipts.first()[0]).outcome, SeekDispatch::Outcome::Unknown);
+        QCOMPARE(query(window(opened.sessionId), 0x5ff4), 1);
+        seek.requestSeek(latest(samples), 60, 2); seek.requestSeek(latest(samples), 90, 3); seek.requestSeek(latest(samples), 95, 4);
+        QTRY_VERIFY_WITH_TIMEOUT(done.last()[0].toULongLong() == 4 && done.last()[1].toBool(), 6000);
+        QCOMPARE(query(window(opened.sessionId), 0x5ff4), 3); // 30, 60, 95; 90 was never sent.
+        monitor.closeOwnedPlayer(opened.sessionId); QTRY_VERIFY(!PlayerProcessIdentity::alive(opened.sessionId));
+    }
+    void realLargeSeeksAndLatestTarget() {
+        const auto executable = qEnvironmentVariable("DANMAKU_REAL_POTPLAYER");
+        const auto video = QFileInfo(qEnvironmentVariable("DANMAKU_REAL_POTPLAYER_SEEK_VIDEO")).canonicalFilePath();
+        if (executable.isEmpty() || video.isEmpty()) QSKIP("Explicit real large-seek video not supplied");
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        const auto xml = write(directory.path(), "seek.xml", "<i><d p=\"0,1,25,16777215\">Seek transaction</d><d p=\"1000,1,25,16777215\">Later</d></i>");
+        const auto data = directory.filePath("data"); QDir().mkpath(data);
+        { RecentVideoStore recent(data); recent.opened(video); recent.checkpoint(video, 0, 1500, {{"kind", "xml"}, {"path", xml}}); }
+        AppController app(data, nullptr, [](const QString&) { return true; }, directory.filePath("cache"));
+        auto* settings = qobject_cast<SettingsStore*>(app.settings()); settings->setDanmakuServers({}); settings->setValue("foregroundOnly", false);
+        QVERIFY(qobject_cast<ExternalPlayerStore*>(app.players())->setExecutable(executable));
+        QQuickWindow overlay; overlay.resize(800, 600); DanmakuItem renderer; renderer.setParentItem(overlay.contentItem()); renderer.setSize({800, 600}); app.attach(&renderer, &overlay);
+        auto* media = qobject_cast<MediaSession*>(app.media()); auto* now = qobject_cast<NowPlayingModel*>(app.nowPlaying());
+        media->openVideo(video); QTRY_VERIFY2_WITH_TIMEOUT(now->canSeek() && now->count() == 2, qPrintable(media->error() + media->status()), 15000);
+        const auto session = media->boundSession(); QJsonArray report;
+        for (const double target : {120.0, 600.0, 1100.0, 407.0}) {
+            QElapsedTimer elapsed; elapsed.start(); now->seek(target); QVERIFY(now->seekPending());
+            QCOMPARE(now->seekPreviewPosition(), target);
+            QTRY_VERIFY_WITH_TIMEOUT(!now->seekPending(), 11000);
+            QVERIFY2(now->error().isEmpty(), qPrintable(now->error())); QVERIFY(media->active()); QCOMPARE(now->count(), 2);
+            report.append(QJsonObject{{"target", target}, {"actual", now->position()}, {"status", now->status()}, {"elapsedMs", elapsed.elapsed()}});
+        }
+        now->seek(200); now->seek(700); now->seek(1000);
+        QCOMPARE(now->seekPreviewPosition(), 1000.0);
+        QTRY_VERIFY_WITH_TIMEOUT(!now->seekPending(), 16000); QVERIFY2(now->error().isEmpty(), qPrintable(now->error()));
+        report.append(QJsonObject{{"latestTarget", 1000}, {"actual", now->position()}, {"status", now->status()}});
+        const auto output = qEnvironmentVariable("DANMAKU_POTPLAYER_ARTIFACTS");
+        if (!output.isEmpty()) { QDir().mkpath(output); QSaveFile file(QDir(output).filePath("large-seeks.json")); QVERIFY(file.open(QIODevice::WriteOnly)); file.write(QJsonDocument(report).toJson()); QVERIFY(file.commit()); }
+        now->endPlayback(); QTRY_VERIFY(!PlayerProcessIdentity::alive(session));
+    }
     void playlistCaptionChangesKeepPlayback() {
         QTemporaryDir directory; QVERIFY(directory.isValid());
         const auto exe = directory.filePath("PotPlayerMini64.exe"); QVERIFY(QFile::copy(QString::fromUtf8(POTPLAYER_FIXTURE), exe));
@@ -166,8 +215,8 @@ private slots:
         QVERIFY(media->active()); QVERIFY(now->canSelectSource()); QVERIFY(now->canPlay()); QCOMPARE(now->count(), 40);
         now->togglePlayback(); QTRY_VERIFY_WITH_TIMEOUT(!now->busy() && !now->playing(), 5000);
         now->seek(6); QTRY_VERIFY_WITH_TIMEOUT(!now->busy(), 6000);
-        QVERIFY2(std::abs(now->position() - 6) <= 1,
-                 qPrintable(QString("MP4 seek readback: %1; %2").arg(now->position()).arg(now->error())));
+        QVERIFY2(now->error().isEmpty(), qPrintable(now->error()));
+        if (std::abs(now->position() - 6) > 1) QVERIFY(now->status().contains(QStringLiteral("实际定位")));
         QVERIFY(app.running()); QCOMPARE(now->count(), 40);
         app.stop(); QTRY_VERIFY_WITH_TIMEOUT(!PlayerProcessIdentity::alive(session), 5000);
     }

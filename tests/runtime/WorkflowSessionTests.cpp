@@ -56,6 +56,7 @@ struct Harness {
         QTest::qWait(2); sample.id = service->sessionId(); sample.generation = monitor->generation(); sample.observedAt = MediaMonitor::monotonicSeconds();
         sample.identity = sample.title; // Deliberately unstable metadata: the product clock uses the content task.
         QMetaObject::invokeMethod(&app, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
+        app.findChild<SeekController*>()->observe(sample);
     }
     void open(int intent = MediaSession::Normal) {
         media->openVideo(f.video, intent); sample.title = QFileInfo(f.video).fileName(); send();
@@ -65,6 +66,61 @@ struct Harness {
 class WorkflowSessionTests final : public QObject {
     Q_OBJECT
 private slots:
+    void seekUnknownDeliveryCoalescesAndRequiresReadback() {
+        MediaMonitor monitor; SeekController seek(&monitor, nullptr, 1000, 1000);
+        disconnect(&seek, &SeekController::dispatchRequested, &monitor, &MediaMonitor::requestSeek);
+        QSignalSpy dispatch(&seek, &SeekController::dispatchRequested), done(&seek, &SeekController::finished);
+        MediaSample sample; sample.id = "test-player"; sample.generation = sample.sessionToken = 1;
+        sample.found = sample.canSeek = true; sample.playback = MediaSample::Playback::Paused;
+        sample.position = 10; sample.duration = 120; sample.observedAt = MediaMonitor::monotonicSeconds();
+        seek.requestSeek(sample, 30, 1); QCOMPARE(dispatch.size(), 1);
+        const auto issued = MediaMonitor::monotonicSeconds();
+        monitor.seekDispatched({1, SeekDispatch::Outcome::Unknown, sample, issued, issued, "timeout"});
+        monitor.seekFinished(1, false, "timeout"); QVERIFY(done.empty());
+        seek.requestSeek(sample, 50, 2); seek.requestSeek(sample, 70, 3);
+        QCOMPARE(dispatch.size(), 1); QCOMPARE(done.size(), 1); QCOMPARE(done[0][0].toULongLong(), quint64(2));
+        QTest::qWait(2); sample.observedAt = MediaMonitor::monotonicSeconds(); seek.observe(sample);
+        QCOMPARE(dispatch.size(), 1); // A fresh but unchanged pre-seek position is not completion.
+        sample.position = 30; QTest::qWait(2); sample.observedAt = MediaMonitor::monotonicSeconds(); seek.observe(sample);
+        QCOMPARE(dispatch.size(), 2); QCOMPARE(dispatch[1][2].toULongLong(), quint64(3));
+        monitor.seekDispatched({1, SeekDispatch::Outcome::Rejected, {}, 0, 0, "late old result"});
+        const auto next = MediaMonitor::monotonicSeconds();
+        monitor.seekDispatched({3, SeekDispatch::Outcome::Submitted, sample, next, next, {}});
+        sample.position = 70; QTest::qWait(2); sample.observedAt = MediaMonitor::monotonicSeconds(); seek.observe(sample);
+        QCOMPARE(done.last()[0].toULongLong(), quint64(3)); QVERIFY(done.last()[1].toBool());
+        const auto completed = done.size(); sample.observedAt = MediaMonitor::monotonicSeconds();
+        seek.requestSeek(sample, 80, 5);
+        monitor.seekDispatched({5, SeekDispatch::Outcome::Submitted, sample, 0, 0, {}});
+        monitor.seekFinished(5, true, {}); sample.position = 80;
+        QTest::qWait(2); sample.observedAt = MediaMonitor::monotonicSeconds(); seek.observe(sample);
+        QCOMPARE(done.size(), completed); seek.cancelAll(); // Missing adapter timing cannot manufacture confirmation.
+    }
+    void seekLateCompletionAndPrecisionPolicy() {
+        MediaMonitor monitor; SeekController seek(&monitor, nullptr, 60, 1000);
+        disconnect(&seek, &SeekController::dispatchRequested, &monitor, &MediaMonitor::requestSeek);
+        QSignalSpy done(&seek, &SeekController::finished), landed(&seek, &SeekController::landed), dispatch(&seek, &SeekController::dispatchRequested);
+        MediaSample sample; sample.id = "test-player"; sample.generation = sample.sessionToken = 1;
+        sample.found = sample.canSeek = true; sample.playback = MediaSample::Playback::Paused;
+        sample.position = 10; sample.duration = 120; sample.observedAt = MediaMonitor::monotonicSeconds();
+        seek.requestSeek(sample, 30, 1); const auto issued = MediaMonitor::monotonicSeconds();
+        monitor.seekDispatched({1, SeekDispatch::Outcome::Unknown, sample, issued, issued, {}});
+        seek.requestSeek(sample, 60, 2);
+        QTRY_COMPARE(done.size(), 2); QVERIFY(!done[0][1].toBool()); QCOMPARE(dispatch.size(), 1);
+        sample.position = 30; sample.observedAt = MediaMonitor::monotonicSeconds(); seek.observe(sample);
+        QCOMPARE(done.size(), 3); QVERIFY(done.last()[1].toBool());
+        seek.requestSeek(sample, 80, 3); const auto next = MediaMonitor::monotonicSeconds();
+        monitor.seekDispatched({3, SeekDispatch::Outcome::Submitted, sample, next, next, {}});
+        sample.seekPrecision = MediaSample::SeekPrecision::Precise; sample.position = 75;
+        QTest::qWait(2); sample.observedAt = MediaMonitor::monotonicSeconds(); seek.observe(sample);
+        QCOMPARE(landed.size(), 1); // Do not widen exact tolerance to accept an arbitrary wrong position.
+        seek.cancelAll();
+        sample.seekPrecision = MediaSample::SeekPrecision::Unspecified; sample.position = 30;
+        sample.observedAt = MediaMonitor::monotonicSeconds(); seek.requestSeek(sample, 80, 4);
+        const auto last = MediaMonitor::monotonicSeconds(); monitor.seekDispatched({4, SeekDispatch::Outcome::Submitted, sample, last, last, {}});
+        sample.position = 75; QTest::qWait(2); sample.observedAt = MediaMonitor::monotonicSeconds(); seek.observe(sample);
+        QTest::qWait(170); sample.observedAt = MediaMonitor::monotonicSeconds(); seek.observe(sample);
+        QVERIFY(landed.last()[2].toBool()); QCOMPARE(landed.last()[0].toULongLong(), quint64(4));
+    }
     void commonRecoveryContract_data() {
         QTest::addColumn<bool>("verified");
         QTest::newRow("launch-target-backend") << false;
@@ -172,7 +228,7 @@ private slots:
     }
     void standalonePreparationCannotTakeOverLaterVideoOrEnd() {
         Fixture f; f.seed(); Harness h(f); auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
-        disconnect(h.media, &MediaSession::seekRequested, h.monitor, &MediaMonitor::requestSeek);
+        disconnect(h.app.findChild<SeekController*>(), &SeekController::dispatchRequested, h.monitor, &MediaMonitor::requestSeek);
         QSignalSpy seeks(h.media, &MediaSession::seekRequested);
         now->openStandalone(f.second); h.open(); QTRY_COMPARE(h.media->total(), 2); QTest::qWait(60);
         QVERIFY(now->video()); QVERIFY(!now->standalone());
@@ -313,7 +369,7 @@ private slots:
     }
     void resumeRequiresAcceptedRequestAndPositionReadback() {
         Fixture f; f.seed(30); Harness h(f);
-        disconnect(h.media, &MediaSession::seekRequested, h.monitor, &MediaMonitor::requestSeek);
+        disconnect(h.app.findChild<SeekController*>(), &SeekController::dispatchRequested, h.monitor, &MediaMonitor::requestSeek);
         QSignalSpy seeks(h.media, &MediaSession::seekRequested); h.open(MediaSession::Continue);
         QCOMPARE(seeks.size(), 1); QVERIFY(h.media->restoring());
         const auto request = seeks.first()[2].toULongLong();
@@ -324,7 +380,7 @@ private slots:
     }
     void failedResumePreservesProgressAndCanContinue() {
         Fixture f; f.seed(30); Harness h(f);
-        disconnect(h.media, &MediaSession::seekRequested, h.monitor, &MediaMonitor::requestSeek);
+        disconnect(h.app.findChild<SeekController*>(), &SeekController::dispatchRequested, h.monitor, &MediaMonitor::requestSeek);
         QSignalSpy seeks(h.media, &MediaSession::seekRequested); h.open(MediaSession::Continue);
         h.monitor->seekFinished(seeks.first()[2].toULongLong(), false, "unsupported");
         QVERIFY(h.media->restoreFailed()); h.sample.position = 3; h.send(); h.media->flush();
@@ -333,18 +389,18 @@ private slots:
     }
     void restoreTimeoutPreservesRecordUntilExplicitRetry() {
         Fixture f; f.seed(30); Harness h(f);
-        disconnect(h.media, &MediaSession::seekRequested, h.monitor, &MediaMonitor::requestSeek);
+        disconnect(h.app.findChild<SeekController*>(), &SeekController::dispatchRequested, h.monitor, &MediaMonitor::requestSeek);
         QSignalSpy seeks(h.media, &MediaSession::seekRequested); h.open(MediaSession::Continue);
         h.monitor->seekFinished(seeks.first()[2].toULongLong(), true, {});
-        QTRY_VERIFY_WITH_TIMEOUT(h.media->restoreFailed(), 6500);
+        QTRY_VERIFY_WITH_TIMEOUT(h.media->restoreFailed(), 9500);
         h.media->flush(); QCOMPARE(qobject_cast<RecentVideoStore*>(h.media->recent())->lookup(f.video).value("position").toDouble(), 30.0);
-        h.media->retryRestore(); QCOMPARE(seeks.size(), 2); QVERIFY(h.media->restoring());
+        h.send(); h.media->retryRestore(); QCOMPARE(seeks.size(), 2); QVERIFY(h.media->restoring());
         h.monitor->seekFinished(seeks.last()[2].toULongLong(), true, {});
         h.sample.position = 30; h.send(); QTRY_COMPARE(h.media->total(), 2); QVERIFY(!h.media->restoreFailed());
     }
     void staleRestoreAndChangedMediaCannotCommit() {
         Fixture f; f.seed(30); Harness h(f);
-        disconnect(h.media, &MediaSession::seekRequested, h.monitor, &MediaMonitor::requestSeek);
+        disconnect(h.app.findChild<SeekController*>(), &SeekController::dispatchRequested, h.monitor, &MediaMonitor::requestSeek);
         QSignalSpy seeks(h.media, &MediaSession::seekRequested); h.open(MediaSession::Continue);
         const auto request = seeks.first()[2].toULongLong();
         qobject_cast<NowPlayingModel*>(h.app.nowPlaying())->endPlayback();

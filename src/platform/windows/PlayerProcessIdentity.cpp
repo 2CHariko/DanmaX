@@ -6,6 +6,7 @@
 #include "platform/windows/VlcLauncher.h"
 #include <QFileInfo>
 #include <QByteArray>
+#include <set>
 namespace {
 QString key(HANDLE handle, DWORD pid, bool potplayer = false) {
     FILETIME created{}, exited{}, kernel{}, user{};
@@ -69,6 +70,44 @@ bool alive(const QString& session, const QString& executable) {
 bool matchesWindow(quintptr window, const QString& session) {
     DWORD pid = 0; GetWindowThreadProcessId(reinterpret_cast<HWND>(window), &pid);
     return pid && pid == processId(session) && alive(session);
+}
+QString closeNormally(const QString& session, const QString& executable) {
+    const auto pid = processId(session);
+    if (!pid || executable.isEmpty()) return QStringLiteral("VLC 关闭身份无效");
+    const auto handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+    if (!handle) {
+        if (GetLastError() == ERROR_INVALID_PARAMETER) return {};
+        return QStringLiteral("无法核实 VLC 进程是否退出");
+    }
+    struct Guard { HANDLE value; ~Guard() { CloseHandle(value); } } guard{handle};
+    if (WaitForSingleObject(handle, 0) == WAIT_OBJECT_0) return {};
+    // Keep this exact process object alive through enumeration and exit waiting.
+    // PID reuse cannot redirect WM_CLOSE to a replacement instance.
+    if (key(handle, pid) != session) return QStringLiteral("VLC 进程身份已改变，未发送关闭请求");
+    wchar_t path[32768]; DWORD size = 32768;
+    if (!QueryFullProcessImageNameW(handle, 0, path, &size)
+        || QFileInfo(QString::fromWCharArray(path, size)).canonicalFilePath().compare(
+            QFileInfo(executable).canonicalFilePath(), Qt::CaseInsensitive) != 0)
+        return QStringLiteral("VLC 程序路径校验失败，未发送关闭请求");
+    struct Context { DWORD pid; HANDLE process; std::set<HWND> posted; } context{pid, handle};
+    const auto start = GetTickCount64();
+    while (GetTickCount64() - start < 5000) {
+        if (WaitForSingleObject(handle, 0) == WAIT_OBJECT_0) return {};
+        EnumWindows([](HWND window, LPARAM data) -> BOOL {
+            auto& value = *reinterpret_cast<Context*>(data);
+            DWORD owner{}; GetWindowThreadProcessId(window, &owner);
+            if (owner == value.pid && IsWindowVisible(window) && !GetWindow(window, GW_OWNER)
+                && !value.posted.contains(window) && WaitForSingleObject(value.process, 0) == WAIT_TIMEOUT) {
+                // VLC may expose a separate video window before its main UI.
+                // Closing only the first window can stop video but leave VLC alive.
+                if (PostMessageW(window, WM_CLOSE, 0, 0)) value.posted.insert(window);
+            }
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&context));
+        if (WaitForSingleObject(handle, 50) == WAIT_OBJECT_0) return {};
+    }
+    return !context.posted.empty() ? QStringLiteral("VLC 尚未退出，请在播放器中完成关闭；未强制终止进程")
+        : QStringLiteral("未找到可正常关闭的 VLC 主窗口，播放器仍可能运行");
 }
 Listener listener(quint16 port, const QString& session) {
     DWORD size = 0;

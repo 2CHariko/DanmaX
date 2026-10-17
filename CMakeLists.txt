@@ -114,6 +114,7 @@ if(DANMAKU_BUILD_APP)
         src/application/PlaybackCoordinator.h src/application/DanmakuSession.cpp src/application/DanmakuSession.h
         src/application/MediaSession.cpp src/application/MediaSession.h
         src/application/NowPlayingModel.cpp src/application/NowPlayingModel.h
+        src/application/SeekController.cpp src/application/SeekController.h
         src/infrastructure/RecentVideoStore.cpp src/infrastructure/RecentVideoStore.h
         src/infrastructure/ExternalPlayer.cpp src/infrastructure/ExternalPlayer.h
         src/infrastructure/ExternalPlayerStore.cpp src/infrastructure/ExternalPlayerStore.h

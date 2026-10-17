@@ -25,18 +25,19 @@ Control {
         spacing: 4
         RowLayout {
             Layout.fillWidth: true
-            Label { text: bar.time(bar.player.position); color: Ui.secondaryText; Accessible.name: "当前播放位置 " + text }
+            Label { text: bar.time(progress.pressed ? progress.draftValue : bar.player.seekPreviewPosition); color: Ui.secondaryText; Accessible.name: "播放位置 " + text }
             Slider {
                 id: progress
                 objectName: "nowPlayingSeek"
                 Layout.fillWidth: true
                 enabled: bar.player.canSeek
                 from: 0; to: Math.max(1, bar.player.duration)
-                Binding on value { value: bar.player.position; when: !progress.pressed }
+                Binding on value { value: bar.player.seekPreviewPosition; when: !progress.pressed }
                 Accessible.name: enabled ? "播放进度" : "播放进度，只读"
                 property bool moved: false
-                onMoved: { moved = true; if (!pressed) { moved = false; bar.player.seek(value) } }
-                onPressedChanged: if (!pressed && moved) { moved = false; bar.player.seek(value) }
+                property real draftValue: value
+                onMoved: { draftValue = value; moved = true; if (!pressed) { moved = false; bar.player.seek(draftValue) } }
+                onPressedChanged: if (!pressed && moved) { moved = false; bar.player.seek(draftValue) }
                 onEnabledChanged: if (!enabled) moved = false
                 ToolTip.visible: hovered && !enabled
                 ToolTip.text: "当前播放方式暂不支持拖动定位"

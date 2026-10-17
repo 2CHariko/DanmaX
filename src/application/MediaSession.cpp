@@ -19,11 +19,9 @@ MediaSession::MediaSession(const QString& data, const QString& cache, AppControl
     : QObject(app), app_(app), service_(service), players_(players), monitor_(monitor), recent_(data, this),
       automatic_(associationDirectory(data), cache, this), library_(cache, this) {
     cacheRoot_ = cache;
-    seekDeadline_.setSingleShot(true); seekDeadline_.setInterval(5000);
-    connect(&seekDeadline_, &QTimer::timeout, this, [this] { restoreError(QStringLiteral("未能确认恢复位置，请重试或按当前位置继续")); });
     saveTimer_.setInterval(5000); connect(&saveTimer_, &QTimer::timeout, this, &MediaSession::flush);
     connect(service_, &VideoOpenService::validated, this, &MediaSession::beginTask);
-    connect(this, &MediaSession::seekRequested, monitor_, &MediaMonitor::requestSeek);
+    connect(this, &MediaSession::seekRequested, &app_->seek_, &SeekController::requestSeek);
     connect(service_, &VideoOpenService::opening, this, [this](const QString& id) {
         starting_ = false;
         bound_ = id; app_->bindMedia(id); status_ = QStringLiteral("正在确认播放器中的目标视频…"); emit stateChanged();
@@ -34,11 +32,10 @@ MediaSession::MediaSession(const QString& data, const QString& cache, AppControl
         if (active_ && !confirmed_ && !starting_) { deactivate(); status_ = QStringLiteral("已取消打开视频"); emit stateChanged(); }
     });
     connect(service_, &VideoOpenService::changed, this, &MediaSession::stateChanged);
-    connect(monitor_, &MediaMonitor::seekFinished, this, [this](quint64 request, bool success, const QString& error) {
+    connect(&app_->seek_, &SeekController::finished, this, [this](quint64 request, bool success, const QString& error) {
         if (!active_ || !restoring_ || request != seekRequest_ || seekTask_ != task_) return;
         if (!success) { restoreError(error); return; }
-        seekAccepted_ = true;
-        if (seekObserved_) prepared();
+        prepared();
     });
     connect(automatic_.playbackRecovery(), &PlaybackRecovery::controlRequested, monitor_, &MediaMonitor::requestPlayback);
     connect(monitor_, &MediaMonitor::playbackControlFinished, automatic_.playbackRecovery(), &PlaybackRecovery::controlFinished);
@@ -108,7 +105,7 @@ bool MediaSession::sameContent(const MediaSample& sample) const {
     return sample.sameConnection(confirmedSample_) && !sample.contentDiffers(confirmedSample_);
 }
 void MediaSession::adoptContent(const MediaSample& sample) {
-    flush(); ++task_; ++seekRequest_; seekDeadline_.stop();
+    flush(); ++task_; ++seekRequest_; app_->seek_.cancelAll();
     cancelLoader(); automatic_.reset(); library_.cancel();
     restoring_ = restoreFailed_ = false;
     source_.clear(); contentMetadata_.clear(); total_ = 0; sourceTitle_.clear(); error_.clear();
@@ -131,20 +128,20 @@ void MediaSession::adoptContent(const MediaSample& sample) {
 }
 void MediaSession::beginRestore() {
     if (!active_ || !confirmed_ || !latest_.found) return;
-    restoreFailed_ = false; restoring_ = true; ready_ = writing_ = false; seekAccepted_ = seekObserved_ = false;
+    restoreFailed_ = false; restoring_ = true; ready_ = writing_ = false;
     error_.clear(); status_ = QStringLiteral("正在恢复观看位置…");
-    seekRequest_ = nextRequest(); seekTask_ = task_; seekAt_ = MediaMonitor::monotonicSeconds(); seekDeadline_.start();
+    seekRequest_ = nextRequest(); seekTask_ = task_;
     emit stateChanged(); emit seekRequested(latest_, restorePosition_, seekRequest_);
 }
 void MediaSession::restoreError(const QString& error) {
-    seekDeadline_.stop(); restoring_ = false; restoreFailed_ = true; writing_ = false;
+    restoring_ = false; restoreFailed_ = true; writing_ = false;
     error_ = error; status_ = QStringLiteral("恢复位置失败，原观看记录已保留"); emit stateChanged();
 }
 void MediaSession::retryRestore() { if (restoreFailed_ && active_) beginRestore(); }
 void MediaSession::continueAtCurrentPosition() { if (restoreFailed_ && active_) prepared(); }
 void MediaSession::prepared() {
     if (!active_ || !confirmed_ || !connected()) { restoreError(QStringLiteral("播放器连接已断开，请重新打开视频")); return; }
-    seekDeadline_.stop(); restoring_ = restoreFailed_ = false; ready_ = writing_ = true; error_.clear();
+    restoring_ = restoreFailed_ = false; ready_ = writing_ = true; error_.clear();
     status_ = QStringLiteral("视频已就绪，正在准备弹幕"); emit stateChanged();
     if (source_.value("kind") == "xml") { loadFile(source_.value("path").toString()); return; }
     if (source_.value("kind") == "disabled") { manualSource_ = true; status_ = QStringLiteral("弹幕已卸载，可手动选源或重新匹配"); return; }
@@ -175,11 +172,6 @@ void MediaSession::observe(const MediaSample& sample) {
     const bool paused = latest_.playing && !sample.playing;
     latest_ = sample;
     if (sample.evidence == MediaSample::Evidence::Verified) confirmedSample_ = sample;
-    if (restoring_ && sample.observedAt > seekAt_) {
-        const auto target = restorePosition_ + (sample.playing ? (sample.observedAt - seekAt_) * sample.rate : 0);
-        seekObserved_ = std::abs(sample.position - target) <= 1;
-        if (seekObserved_ && seekAccepted_) prepared();
-    }
     if (ready_ && !manualSource_) automatic_.observe(sample);
     else automatic_.playbackRecovery()->observe(sample);
     if (preparedSource_ && connected()) {
@@ -193,7 +185,7 @@ void MediaSession::flush() {
     if (writing_ && confirmed_ && latest_.found) recent_.checkpoint(video_, latest_.position, latest_.duration, source_, contentMetadata_);
 }
 void MediaSession::deactivate() {
-    flush(); ++task_; saveTimer_.stop(); seekDeadline_.stop(); ++seekRequest_;
+    flush(); ++task_; saveTimer_.stop(); ++seekRequest_; app_->seek_.cancelAll();
     monitor_->closeOwnedPlayer(bound_);
     cancelLoader(); automatic_.reset(); library_.cancel();
     active_ = confirmed_ = ready_ = writing_ = restoring_ = restoreFailed_ = false;

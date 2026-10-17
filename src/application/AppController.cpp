@@ -26,6 +26,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
       videoOpen_(this, std::move(videoHooks)),
       players_(dataDirectory, this),
       monitor_(this, QDir(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory).filePath("players/vlc")),
+      seek_(&monitor_, this),
       media_(dataDirectory, cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this, &videoOpen_, &players_, &monitor_),
       nowPlaying_(this),
       foregroundQuery_(foregroundQuery ? std::move(foregroundQuery) : ForegroundQuery(MediaMonitor::targetForeground)),
@@ -140,6 +141,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     logs_.append("INFO", QStringLiteral("C++ / Qt FluentWinUI3 已启动"));
 }
 AppController::~AppController() {
+    seek_.cancelAll();
     danmaku_.deactivate();
     media_.deactivate();
     windowLayers_.attach(nullptr, nullptr, nullptr);
@@ -554,6 +556,7 @@ QString AppController::boundSession() const {
     return coordinator_.owner() == PlaybackCoordinator::Media ? media_.boundSession() : renderTestSession_;
 }
 void AppController::handoff(PlaybackCoordinator::Owner owner) {
+    seek_.cancelAll();
     danmaku_.deactivate();
     if (coordinator_.owner() == PlaybackCoordinator::Media) media_.deactivate();
     discardLoad();

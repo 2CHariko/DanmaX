@@ -4,7 +4,7 @@
 
 统一播放界面使用 NowPlayingModel 按 MediaSession／DanmakuSession 所有者投影状态、元信息与控制能力。产品支持由应用打开视频和独立 XML 播放；当前任务的 XML、搜索和缓存通过底部菜单及任务弹窗提交，见 [NOW_PLAYING.md](NOW_PLAYING.md)。
 
-MediaSession 管理视频打开、实例连接、恢复、匹配与最近记录；DanmakuSession 管理独立来源及单调时钟任务，PlaybackCoordinator 互斥交接，AppController 持有唯一引擎、渲染器和帧驱动。独立 XML 先解析成功再切换，失败保留当前任务；换源保留进度及暂停状态，异步结果验证任务／请求代次。PotPlayer 随视频任务结束正常关闭；VLC 保留非拥有语义。详见 [任务说明](DUAL_WORKFLOWS.md)。
+MediaSession 管理视频打开、实例连接、恢复、匹配与最近记录；DanmakuSession 管理独立来源及单调时钟任务，PlaybackCoordinator 互斥交接，AppController 持有唯一引擎、渲染器和帧驱动。独立 XML 先解析成功再切换，失败保留当前任务；换源保留进度及暂停状态，异步结果验证任务／请求代次。应用拥有的 PotPlayer／VLC 随视频任务结束正常关闭；只关闭已验证的本次独立实例，旧关闭回调不得影响新连接。详见 [任务说明](DUAL_WORKFLOWS.md)。
 
 本方案取代 Flutter 迁移方向。旧 Python 版本和 Flutter 文档原样保存在独立 `archive` 分支的 `archive/python-qt/`、`archive/plans/`，当前分支不再包含归档目录。目标是高效的 Windows 弹幕覆盖层，同时控制依赖数量和构建复杂度。
 

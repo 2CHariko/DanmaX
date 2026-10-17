@@ -9,6 +9,7 @@ struct MediaSample {
     enum class Playback { Unknown, Playing, Paused, Stopped, Closed, Changing };
     enum class Connection { Unknown, Alive, Unavailable, Exited };
     enum class Evidence { Unknown, LaunchTarget, Verified };
+    enum class SeekPrecision { Unspecified, Precise };
     QString id, title, identity, mediaUri;
     QString launchUri, contentId;
     double position{}, duration{}, rate{1};
@@ -16,6 +17,7 @@ struct MediaSample {
     Playback playback{Playback::Unknown};
     Connection connection{Connection::Unknown};
     Evidence evidence{Evidence::Unknown};
+    SeekPrecision seekPrecision{SeekPrecision::Unspecified};
     // sessionToken identifies the connection, never a title or playlist item.
     quint64 generation{}, sessionToken{};
     double observedAt{};
@@ -41,6 +43,16 @@ struct MediaSample {
 };
 Q_DECLARE_METATYPE(MediaSample)
 
+struct SeekDispatch {
+    enum class Outcome { Rejected, Submitted, Unknown };
+    quint64 request{};
+    Outcome outcome{Outcome::Rejected};
+    MediaSample before;
+    double issuedAt{}, returnedAt{};
+    QString error;
+};
+Q_DECLARE_METATYPE(SeekDispatch)
+
 struct ManagedPlaybackOpen { QString sessionId, error; };
 
 // Infrastructure port. Backends own their connection and control semantics;
@@ -64,4 +76,13 @@ class MediaPlaybackBackend : public QObject {
     void errorOccurred(QString error);
     void playbackControlFinished(quint64 request, bool success, QString error);
     void seekFinished(quint64 request, bool success, QString error);
+    void seekDispatched(SeekDispatch result);
+  protected:
+    // seekFinished is the raw transport acknowledgement, not a completed seek.
+    // Product transactions consume the detailed disposition and position reads.
+    void reportSeek(quint64 request, SeekDispatch::Outcome outcome, const QString& error = {},
+                    const MediaSample& before = {}, double issuedAt = 0, double returnedAt = 0) {
+        emit seekDispatched({request, outcome, before, issuedAt, returnedAt, error});
+        emit seekFinished(request, outcome == SeekDispatch::Outcome::Submitted, error);
+    }
 };

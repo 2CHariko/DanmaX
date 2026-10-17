@@ -8,6 +8,9 @@
 #include <deque>
 #include <functional>
 #include <thread>
+#include <atomic>
+#include <vector>
+#include <memory>
 class QNetworkReply;
 class VlcHttpBackend final : public MediaPlaybackBackend {
     Q_OBJECT
@@ -17,6 +20,7 @@ class VlcHttpBackend final : public MediaPlaybackBackend {
         std::function<bool(const QString&, const QString&)> alive;
         std::function<PlayerProcessIdentity::Listener(quint16, const QString&)> listener;
         std::function<QVariantList()> discover;
+        std::function<QString(const QString&, const QString&)> close;
     };
     explicit VlcHttpBackend(QString directory, QObject* parent = nullptr, Hooks hooks = {});
     ~VlcHttpBackend() override;
@@ -27,7 +31,12 @@ class VlcHttpBackend final : public MediaPlaybackBackend {
     void requestPlayback(MediaSample expected, bool play, quint64 request) override;
     void requestSeek(MediaSample expected, double seconds, quint64 request) override;
     void cancelOpen() override;
+    bool closesWithTask() const override { return true; }
+    void closeOwned(const QString& id = {}) override;
     QString sessionId() const { return session_; }
+  signals:
+    void ownedExited(QString session);
+    void closeFailed(QString error);
   private:
     bool alive() const;
     void invalidate();
@@ -52,4 +61,10 @@ class VlcHttpBackend final : public MediaPlaybackBackend {
     Hooks hooks_;
     QString lastError_;
     std::jthread discovery_;
+    struct Closing {
+        QString id;
+        std::shared_ptr<std::atomic_bool> done;
+        std::jthread worker;
+    };
+    std::vector<Closing> closing_;
 };

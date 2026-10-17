@@ -24,6 +24,7 @@ std::optional<VlcState> VlcProtocol::decode(const QByteArray& data, const QStrin
     sample.position = obj.value("position").toDouble(); sample.duration = obj.value("duration").toDouble(); sample.rate = obj.value("rate").toDouble();
     sample.mediaUri = obj.value("uri").toString(); result.item = obj.value("item").toString();
     sample.evidence = MediaSample::Evidence::Verified; sample.contentId = result.item;
+    sample.seekPrecision = MediaSample::SeekPrecision::Precise;
     const QUrl uri(sample.mediaUri);
     if (!std::isfinite(sample.position) || !std::isfinite(sample.duration) || !std::isfinite(sample.rate)
         || sample.position < 0 || sample.duration <= 0 || sample.duration > 366 * 86400.0 || sample.position > sample.duration + 1

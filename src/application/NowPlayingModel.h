@@ -20,6 +20,8 @@ class NowPlayingModel final : public QObject {
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
     Q_PROPERTY(bool canPlay READ canPlay NOTIFY changed)
     Q_PROPERTY(bool canSeek READ canSeek NOTIFY changed)
+    Q_PROPERTY(bool seekPending READ seekPending NOTIFY changed)
+    Q_PROPERTY(double seekPreviewPosition READ seekPreviewPosition NOTIFY changed)
     Q_PROPERTY(QString title READ title NOTIFY changed)
     Q_PROPERTY(QString subtitle READ subtitle NOTIFY changed)
     Q_PROPERTY(QString coverUrl READ coverUrl NOTIFY changed)
@@ -44,6 +46,8 @@ class NowPlayingModel final : public QObject {
     bool busy() const;
     bool canPlay() const;
     bool canSeek() const;
+    bool seekPending() const { return pending_ && desiredPosition_ >= 0; }
+    double seekPreviewPosition() const { return seekPending() ? desiredPosition_ : position(); }
     QString title() const;
     QString subtitle() const;
     QString coverUrl() const;
@@ -79,6 +83,8 @@ class NowPlayingModel final : public QObject {
     MediaSample sample_, expected_;
     QTimer deadline_;
     QString error_;
+    QString seekNotice_;
+    double noticeUntil_{};
     quint64 request_{}, ownerGeneration_{}, displayGeneration_{};
     bool pending_{}, accepted_{}, observed_{}, desiredPlay_{};
     double desiredPosition_{-1}, requestedAt_{};

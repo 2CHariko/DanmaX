@@ -27,7 +27,7 @@ struct Fixture {
     QString executable, video, uri, item = "1", state = "playing", operation;
     double position = 12.25, rate = 1;
     int opens{}, requests{}, controls{}, launches{}, delay{}, size{};
-    bool living = true, foreign = false, found = true;
+    bool living = true, foreign = false, found = true, invalidSeekResponse = false;
     Fixture() {
         executable = write("vlc.exe", playerExecutableFixture());
         write("lua/intf/http.luac", "fixture"); write("lua/intf/modules/httprequests.luac", "fixture");
@@ -53,7 +53,7 @@ struct Fixture {
                     }
                     QJsonObject obj{{"protocol", 1}, {"request", get("request")}, {"ok", ok}, {"found", found},
                         {"previous_item", previous}, {"uri", uri}, {"item", item}, {"position", position}, {"duration", 120.5}, {"rate", rate}, {"state", state}, {"canSeek", true}};
-                    const auto body = size ? QByteArray(size, 'x') : QJsonDocument(obj).toJson(QJsonDocument::Compact);
+                    const auto body = size || (invalidSeekResponse && command == "seek") ? QByteArray(size ? size : 70000, 'x') : QJsonDocument(obj).toJson(QJsonDocument::Compact);
                     const auto send = [socket, body] {
                         socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "
                             + QByteArray::number(body.size()) + "\r\n\r\n" + body); socket->disconnectFromHost();
@@ -75,7 +75,7 @@ struct Fixture {
             return ManagedPlaybackOpen{"danmax-vlc:123:456", {}};
         }, [this](const QString&, const QString&) { return living; }, [this](quint16, const QString&) {
             return foreign ? PlayerProcessIdentity::Listener::Foreign : PlayerProcessIdentity::Listener::Owned;
-        }, [] { return QVariantList{}; }};
+        }, [] { return QVariantList{}; }, [](const QString&, const QString&) { return QString(); }};
     }
 };
 MediaSample latest(QSignalSpy& spy) { return qvariant_cast<MediaSample>(spy.last().first()); }
@@ -99,6 +99,77 @@ void closeNormally(const QString& session) {
 class VlcPlaybackTests final : public QObject {
     Q_OBJECT
 private slots:
+    void ownedCloseIsBoundedAndIsolated() {
+        Fixture f; auto hooks = f.hooks();
+        const auto launch = hooks.launch;
+        hooks.launch = [&, launch](const QString& exe, const QStringList& args, const QMap<QString, QString>& env) {
+            auto result = launch(exe, args, env);
+            if (f.launches > 1) result.sessionId = "danmax-vlc:123:457";
+            return result;
+        };
+        std::atomic_int closes{}, started{}; std::atomic_bool release{false};
+        hooks.close = [&](const QString& id, const QString& executable) {
+            ++started;
+            if ((id != "danmax-vlc:123:456" && id != "danmax-vlc:123:457") || executable != QFileInfo(f.executable).canonicalFilePath())
+                return QStringLiteral("wrong identity");
+            while (!release.load()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            ++closes; return QString();
+        };
+        // Release the fake worker even when a test assertion returns early.
+        VlcHttpBackend backend(f.directory.filePath("cache"), nullptr, hooks);
+        const auto cleanup = qScopeGuard([&] { release.store(true); });
+        QSignalSpy exited(&backend, &VlcHttpBackend::ownedExited), failed(&backend, &VlcHttpBackend::closeFailed);
+        QVERIFY(backend.closesWithTask());
+        const auto first = backend.open(f.executable, f.video); QVERIFY(first.error.isEmpty());
+        backend.closeOwned("danmax-vlc:other:identity"); QCOMPARE(started.load(), 0);
+        backend.closeOwned(first.sessionId); backend.closeOwned(first.sessionId);
+        QTRY_COMPARE(started.load(), 1); QVERIFY(backend.sessionId().isEmpty());
+        // A new connection is already independent while the old close is pending.
+        f.server.close();
+        const auto second = backend.open(f.executable, f.video); QVERIFY(second.error.isEmpty());
+        QVERIFY(second.sessionId != first.sessionId);
+        // Complete the old callback only after observing that close is asynchronous.
+        release.store(true); QTRY_COMPARE(exited.count(), 1); QCOMPARE(closes.load(), 1); QCOMPARE(failed.count(), 0);
+        QCOMPARE(exited.first().first().toString(), first.sessionId);
+        QCOMPARE(backend.sessionId(), second.sessionId);
+        backend.closeOwned(first.sessionId); QCOMPARE(closes.load(), 1);
+        backend.closeOwned(second.sessionId); QTRY_COMPARE(exited.count(), 2); QCOMPARE(closes.load(), 2);
+    }
+    void closeFailureCancellationAndShutdown() {
+        Fixture f; auto hooks = f.hooks(); std::atomic_int closes{};
+        hooks.close = [&](const QString&, const QString&) { ++closes; return QStringLiteral("VLC 尚未退出"); };
+        {
+            VlcHttpBackend backend(f.directory.filePath("cache"), nullptr, hooks);
+            QSignalSpy failed(&backend, &VlcHttpBackend::closeFailed), exited(&backend, &VlcHttpBackend::ownedExited);
+            QVERIFY(backend.open(f.executable, f.video).error.isEmpty());
+            backend.cancelOpen(); QTRY_COMPARE(failed.count(), 1); QCOMPARE(exited.count(), 0);
+            QCOMPARE(failed.first().first().toString(), QStringLiteral("VLC 尚未退出"));
+        }
+        QCOMPARE(closes.load(), 1);
+        f.server.close();
+        {
+            VlcHttpBackend backend(f.directory.filePath("cache"), nullptr, hooks);
+            QVERIFY(backend.open(f.executable, f.video).error.isEmpty());
+        }
+        QCOMPARE(closes.load(), 2); // Destructor joins the normal-close worker.
+    }
+    void lostSeekResponseConfirmsFromPositionWithoutResending() {
+        Fixture f; f.state = "paused";
+        VlcHttpBackend backend(f.directory.filePath("cache"), nullptr, f.hooks());
+        MediaMonitor monitor; SeekController seek(&monitor);
+        disconnect(&seek, &SeekController::dispatchRequested, &monitor, &MediaMonitor::requestSeek);
+        connect(&seek, &SeekController::dispatchRequested, &backend, &MediaPlaybackBackend::requestSeek);
+        connect(&backend, &MediaPlaybackBackend::sampleReceived, &monitor, &MediaMonitor::sampleReceived);
+        connect(&backend, &MediaPlaybackBackend::seekDispatched, &monitor, &MediaMonitor::seekDispatched);
+        QSignalSpy samples(&backend, &MediaPlaybackBackend::sampleReceived), done(&seek, &SeekController::finished), receipts(&monitor, &MediaMonitor::seekDispatched);
+        const auto opened = backend.open(f.executable, f.video); QVERIFY(opened.error.isEmpty());
+        backend.select(opened.sessionId, 1); QTRY_VERIFY(!samples.empty() && latest(samples).found);
+        f.invalidSeekResponse = true; seek.requestSeek(latest(samples), 30, 1);
+        QTRY_VERIFY(!receipts.empty());
+        QCOMPARE(qvariant_cast<SeekDispatch>(receipts.first()[0]).outcome, SeekDispatch::Outcome::Unknown);
+        QVERIFY(done.empty()); f.invalidSeekResponse = false;
+        QTRY_COMPARE(done.size(), 1); QVERIFY(done.first()[1].toBool()); QCOMPARE(f.controls, 1);
+    }
     void temporaryFailuresRecoverWithoutReopening() {
         Fixture f; f.state = "paused";
         VlcHttpBackend backend(f.directory.filePath("cache"), nullptr, f.hooks());
@@ -225,6 +296,21 @@ private slots:
         if (video.isEmpty() || executable.isEmpty()) QSKIP("Explicit real VLC contract video/executable not supplied");
         QTemporaryDir directory; QVERIFY(directory.isValid());
         Fixture files;
+        QMap<QString, QString> environment;
+        for (const auto* key : {"APPDATA", "LOCALAPPDATA", "TEMP", "TMP"}) {
+            const auto folder = directory.filePath("sentinel/" + QString::fromLatin1(key));
+            QVERIFY(QDir().mkpath(folder)); environment.insert(QString::fromLatin1(key), QDir::toNativeSeparators(folder));
+        }
+        qint64 sentinelPid{};
+        const auto launchError = ExternalPlayerProcess::launch(executable,
+            {"--ignore-config", "--no-one-instance", "--no-one-instance-when-started-from-file", "--intf=qt",
+             "--no-qt-privacy-ask", "--no-media-library", "--no-metadata-network-access"}, &sentinelPid, environment);
+        QVERIFY2(launchError.isEmpty(), qPrintable(launchError));
+        const auto sentinel = PlayerProcessIdentity::session(sentinelPid, executable); QVERIFY(!sentinel.isEmpty());
+        const auto sentinelCleanup = qScopeGuard([&] { PlayerProcessIdentity::closeNormally(sentinel, executable); });
+        QVERIFY(!PlayerProcessIdentity::closeNormally(sentinel, files.executable).isEmpty());
+        QVERIFY(!PlayerProcessIdentity::closeNormally(sentinel.section(':', 0, 1) + ":0", executable).isEmpty());
+        QVERIFY(PlayerProcessIdentity::alive(sentinel));
         const auto xml = files.write("selected.xml", "<i><d p=\"0,1,25,16777215\">VLC contract</d><d p=\"2,1,25,16777215\">VLC after seek</d></i>");
         const auto data = directory.filePath("data"); QDir().mkpath(data);
         { RecentVideoStore recent(data); recent.opened(video); recent.checkpoint(video, 0, 60, {{"kind", "xml"}, {"path", xml}}); }
@@ -243,12 +329,40 @@ private slots:
         QTRY_VERIFY2_WITH_TIMEOUT(now->canPlay() && now->count() == 2, qPrintable(media->error() + media->status()), 15000);
         session = media->boundSession();
         QCOMPARE(latest.evidence, MediaSample::Evidence::Verified); QVERIFY(!latest.mediaUri.isEmpty()); QVERIFY(!latest.contentId.isEmpty());
-        QTRY_VERIFY_WITH_TIMEOUT(renderer.snapshotCount() > 0, 5000); QVERIFY(!now->ownsPlayer());
+        QTRY_VERIFY_WITH_TIMEOUT(renderer.snapshotCount() > 0, 5000); QVERIFY(now->ownsPlayer());
         now->togglePlayback(); QTRY_VERIFY_WITH_TIMEOUT(!now->busy() && !now->playing(), 5000);
         now->seek(2); QTRY_VERIFY_WITH_TIMEOUT(!now->busy() && std::abs(now->position() - 2) <= 0.25, 5000);
         QVERIFY(now->error().isEmpty());
-        now->endPlayback(); QVERIFY(!now->active()); QVERIFY(PlayerProcessIdentity::alive(session));
-        closeNormally(session); QTRY_VERIFY_WITH_TIMEOUT(!PlayerProcessIdentity::alive(session), 5000);
+        now->endPlayback(); QVERIFY(!now->active());
+        QTRY_VERIFY_WITH_TIMEOUT(!PlayerProcessIdentity::alive(session), 7000);
+        QVERIFY(PlayerProcessIdentity::alive(sentinel));
+        media->openVideo(video, MediaSession::FromStart);
+        QTRY_VERIFY_WITH_TIMEOUT(now->canPlay() && now->count() == 2, 15000);
+        session = media->boundSession();
+        now->openStandalone(xml); QTRY_VERIFY(now->standalone());
+        QTRY_VERIFY_WITH_TIMEOUT(!PlayerProcessIdentity::alive(session), 7000);
+        QVERIFY(PlayerProcessIdentity::alive(sentinel));
+        now->endPlayback();
+        QString shutdownSession;
+        {
+            AppController exiting(directory.filePath("exit-data"), nullptr, [](const QString&) { return true; }, directory.filePath("exit-cache"));
+            qobject_cast<SettingsStore*>(exiting.settings())->setDanmakuServers({});
+            ExternalPlayerDraft exitDraft(qobject_cast<ExternalPlayerStore*>(exiting.players()));
+            exitDraft.edit("vlc"); exitDraft.enterExecutable(executable); exitDraft.setDefault("vlc"); QVERIFY(exitDraft.save());
+            auto* exitMedia = qobject_cast<MediaSession*>(exiting.media());
+            auto* exitNow = qobject_cast<NowPlayingModel*>(exiting.nowPlaying());
+            exitMedia->openVideo(video, MediaSession::FromStart);
+            QTRY_VERIFY_WITH_TIMEOUT(exitNow->canPlay(), 15000); shutdownSession = exitMedia->boundSession();
+        }
+        QVERIFY(!PlayerProcessIdentity::alive(shutdownSession)); QVERIFY(PlayerProcessIdentity::alive(sentinel));
+        // Cancellation before the HTTP interface is ready also closes the owned launch.
+        QString cancelled;
+        {
+            VlcHttpBackend early(directory.filePath("early"));
+            const auto opened = early.open(executable, video); QVERIFY2(opened.error.isEmpty(), qPrintable(opened.error));
+            cancelled = opened.sessionId; early.cancelOpen();
+        }
+        QVERIFY(!PlayerProcessIdentity::alive(cancelled)); QVERIFY(PlayerProcessIdentity::alive(sentinel));
     }
     void realVlcVideoAndAutomaticDanmaku() {
         const auto video = qEnvironmentVariable("DANMAKU_REAL_VLC_VIDEO");

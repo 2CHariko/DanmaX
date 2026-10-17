@@ -576,19 +576,21 @@ Item {
                 from: 0
                 to: Math.max(1, root.backend.duration)
                 property bool pendingSeek: false
+                property real draftValue: value
                 Binding on value { value: root.backend.position; when: !seekSlider.pressed && !seekSlider.pendingSeek }
                 Accessible.name: I18n.toolbar.seekTitle
                 onMoved: {
+                    draftValue = value
                     pendingSeek = true
                     if (!pressed && root.presentationAllowed && seekPopup.visible) {
-                        const target = value
+                        const target = draftValue
                         pendingSeek = false
                         root.backend.seek(target)
                     }
                 }
                 onPressedChanged: {
                     if (!pressed && pendingSeek && root.presentationAllowed && seekPopup.visible) {
-                        const target = value
+                        const target = draftValue
                         pendingSeek = false
                         root.backend.seek(target)
                     }

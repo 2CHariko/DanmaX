@@ -30,6 +30,7 @@ class MediaMonitor final : public QObject {
     void errorOccurred(QString error);
     void playbackControlFinished(quint64 request, bool success, QString error);
     void seekFinished(quint64 request, bool success, QString error);
+    void seekDispatched(SeekDispatch result);
     void ownedPlayerExited(QString session);
     void ownedPlayerCloseFailed(QString error);
 

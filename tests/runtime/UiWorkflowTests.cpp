@@ -463,6 +463,26 @@ private slots:
         auto* now = qobject_cast<NowPlayingModel*>(backend.nowPlaying());
         now->replaceDanmaku(xml); QTRY_COMPARE(now->count(), 1);
         auto* bar = window->findChild<QQuickItem*>("nowPlayingBar"); QVERIFY(bar);
+        auto* seekControl = backend.findChild<SeekController*>(); QVERIFY(seekControl);
+        disconnect(seekControl, &SeekController::dispatchRequested, monitor, &MediaMonitor::requestSeek);
+        QSignalSpy seekDispatch(seekControl, &SeekController::dispatchRequested);
+        auto* slider = bar->findChild<QQuickItem*>("nowPlayingSeek"); QVERIFY(slider && slider->isEnabled());
+        const auto startPoint = slider->mapToScene(QPointF(slider->width() * 0.2, slider->height() / 2)).toPoint();
+        const auto endPoint = slider->mapToScene(QPointF(slider->width() * 0.7, slider->height() / 2)).toPoint();
+        QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, startPoint);
+        QTest::mouseMove(window, endPoint, 20); QTRY_VERIFY(slider->property("pressed").toBool());
+        QCOMPARE(seekDispatch.size(), 0);
+        const double target = slider->property("draftValue").toDouble(); QVERIFY(target > 60);
+        sample.position = 12; inject(); // Release restores the binding, but must not replace the user's draft target.
+        QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, endPoint);
+        QTRY_COMPARE(seekDispatch.size(), 1);
+        // Qt may perform one final pointer-to-value update on release after layout;
+        // the final draft must win over the restored playback-position binding.
+        const double committedDraft = slider->property("draftValue").toDouble(); QVERIFY(committedDraft > 60);
+        QCOMPARE(seekDispatch.first()[1].toDouble(), committedDraft);
+        QVERIFY(now->seekPending()); QCOMPARE(now->seekPreviewPosition(), committedDraft);
+        QTRY_COMPARE(slider->property("value").toDouble(), committedDraft);
+        seekControl->cancelAll(); QVERIFY(!now->seekPending());
         auto* menu = bar->findChild<QObject*>("nowPlayingDanmakuMenu"); QVERIFY(menu);
         QVERIFY(QMetaObject::invokeMethod(menu, "open")); QTRY_VERIFY(menu->property("opened").toBool());
         auto* cacheAction = menu->findChild<QObject*>("selectCachedDanmaku"); QVERIFY(cacheAction);

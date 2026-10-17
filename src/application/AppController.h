@@ -9,6 +9,7 @@
 #include "application/DanmakuSession.h"
 #include "application/MediaSession.h"
 #include "application/NowPlayingModel.h"
+#include "application/SeekController.h"
 #include "infrastructure/ExternalPlayerStore.h"
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
@@ -233,6 +234,7 @@ class AppController final : public QObject {
     bool automaticCommit_{}, automaticSource_{};
     SystemUiPreferences uiPreferences_;
     MediaMonitor monitor_;
+    SeekController seek_;
     MediaSession media_;
     NowPlayingModel nowPlaying_;
     bool presentingMedia_{};

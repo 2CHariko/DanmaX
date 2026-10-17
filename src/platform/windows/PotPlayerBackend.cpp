@@ -46,11 +46,14 @@ struct Instance {
         wchar_t name[64]{}; GetClassNameW(window, name, 64);
         return alive() && IsWindow(window) && owner == pid && QString::fromWCharArray(name) == "PotPlayer64";
     }
-    std::optional<qint64> message(WPARAM command, LPARAM value = 0) const {
-        if (!validWindow()) return {};
+    std::optional<qint64> message(WPARAM command, LPARAM value = 0, UINT timeout = 100, DWORD* error = nullptr) const {
+        if (!validWindow()) { if (error) *error = ERROR_INVALID_WINDOW_HANDLE; return {}; }
         DWORD_PTR reply{};
+        SetLastError(ERROR_SUCCESS);
         if (!SendMessageTimeoutW(window, WM_USER, command, value,
-                SMTO_ABORTIFHUNG | SMTO_BLOCK | SMTO_ERRORONEXIT, 100, &reply)) return {};
+                SMTO_ABORTIFHUNG | SMTO_BLOCK | SMTO_ERRORONEXIT, timeout, &reply)) {
+            if (error) *error = GetLastError(); return {};
+        }
         return qint64(static_cast<INT_PTR>(reply));
     }
 };
@@ -152,13 +155,24 @@ struct PotPlayerBackend::Impl {
                 bool okay = currentSelection && instance && !instance->closing && sample.found && expected.found
                     && expected.sameConnection(sample) && !expected.contentDiffers(sample)
                     && sample.usableTimeline() && std::isfinite(age) && age >= 0 && age <= 2.5;
-                if (okay) {
+                const double issuedAt = MediaMonitor::monotonicSeconds();
+                SeekDispatch::Outcome outcome = SeekDispatch::Outcome::Rejected;
+                QString seekError;
+                if (okay && command->seek) {
+                    DWORD error{};
+                    const auto result = instance->message(SetPosition, LPARAM(std::llround(command->seconds * 1000)), 500, &error);
+                    outcome = result ? SeekDispatch::Outcome::Submitted : instance->validWindow()
+                        ? SeekDispatch::Outcome::Unknown : SeekDispatch::Outcome::Rejected;
+                    seekError = result ? QString() : QStringLiteral("PotPlayer 定位消息未得到确认（%1），正在核对播放位置").arg(error);
+                    instance->positions.clear();
+                } else if (okay) {
                     okay = instance->message(command->seek ? SetPosition : SetStatus,
                         command->seek ? LPARAM(std::llround(command->seconds * 1000)) : command->play ? 2 : 1).has_value();
                     instance->positions.clear();
                 }
                 const auto error = okay ? QString() : QStringLiteral("PotPlayer 媒体或连接已改变，或消息请求超时");
-                if (command->seek) emit owner->seekFinished(command->request, okay, error);
+                if (command->seek) owner->reportSeek(command->request, outcome,
+                    okay ? seekError : QStringLiteral("PotPlayer 定位校验未通过，未发送消息"), sample, issuedAt, MediaMonitor::monotonicSeconds());
                 else emit owner->playbackControlFinished(command->request, okay, error);
             }
             std::unique_lock lock(mutex);
@@ -190,7 +204,7 @@ struct PotPlayerBackend::Impl {
             if (accepted) commands.push_back(command);
         }
         if (accepted) wake.notify_all();
-        else if (command.seek) emit owner->seekFinished(command.request, false, QStringLiteral("播放器连接已改变或控制队列已满"));
+        else if (command.seek) owner->reportSeek(command.request, SeekDispatch::Outcome::Rejected, QStringLiteral("播放器连接已改变或控制队列已满"));
         else emit owner->playbackControlFinished(command.request, false, QStringLiteral("播放器连接已改变或控制队列已满"));
     }
 };
@@ -237,7 +251,7 @@ void PotPlayerBackend::requestPlayback(MediaSample expected, bool play, quint64 
 void PotPlayerBackend::requestSeek(MediaSample expected, double seconds, quint64 request) {
     if (!expected.canSeek || !std::isfinite(seconds) || seconds < 0 || !std::isfinite(expected.duration)
         || expected.duration <= 0 || expected.duration > 366 * 86400.0 || seconds > expected.duration) {
-        emit seekFinished(request, false, QStringLiteral("定位目标无效")); return;
+        reportSeek(request, SeekDispatch::Outcome::Rejected, QStringLiteral("定位目标无效")); return;
     }
     impl_->enqueue({std::move(expected), false, request, seconds, true});
 }

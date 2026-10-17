@@ -104,10 +104,10 @@ class MediaSession final : public QObject {
     MediaSample latest_, confirmedSample_;
     struct PreparedSource { std::vector<danmaku::Item> items; QString title; QVariantMap source; };
     std::optional<PreparedSource> preparedSource_;
-    QTimer seekDeadline_, saveTimer_;
+    QTimer saveTimer_;
     std::jthread loader_;
     quint64 task_{}, loadGeneration_{}, seekRequest_{}, seekTask_{};
-    double restorePosition_{}, seekAt_{}, lastObservedAt_{};
+    double restorePosition_{}, lastObservedAt_{};
     int intent_{Normal}, total_{};
-    bool active_{}, confirmed_{}, ready_{}, loading_{}, restoring_{}, restoreFailed_{}, seekAccepted_{}, seekObserved_{}, writing_{}, manualSource_{}, opening_{}, starting_{};
+    bool active_{}, confirmed_{}, ready_{}, loading_{}, restoring_{}, restoreFailed_{}, writing_{}, manualSource_{}, opening_{}, starting_{};
 };
