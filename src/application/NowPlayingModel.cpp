@@ -35,7 +35,7 @@ bool NowPlayingModel::openingStandalone() const { return app_->danmaku_.preparin
 bool NowPlayingModel::canSelectSource() const { return standalone() || app_->media_.canSelectSource(); }
 QObject* NowPlayingModel::sourceSession() const { return standalone() ? static_cast<QObject*>(&app_->danmaku_) : static_cast<QObject*>(&app_->media_); }
 quint64 NowPlayingModel::contextId() const { return app_->coordinator_.generation(); }
-bool NowPlayingModel::ownsPlayer() const { return video() && app_->media_.boundSession().startsWith("danmax-potplayer:"); }
+bool NowPlayingModel::ownsPlayer() const { return video() && app_->monitor_.closesWithTask(app_->media_.boundSession()); }
 bool NowPlayingModel::external() const { return video(); }
 bool NowPlayingModel::active() const { return standalone() || app_->media_.active(); }
 bool NowPlayingModel::playing() const { return standalone() ? app_->danmaku_.playing() : fresh() && sample_.playing; }
@@ -43,7 +43,7 @@ bool NowPlayingModel::busy() const { return standalone() ? app_->danmaku_.prepar
 bool NowPlayingModel::fresh() const {
     const double age = MediaMonitor::monotonicSeconds() - sample_.observedAt;
     return video() && active() && app_->media_.confirmed_ && app_->media_.sameContent(sample_)
-        && sample_.found && sample_.generation == app_->mediaGeneration_ && sample_.id == app_->boundSession()
+        && sample_.usableTimeline() && sample_.generation == app_->mediaGeneration_ && sample_.id == app_->boundSession()
         && std::isfinite(age) && age >= 0 && age <= 2.5 && app_->targetSessionConnected_
         && (sample_.playback == MediaSample::Playback::Playing || sample_.playback == MediaSample::Playback::Paused);
 }
@@ -83,6 +83,7 @@ QString NowPlayingModel::status() const {
     if (!video() && openingStandalone()) return QStringLiteral("正在读取独立弹幕 XML…");
     if (pending_) return desiredPosition_ >= 0 ? QStringLiteral("正在确认定位…") : QStringLiteral("正在确认播放状态…");
     if (!video()) return app_->media_.error().isEmpty() ? QStringLiteral("打开视频，或从更多菜单独立播放弹幕") : app_->media_.status();
+    if (active() && app_->media_.confirmed_ && !fresh() && !busy()) return QStringLiteral("等待播放器恢复同步，仍可选择弹幕来源");
     if (fresh() && !busy()) return (playing() ? QStringLiteral("正在播放 · ") : QStringLiteral("已暂停 · ")) + app_->media_.status_;
     return app_->media_.status_;
 }
@@ -98,8 +99,7 @@ int NowPlayingModel::count() const { return standalone() ? app_->danmaku_.total(
 double NowPlayingModel::position() const { return standalone() ? app_->danmaku_.position() : video() ? app_->media_.position() : 0; }
 double NowPlayingModel::duration() const { return standalone() ? app_->danmaku_.duration() : video() ? app_->media_.duration() : 0; }
 bool NowPlayingModel::same(const MediaSample& sample) const {
-    return sample.found && sample.id == expected_.id && sample.generation == expected_.generation
-        && sample.sessionToken == expected_.sessionToken && sample.title == expected_.title && sample.mediaUri == expected_.mediaUri;
+    return sample.sameConnection(expected_) && !sample.contentDiffers(expected_);
 }
 
 void NowPlayingModel::refresh() {
@@ -114,11 +114,11 @@ void NowPlayingModel::observe(const MediaSample& sample) {
     sample_ = sample;
     if (pending_) {
         if (!same(sample)) finish(false, QStringLiteral("播放器内容或连接已改变，已取消操作"));
-        else if (sample.observedAt > requestedAt_) {
+        else if (sample.usableTimeline() && sample.observedAt > requestedAt_) {
             const double advance = sample.playing ? (sample.observedAt - requestedAt_) * sample.rate : 0;
             observed_ = desiredPosition_ >= 0 ? std::abs(sample.position - desiredPosition_ - advance) <= 1 : sample.playing == desiredPlay_;
             if (observed_ && accepted_) finish(true, {});
-        }
+        } else observed_ = false;
     }
     emit changed();
 }

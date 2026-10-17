@@ -20,12 +20,13 @@ class VlcHttpBackend final : public MediaPlaybackBackend {
     };
     explicit VlcHttpBackend(QString directory, QObject* parent = nullptr, Hooks hooks = {});
     ~VlcHttpBackend() override;
+    QString adapterId() const override { return QStringLiteral("vlc"); }
     bool accepts(const QString& id) const override { return id.startsWith("danmax-vlc:"); }
-    ManagedPlaybackOpen open(const QString& executable, const QString& video);
+    ManagedPlaybackOpen open(const QString& executable, const QString& video) override;
     void select(const QString& id, quint64 generation) override;
     void requestPlayback(MediaSample expected, bool play, quint64 request) override;
     void requestSeek(MediaSample expected, double seconds, quint64 request) override;
-    void cancelOpen();
+    void cancelOpen() override;
     QString sessionId() const { return session_; }
   private:
     bool alive() const;

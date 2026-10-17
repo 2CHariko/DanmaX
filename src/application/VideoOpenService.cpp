@@ -99,13 +99,14 @@ void VideoOpenService::observe(const MediaSample& sample) {
     status_ = QStringLiteral("视频已就绪，正在自动匹配弹幕"); emit changed(); emit confirmed();
 }
 bool VideoOpenService::matchesTarget(const MediaSample& sample) const {
-    if (!pending_ || sample.id != transactionSession_ || !sample.found ||
+    if (!pending_ || sample.id != transactionSession_ || !sample.usableTimeline() ||
         sample.observedAt <= openedAt_ || !std::isfinite(sample.observedAt) ||
         !std::isfinite(sample.position) || !std::isfinite(sample.duration) || sample.duration <= 0 ||
         (sample.playback != MediaSample::Playback::Playing && sample.playback != MediaSample::Playback::Paused)) return false;
     const double age = MediaMonitor::monotonicSeconds() - sample.observedAt;
     if (age < 0 || age > 2.5) return false;
-    const QUrl uri(sample.mediaUri);
+    const QUrl uri(sample.evidence == MediaSample::Evidence::LaunchTarget ? sample.launchUri :
+                   sample.evidence == MediaSample::Evidence::Verified ? sample.mediaUri : QString());
     return uri.isLocalFile() && QFileInfo(uri.toLocalFile()).canonicalFilePath().compare(QFileInfo(video_).canonicalFilePath(), Qt::CaseInsensitive) == 0;
 }
 void VideoOpenService::cancel() {

@@ -48,10 +48,13 @@ struct Harness {
         sample.found = true; sample.playing = true; sample.playback = MediaSample::Playback::Playing;
         sample.duration = 120; sample.position = 12; sample.sessionToken = 101; sample.canSeek = true;
         sample.canPlay = sample.canPause = true;
+        sample.evidence = MediaSample::Evidence::Verified; sample.contentId = "item-1";
+        sample.mediaUri = QUrl::fromLocalFile(f.video).toString(QUrl::FullyEncoded);
+        sample.launchUri = sample.mediaUri;
     }
     void send() {
         QTest::qWait(2); sample.id = service->sessionId(); sample.generation = monitor->generation(); sample.observedAt = MediaMonitor::monotonicSeconds();
-        sample.identity = sample.title; sample.mediaUri = QUrl::fromLocalFile(f.video).toString(QUrl::FullyEncoded);
+        sample.identity = sample.title; // Deliberately unstable metadata: the product clock uses the content task.
         QMetaObject::invokeMethod(&app, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
     }
     void open(int intent = MediaSession::Normal) {
@@ -62,6 +65,76 @@ struct Harness {
 class WorkflowSessionTests final : public QObject {
     Q_OBJECT
 private slots:
+    void commonRecoveryContract_data() {
+        QTest::addColumn<bool>("verified");
+        QTest::newRow("launch-target-backend") << false;
+        QTest::newRow("verified-media-backend") << true;
+    }
+    void commonRecoveryContract() {
+        QFETCH(bool, verified);
+        Fixture f; f.seed(); Harness h(f);
+        h.sample.evidence = verified ? MediaSample::Evidence::Verified : MediaSample::Evidence::LaunchTarget;
+        if (!verified) h.sample.mediaUri.clear();
+        const auto evidence = h.sample.evidence;
+        h.media->openVideo(f.video); h.sample.title.clear(); h.send(); QTRY_COMPARE(h.media->total(), 2);
+        auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
+        const auto task = h.media->taskId(), context = now->contextId(), generation = h.monitor->generation();
+        for (const auto& title : QStringList{"", "OSD", "[1/13] unrelated.mp4", QStringLiteral("无法解析的标题 💬")}) {
+            h.sample.title = title; h.sample.duration += 2; h.send();
+            QVERIFY(h.media->active()); QVERIFY(now->canPlay()); QCOMPARE(h.media->total(), 2);
+            QCOMPARE(h.media->taskId(), task); QCOMPARE(now->contextId(), context);
+        }
+        const auto uri = h.sample.mediaUri;
+        h.sample.evidence = MediaSample::Evidence::Unknown; h.sample.mediaUri.clear(); h.send();
+        QVERIFY(now->canPlay()); QCOMPARE(h.media->total(), 2);
+        h.sample.found = false; h.sample.connection = MediaSample::Connection::Unavailable; h.send();
+        QVERIFY(h.media->active()); QVERIFY(h.app.running()); QVERIFY(!h.app.playing());
+        QVERIFY(now->canSelectSource()); QVERIFY(!now->canPlay());
+        h.media->loadFile(f.second); QTRY_VERIFY(!h.media->loading());
+        QCOMPARE(h.media->total(), 2); // Preparation waits for a fresh timeline without losing either source.
+        h.sample.found = true; h.sample.connection = MediaSample::Connection::Alive;
+        h.sample.evidence = evidence; h.sample.mediaUri = uri; h.send();
+        QTRY_COMPARE(h.media->total(), 1); QVERIFY(now->canPlay());
+        QCOMPARE(h.media->taskId(), task); QCOMPARE(h.monitor->generation(), generation);
+        h.sample.connection = MediaSample::Connection::Exited; h.sample.found = false; h.send();
+        QVERIFY(!h.media->active()); QVERIFY(!h.app.running());
+    }
+    void verifiedContentChangeKeepsConnectionAndRejectsOldPreparation() {
+        Fixture f; f.seed(); Harness h(f); h.open(); QTRY_COMPARE(h.media->total(), 2);
+        auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
+        const auto bound = h.media->boundSession(); const auto generation = h.monitor->generation();
+        const auto task = h.media->taskId(), context = now->contextId();
+        auto* recent = qobject_cast<RecentVideoStore*>(h.media->recent());
+        h.sample.position = 30; h.send(); h.media->flush();
+        h.media->loadFile(f.second);
+        const auto next = write(f.directory.path(), "Next - 02.mkv", "video");
+        h.sample.mediaUri = QUrl::fromLocalFile(next).toString(QUrl::FullyEncoded);
+        h.sample.contentId = "item-2"; h.sample.position = 3; h.send();
+        QVERIFY(h.media->active()); QVERIFY(now->canSelectSource()); QVERIFY(now->canPlay());
+        QCOMPARE(h.media->total(), 0); QCOMPARE(h.media->videoPath(), next);
+        QVERIFY(h.media->taskId() > task); QVERIFY(now->contextId() > context);
+        QCOMPARE(h.media->boundSession(), bound); QCOMPARE(h.monitor->generation(), generation);
+        QTest::qWait(80); QCOMPARE(h.media->total(), 0);
+        h.media->flush(); QCOMPARE(recent->lookup(f.video).value("position").toDouble(), 30.0);
+        h.media->loadFile(f.second); h.send(); QTRY_COMPARE(h.media->total(), 1);
+        // A new playlist item at the same URI is also a new content task.
+        const auto secondTask = h.media->taskId(); h.sample.contentId = "item-3"; h.send();
+        QVERIFY(h.media->active()); QVERIFY(h.media->taskId() > secondTask); QCOMPARE(h.media->total(), 0);
+    }
+    void pendingControlSurvivesMetadataAndTemporaryLossButNotContentChange() {
+        Fixture f; f.seed(); Harness h(f); h.open(); QTRY_COMPARE(h.media->total(), 2);
+        auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
+        disconnect(now, &NowPlayingModel::playbackRequested, h.monitor, &MediaMonitor::requestPlayback);
+        QSignalSpy commands(now, &NowPlayingModel::playbackRequested);
+        now->togglePlayback(); QCOMPARE(commands.size(), 1); QVERIFY(now->busy());
+        h.sample.title = "unparseable"; h.sample.found = false; h.send();
+        h.monitor->playbackControlFinished(commands.first()[2].toULongLong(), true, {}); QVERIFY(now->busy());
+        h.sample.found = true; h.sample.playing = false; h.sample.playback = MediaSample::Playback::Paused; h.send();
+        QVERIFY(!now->busy()); QVERIFY(now->error().isEmpty()); QVERIFY(!now->playing());
+        now->togglePlayback(); QVERIFY(now->busy()); const auto old = commands.last()[2].toULongLong();
+        h.sample.contentId = "new-item"; h.send(); QVERIFY(!now->busy()); QVERIFY(h.media->active());
+        h.monitor->playbackControlFinished(old, true, {}); QVERIFY(!now->playing());
+    }
     void standalonePlaybackReplacementUnloadAndEnd() {
         Fixture f; Harness h(f); auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
         auto* standalone = qobject_cast<DanmakuSession*>(h.app.standalone()); QVERIFY(standalone);

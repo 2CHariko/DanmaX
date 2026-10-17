@@ -713,10 +713,12 @@ void AppController::onSample(const MediaSample& s) {
         s.id == boundSession() && !s.id.isEmpty() &&
         std::isfinite(s.observedAt) && s.observedAt > connectionObservedAt_ &&
         connectionAge >= 0 && connectionAge <= 2.5) {
+        if (s.connection == MediaSample::Connection::Exited && coordinator_.owner() == PlaybackCoordinator::Media) {
+            nowPlaying_.endPlayback(); media_.status_ = QStringLiteral("播放器已退出，观看进度已保留");
+            emit media_.stateChanged(); return;
+        }
         connectionObservedAt_ = s.observedAt;
-        const bool connected = s.found && s.playback != MediaSample::Playback::Closed &&
-            s.playback != MediaSample::Playback::Changing && s.playback != MediaSample::Playback::Unknown &&
-            std::isfinite(s.position) && std::isfinite(s.duration);
+        const bool connected = s.usableTimeline();
         if (targetSessionConnected_ != connected) {
             targetSessionConnected_ = connected;
             disconnectedContentCleared_ = false;
@@ -739,8 +741,7 @@ void AppController::onSample(const MediaSample& s) {
     lastSampleObservedAt_ = s.observedAt;
     sampleAgeAtReceive_ = age;
     ++mediaSamples_;
-    if (!s.found || s.playback == MediaSample::Playback::Closed ||
-        s.playback == MediaSample::Playback::Changing || s.playback == MediaSample::Playback::Unknown) {
+    if (!s.usableTimeline() && s.playback != MediaSample::Playback::Stopped) {
         mediaClock_.freeze(monotonicTime_.nsecsElapsed() * 1e-9);
         if (syncConnected_) position_ = mediaClock_.position();
         syncConnected_ = false;
@@ -762,7 +763,8 @@ void AppController::onSample(const MediaSample& s) {
     double actual = std::max(0.0, s.position);
     if (s.duration > 0) actual = std::min(actual, s.duration);
     const bool stopped = s.playback == MediaSample::Playback::Stopped;
-    const auto identity = s.identity;
+    const auto identity = coordinator_.owner() == PlaybackCoordinator::Media
+        ? boundSession() + ':' + QString::number(media_.taskId()) : s.identity;
     const bool changed = !syncConnected_ || mediaIdentity_ != identity ||
                          (stopped && playbackState_ != PlayerStopped);
     const bool reset = mediaClock_.synchronize(actual, rate, samplePlaying,

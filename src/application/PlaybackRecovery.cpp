@@ -10,9 +10,7 @@ PlaybackRecovery::PlaybackRecovery(QObject* parent) : QObject(parent) {
 }
 bool PlaybackRecovery::same(const MediaSample& sample) const {
     const double age = MediaMonitor::monotonicSeconds() - sample.observedAt;
-    return sample.found && age >= 0 && age <= 2.5 && sample.id == origin_.id &&
-        sample.sessionToken == origin_.sessionToken && sample.generation == origin_.generation && sample.title == origin_.title &&
-        (sample.playback == MediaSample::Playback::Playing || sample.playback == MediaSample::Playback::Paused);
+    return sample.usableTimeline() && age >= 0 && age <= 2.5 && sample.sameConnection(origin_) && !sample.contentDiffers(origin_);
 }
 void PlaybackRecovery::begin(const MediaSample& sample, const QString& reason) {
     if (active_ && same(sample)) { reason_ = reason; emit changed(); return; }
@@ -25,7 +23,8 @@ void PlaybackRecovery::begin(const MediaSample& sample, const QString& reason) {
 }
 void PlaybackRecovery::observe(const MediaSample& sample) {
     if (!active_ && !pending_ && !awaitingPause_ && !owned_) return;
-    if (!same(sample)) { invalidate(); return; }
+    if (!sample.sameConnection(origin_) || sample.contentDiffers(origin_) || sample.connection == MediaSample::Connection::Exited) { invalidate(); return; }
+    if (!same(sample)) { latest_ = sample; return; }
     latest_ = sample;
     if (awaitingPause_ && sample.playback == MediaSample::Playback::Paused) {
         awaitingPause_ = false; owned_ = true; deadline_.stop();

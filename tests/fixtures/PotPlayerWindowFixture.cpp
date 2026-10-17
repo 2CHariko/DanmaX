@@ -3,16 +3,17 @@
 #include <shellapi.h>
 
 namespace {
-double position{}, rate{1.5}; ULONGLONG stamp{};
+double position{}, rate{1.5}, duration{120000}; ULONGLONG stamp{};
 bool playing{true}, stall{}, refuseClose{};
 double current() { return position + (playing ? (GetTickCount64() - stamp) * rate : 0); }
 LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM command, LPARAM value) {
     if (message == WM_USER) {
         if (command == 0x5ff0) { stall = value != 0; return 1; }
         if (command == 0x5ff1) { refuseClose = value != 0; return 1; }
+        if (command == 0x5ff2) { duration = double(value); return 1; }
         if (stall && command >= 0x5002 && command <= 0x5007) Sleep(250);
         switch (command) {
-        case 0x5002: return 120000;
+        case 0x5002: return LRESULT(duration);
         case 0x5004: return LRESULT(current());
         case 0x5006: return playing ? 2 : 1;
         case 0x5005: position = double(value); stamp = GetTickCount64(); return 0;

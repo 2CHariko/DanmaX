@@ -15,7 +15,8 @@ MediaMonitor::MediaMonitor(QObject* parent, const QString& playerDirectory) : QO
     pot_ = new PotPlayerBackend(this);
     connect(pot_, &PotPlayerBackend::ownedExited, this, &MediaMonitor::ownedPlayerExited);
     connect(pot_, &PotPlayerBackend::closeFailed, this, &MediaMonitor::ownedPlayerCloseFailed);
-    for (auto* backend : {static_cast<MediaPlaybackBackend*>(vlc_), static_cast<MediaPlaybackBackend*>(pot_)}) {
+    backends_ = {vlc_, pot_};
+    for (auto* backend : backends_) {
         connect(backend, &MediaPlaybackBackend::sampleReceived, this, [this, backend](MediaSample sample) {
             if (backend == active_ && sample.id == selected_ && sample.generation == generation_) emit sampleReceived(sample);
         });
@@ -36,10 +37,9 @@ void MediaMonitor::publishSessions() { auto list = vlcSessions_; emit sessionsCh
 quint64 MediaMonitor::select(QString id, bool renew) {
     if (!renew && id == selected_) return generation_;
     ++generation_; selected_ = std::move(id);
-    active_ = pot_->accepts(selected_) ? static_cast<MediaPlaybackBackend*>(pot_)
-        : vlc_->accepts(selected_) ? static_cast<MediaPlaybackBackend*>(vlc_) : nullptr;
-    vlc_->select(active_ == vlc_ ? selected_ : QString(), generation_);
-    pot_->select(active_ == pot_ ? selected_ : QString(), generation_);
+    active_ = nullptr;
+    for (auto* backend : backends_) if (backend->accepts(selected_)) { active_ = backend; break; }
+    for (auto* backend : backends_) backend->select(backend == active_ ? selected_ : QString(), generation_);
     return generation_;
 }
 void MediaMonitor::requestPlayback(MediaSample expected, bool play, quint64 request) {
@@ -56,13 +56,16 @@ void MediaMonitor::requestSeek(MediaSample expected, double seconds, quint64 req
     active_->requestSeek(std::move(expected), seconds, request);
 }
 ManagedPlaybackOpen MediaMonitor::openManaged(const QString& adapter, const QString& executable, const QString& video) {
-    if (adapter == "potplayer") return pot_->open(executable, video);
-    if (adapter != "vlc") return {{}, QStringLiteral("播放器没有可用的媒体后端")};
-    return vlc_->open(executable, video);
+    for (auto* backend : backends_) if (backend->adapterId() == adapter) return backend->open(executable, video);
+    return {{}, QStringLiteral("播放器没有可用的媒体后端")};
 }
-void MediaMonitor::cancelManagedOpen() { vlc_->cancelOpen(); pot_->closeOwned(); }
+void MediaMonitor::cancelManagedOpen() { for (auto* backend : backends_) backend->cancelOpen(); }
 void MediaMonitor::closeOwnedPlayer(const QString& session) {
-    if (pot_->accepts(session)) pot_->closeOwned(session);
+    for (auto* backend : backends_) if (backend->accepts(session) && backend->closesWithTask()) backend->closeOwned(session);
+}
+bool MediaMonitor::closesWithTask(const QString& session) const {
+    for (auto* backend : backends_) if (backend->accepts(session)) return backend->closesWithTask();
+    return false;
 }
 double MediaMonitor::monotonicSeconds() {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();

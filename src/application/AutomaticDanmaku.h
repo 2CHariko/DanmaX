@@ -49,6 +49,8 @@ class AutomaticDanmaku final : public QObject {
     void search(bool requireChoice = false);
     void libraryChanged();
     void accept();
+    void acceptResult(std::shared_ptr<OnlineDanmakuResult> result);
+    void continuePreparation();
     bool fresh() const;
     QString matchingTitle() const { return fileTitle_.isEmpty() ? latest_.title : fileTitle_; }
     void state(Phase phase, const QString& status);
@@ -65,4 +67,5 @@ class AutomaticDanmaku final : public QObject {
     Phase phase_{Waiting};
     bool enabled_{}, suspended_{}, changing_{};
     std::shared_ptr<OnlineDanmakuResult> ready_;
+    std::shared_ptr<OnlineDanmakuResult> deferred_;
 };

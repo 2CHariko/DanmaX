@@ -14,13 +14,16 @@ std::optional<VlcState> VlcProtocol::decode(const QByteArray& data, const QStrin
         || !obj.value("ok").isBool() || !obj.value("found").isBool()) return {};
     VlcState result; auto& sample = result.sample;
     result.accepted = obj.value("ok").toBool(); sample.id = session; sample.generation = generation; sample.observedAt = observedAt;
+    sample.connection = MediaSample::Connection::Alive;
+    sample.sessionToken = qHash(session); if (!sample.sessionToken) sample.sessionToken = 1;
     result.previousItem = obj.value("previous_item").toString();
     sample.found = obj.value("found").toBool();
-    if (!sample.found) { sample.playback = MediaSample::Playback::Closed; return result; }
+    if (!sample.found) { sample.playback = MediaSample::Playback::Changing; return result; }
     for (const auto* name : {"position", "duration", "rate"}) if (!obj.value(name).isDouble()) return {};
     for (const auto* name : {"state", "uri", "item"}) if (!obj.value(name).isString()) return {};
     sample.position = obj.value("position").toDouble(); sample.duration = obj.value("duration").toDouble(); sample.rate = obj.value("rate").toDouble();
     sample.mediaUri = obj.value("uri").toString(); result.item = obj.value("item").toString();
+    sample.evidence = MediaSample::Evidence::Verified; sample.contentId = result.item;
     const QUrl uri(sample.mediaUri);
     if (!std::isfinite(sample.position) || !std::isfinite(sample.duration) || !std::isfinite(sample.rate)
         || sample.position < 0 || sample.duration <= 0 || sample.duration > 366 * 86400.0 || sample.position > sample.duration + 1
@@ -36,6 +39,5 @@ std::optional<VlcState> VlcProtocol::decode(const QByteArray& data, const QStrin
     sample.canPlay = sample.canPause = sample.playback == MediaSample::Playback::Playing || sample.playback == MediaSample::Playback::Paused;
     sample.title = QFileInfo(uri.toLocalFile()).fileName();
     sample.identity = session + '\n' + sample.mediaUri + '\n' + result.item;
-    sample.sessionToken = qHash(sample.identity); if (!sample.sessionToken) sample.sessionToken = 1;
     return result;
 }

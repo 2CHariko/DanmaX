@@ -508,6 +508,7 @@ class OnlineDanmakuTests final : public QObject {
         QQuickWindow overlay; DanmakuItem renderer; renderer.setParentItem(overlay.contentItem()); controller.attach(&renderer, &overlay);
         MediaSample sample; sample.found = sample.playing = true; sample.playback = MediaSample::Playback::Playing;
         sample.title = sample.identity = "Test - 01.mp4"; sample.mediaUri = QUrl::fromLocalFile(video).toString(QUrl::FullyEncoded);
+        sample.evidence = MediaSample::Evidence::Verified;
         sample.duration = 120; sample.position = 12; sample.sessionToken = 101;
         const auto send = [&] { QTest::qWait(2); sample.id = service->sessionId(); sample.generation = monitor->generation();
             sample.observedAt = MediaMonitor::monotonicSeconds();

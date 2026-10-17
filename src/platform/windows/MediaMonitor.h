@@ -17,6 +17,7 @@ class MediaMonitor final : public QObject {
     ManagedPlaybackOpen openManaged(const QString& adapter, const QString& executable, const QString& video);
     void cancelManagedOpen();
     void closeOwnedPlayer(const QString& session);
+    bool closesWithTask(const QString& session) const;
     static double monotonicSeconds();
     static bool targetForeground(const QString& applicationId);
     static bool windowMatchesSession(quintptr handle, const QString& id);
@@ -37,6 +38,7 @@ class MediaMonitor final : public QObject {
     VlcHttpBackend* vlc_{};
     PotPlayerBackend* pot_{};
     MediaPlaybackBackend* active_{};
+    QList<MediaPlaybackBackend*> backends_;
     QVariantList vlcSessions_;
     QString selected_;
     quint64 generation_{1};

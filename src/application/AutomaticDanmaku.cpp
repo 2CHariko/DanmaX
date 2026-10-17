@@ -37,13 +37,13 @@ void AutomaticDanmaku::openRecovery() {
 }
 void AutomaticDanmaku::cancelRecovery() {
     QScopedValueRollback guard(changing_, true);
-    settle_.stop(); library_.cancel(); ready_.reset();
+    settle_.stop(); library_.cancel(); ready_.reset(); deferred_.reset();
     recovery_.finish(true);
     state(Skipped, QStringLiteral("已跳过当前内容的弹幕匹配；下一集继续自动识别"));
 }
 bool AutomaticDanmaku::fresh() const {
     const double age = MediaMonitor::monotonicSeconds() - latest_.observedAt;
-    return enabled_ && !suspended_ && latest_.found && age >= 0 && age <= 2.5 &&
+    return enabled_ && !suspended_ && latest_.usableTimeline() && age >= 0 && age <= 2.5 &&
         (latest_.playback == MediaSample::Playback::Playing || latest_.playback == MediaSample::Playback::Paused) &&
         std::isfinite(latest_.position) && std::isfinite(latest_.duration);
 }
@@ -64,14 +64,14 @@ void AutomaticDanmaku::reset(bool invalidateRecovery) {
     QScopedValueRollback guard(changing_, true);
     if (invalidateRecovery) recovery_.invalidate();
     offeredIdentity_.clear(); parseResult_ = {};
-    settle_.stop(); library_.cancel(); ready_.reset(); latest_ = {}; parsed_ = {}; identity_.clear(); suspended_ = false;
+    settle_.stop(); library_.cancel(); ready_.reset(); deferred_.reset(); latest_ = {}; parsed_ = {}; identity_.clear(); suspended_ = false;
     state(Waiting, enabled_ ? QStringLiteral("等待指定播放器提供标题") : QStringLiteral("自动匹配未开启"));
 }
 void AutomaticDanmaku::suspend(bool resume) {
     if (!enabled_) return;
     QScopedValueRollback guard(changing_, true);
     if (resume) recovery_.finish(true);
-    settle_.stop(); library_.cancel(); ready_.reset(); suspended_ = true;
+    settle_.stop(); library_.cancel(); ready_.reset(); deferred_.reset(); suspended_ = true;
     state(Waiting, QStringLiteral("自动匹配已暂停；手动操作优先，可点击继续自动匹配"));
 }
 void AutomaticDanmaku::retry() {
@@ -92,30 +92,26 @@ void AutomaticDanmaku::forgetAssociation() {
     }
     QScopedValueRollback guard(changing_, true);
     settle_.stop(); library_.cancel(); ready_.reset();
+    deferred_.reset();
     emit contentInvalidated();
     state(Choice, QStringLiteral("已忘记本番关联，请搜索并选择正确的动画和剧集"));
 }
 void AutomaticDanmaku::observe(const MediaSample& sample) {
     recovery_.observe(sample);
-    const bool sameTitle = sample.title == latest_.title && sample.id == latest_.id && sample.sessionToken == latest_.sessionToken;
+    const bool sameTitle = sample.title == latest_.title && sample.sameConnection(latest_) && !sample.contentDiffers(latest_);
     latest_ = sample;
     if (!enabled_ || suspended_) return;
-    if (!fresh()) {
-        if (phase_ != Waiting) {
-            QScopedValueRollback guard(changing_, true);
-            settle_.stop(); library_.cancel(); ready_.reset(); identity_.clear();
-            state(Waiting, QStringLiteral("等待指定播放器恢复播放或暂停状态"));
-        }
-        return;
-    }
-    if (sameTitle && phase_ != Waiting && !identity_.isEmpty()) return;
+    if (!fresh()) return; // A temporary sampling gap does not cancel this task's preparation.
+    if (sameTitle && phase_ != Waiting && !identity_.isEmpty()) { continuePreparation(); return; }
     const auto report = identifyMediaTitle(matchingTitle());
     const auto parsed = report.selected;
-    const auto identity = sample.id + '\n' + QString::number(sample.sessionToken) + '\n' + (parsed.valid() ? parsed.key() : matchingTitle().left(1024).simplified());
-    if (identity == identity_ && phase_ != Waiting) return;
+    const auto identity = sample.id + '\n' + QString::number(sample.sessionToken) + '\n' +
+        (fileTitle_.isEmpty() ? sample.contentId : QString()) + '\n' +
+        (parsed.valid() ? parsed.key() : matchingTitle().left(1024).simplified());
+    if (identity == identity_ && phase_ != Waiting) { continuePreparation(); return; }
     QScopedValueRollback guard(changing_, true);
     offeredIdentity_.clear();
-    settle_.stop(); library_.clearSelection(); ready_.reset(); parsed_ = parsed; parseResult_ = report; identity_ = identity;
+    settle_.stop(); library_.clearSelection(); ready_.reset(); deferred_.reset(); parsed_ = parsed; parseResult_ = report; identity_ = identity;
     library_.setSearchKeyword(report.searchTitle);
     // Invalidate before any asynchronous preparation, including unrecognized titles.
     emit contentInvalidated();
@@ -123,7 +119,7 @@ void AutomaticDanmaku::observe(const MediaSample& sample) {
     settle_.start();
 }
 void AutomaticDanmaku::resolve() {
-    if (!fresh()) { state(Waiting, QStringLiteral("媒体信息已过期，等待播放器更新")); identity_.clear(); return; }
+    if (!fresh()) { status_ = QStringLiteral("等待播放器恢复同步后继续准备弹幕"); emit changed(); return; }
     const auto rawAssociation = associations_.raw(matchingTitle());
     if (library_.scanning()) { state(Cache, QStringLiteral("正在准备本地弹幕索引…")); return; }
     if (!rawAssociation.isEmpty()) {
@@ -183,7 +179,7 @@ void AutomaticDanmaku::search(bool requireChoice) {
     libraryChanged();
 }
 void AutomaticDanmaku::libraryChanged() {
-    if (changing_ || !enabled_ || suspended_ || library_.busy() || phase_ == Loaded || phase_ == Waiting || phase_ == Settling || phase_ == Cache || phase_ == Skipped) return;
+    if (changing_ || deferred_ || !enabled_ || suspended_ || library_.busy() || phase_ == Loaded || phase_ == Waiting || phase_ == Settling || phase_ == Cache || phase_ == Skipped) return;
     if (!library_.error().isEmpty()) {
         if (phase_ == LoadingCache) { search(); return; }
         state(Failed, library_.error());
@@ -196,7 +192,17 @@ void AutomaticDanmaku::libraryChanged() {
 void AutomaticDanmaku::accept() {
     auto result = library_.takeReadyResult();
     if (!result) return;
-    if (!fresh()) { identity_.clear(); state(Waiting, QStringLiteral("媒体信息已过期，等待播放器更新")); return; }
+    if (!fresh()) {
+        deferred_ = std::move(result); status_ = QStringLiteral("弹幕已准备，等待播放器恢复同步"); emit changed(); return;
+    }
+    acceptResult(std::move(result));
+}
+void AutomaticDanmaku::continuePreparation() {
+    if (deferred_) { auto result = std::exchange(deferred_, {}); acceptResult(std::move(result)); }
+    else if ((phase_ == Settling && !settle_.isActive()) || (phase_ == Cache && !library_.scanning())) resolve();
+    else if ((phase_ == Choice || phase_ == Failed) && !library_.busy()) offerRecovery();
+}
+void AutomaticDanmaku::acceptResult(std::shared_ptr<OnlineDanmakuResult> result) {
     if (phase_ != LoadingCache && phase_ != Searching && phase_ != Choice && phase_ != Failed) return;
     QString error;
     if (parsed_.valid()) error = associations_.remember(parsed_, result->metadata);

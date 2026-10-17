@@ -70,7 +70,7 @@ MediaSession::MediaSession(const QString& data, const QString& cache, AppControl
     });
 }
 MediaSession::~MediaSession() { flush(); cancelLoader(); automatic_.reset(); library_.cancel(); }
-QString MediaSession::title() const { return QFileInfo(video_).fileName(); }
+QString MediaSession::title() const { return video_.isEmpty() ? confirmedSample_.title : QFileInfo(video_).fileName(); }
 bool MediaSession::connected() const { return active_ && app_->targetSessionConnected(); }
 void MediaSession::configure(const QStringList& servers) {
     if (servers_ == servers) return;
@@ -86,7 +86,7 @@ void MediaSession::openVideo(const QString& file, int intent) {
 void MediaSession::beginTask(const QString& path) {
     app_->handoff(PlaybackCoordinator::Media);
     ++task_; active_ = starting_ = true; confirmed_ = ready_ = writing_ = manualSource_ = false;
-    restoring_ = restoreFailed_ = false; latest_ = {}; bound_.clear(); video_ = path;
+    restoring_ = restoreFailed_ = false; latest_ = {}; confirmedSample_ = {}; lastObservedAt_ = 0; bound_.clear(); video_ = path;
     total_ = 0; sourceTitle_.clear(); error_.clear(); source_ = recent_.lookup(path).value("source").toMap();
     const auto record = recent_.lookup(path);
     contentMetadata_ = record.value("content").toMap();
@@ -99,15 +99,35 @@ void MediaSession::beginTask(const QString& path) {
 }
 void MediaSession::confirmed() {
     if (!active_) return;
-    latest_ = service_->latestSample(); contentToken_ = latest_.sessionToken;
-    confirmedTitle_ = latest_.title; confirmedUri_ = latest_.mediaUri; confirmed_ = true;
+    latest_ = confirmedSample_ = service_->latestSample(); confirmed_ = true;
     recent_.opened(video_);
     automatic_.setFileTitle(QFileInfo(video_).fileName());
     if (restorePosition_ > 0 || intent_ == FromStart) beginRestore(); else prepared();
 }
 bool MediaSession::sameContent(const MediaSample& sample) const {
-    return sample.id == bound_ && sample.sessionToken == contentToken_ && sample.title == confirmedTitle_
-        && sample.mediaUri == confirmedUri_;
+    return sample.sameConnection(confirmedSample_) && !sample.contentDiffers(confirmedSample_);
+}
+void MediaSession::adoptContent(const MediaSample& sample) {
+    flush(); ++task_; ++seekRequest_; seekDeadline_.stop();
+    cancelLoader(); automatic_.reset(); library_.cancel();
+    restoring_ = restoreFailed_ = false;
+    source_.clear(); contentMetadata_.clear(); total_ = 0; sourceTitle_.clear(); error_.clear();
+    app_->clearMediaItems();
+    latest_ = confirmedSample_ = sample;
+    const QUrl uri(sample.mediaUri);
+    video_ = uri.isLocalFile() ? RecentVideoStore::normalizedPath(uri.toLocalFile()) : QString();
+    ready_ = true; writing_ = !video_.isEmpty(); manualSource_ = video_.isEmpty();
+    app_->coordinator_.acquire(PlaybackCoordinator::Media);
+    if (writing_) {
+        recent_.opened(video_);
+        automatic_.setFileTitle(QFileInfo(video_).fileName());
+        status_ = QStringLiteral("已连接当前视频，正在准备弹幕");
+        automatic_.configure(true, servers_); automatic_.observe(sample);
+    } else {
+        automatic_.setFileTitle({});
+        status_ = QStringLiteral("播放器已载入新内容，可选择弹幕来源");
+    }
+    emit stateChanged();
 }
 void MediaSession::beginRestore() {
     if (!active_ || !confirmed_ || !latest_.found) return;
@@ -140,19 +160,21 @@ void MediaSession::prepared() {
 void MediaSession::observe(const MediaSample& sample) {
     if (!active_ || sample.id != bound_ || sample.generation != app_->mediaGeneration_) return;
     const auto age = MediaMonitor::monotonicSeconds() - sample.observedAt;
-    if (age < 0 || age > 2.5 || sample.observedAt <= latest_.observedAt) return;
+    if (age < 0 || age > 2.5 || sample.observedAt <= lastObservedAt_) return;
+    lastObservedAt_ = sample.observedAt;
     if (!confirmed_) { service_->observe(sample); return; }
-    if (!sample.found) { flush(); automatic_.observe(sample); emit stateChanged(); return; }
+    if (!sample.sameConnection(confirmedSample_)) { app_->nowPlaying_.endPlayback(); return; }
     if (sample.playback == MediaSample::Playback::Stopped || sample.playback == MediaSample::Playback::Closed) {
         flush(); latest_.playing = false;
         status_ = QStringLiteral("播放器已停止，观看进度已保留"); emit stateChanged(); return;
     }
+    if (!sample.usableTimeline()) { flush(); automatic_.observe(sample); emit stateChanged(); return; }
     if (!sameContent(sample)) {
-        flush(); writing_ = ready_ = active_ = false; seekDeadline_.stop(); cancelLoader(); automatic_.reset(); library_.cancel();
-        app_->clearMediaItems(); status_ = QStringLiteral("播放器内容已切换，请从媒体库重新打开视频"); emit stateChanged(); return;
+        adoptContent(sample); return;
     }
     const bool paused = latest_.playing && !sample.playing;
     latest_ = sample;
+    if (sample.evidence == MediaSample::Evidence::Verified) confirmedSample_ = sample;
     if (restoring_ && sample.observedAt > seekAt_) {
         const auto target = restorePosition_ + (sample.playing ? (sample.observedAt - seekAt_) * sample.rate : 0);
         seekObserved_ = std::abs(sample.position - target) <= 1;
@@ -160,6 +182,10 @@ void MediaSession::observe(const MediaSample& sample) {
     }
     if (ready_ && !manualSource_) automatic_.observe(sample);
     else automatic_.playbackRecovery()->observe(sample);
+    if (preparedSource_ && connected()) {
+        auto prepared = std::move(*preparedSource_); preparedSource_.reset();
+        accept(std::move(prepared.items), prepared.title, prepared.source);
+    }
     if (paused) flush();
     emit stateChanged();
 }
@@ -172,10 +198,11 @@ void MediaSession::deactivate() {
     cancelLoader(); automatic_.reset(); library_.cancel();
     active_ = confirmed_ = ready_ = writing_ = restoring_ = restoreFailed_ = false;
     total_ = 0; sourceTitle_.clear();
-    status_ = video_.isEmpty() ? QString() : bound_.startsWith("danmax-potplayer:")
+    status_ = video_.isEmpty() ? QString() : monitor_->closesWithTask(bound_)
         ? QStringLiteral("已结束本次播放，正在关闭播放器") : QStringLiteral("弹幕任务已交接，播放器保持原状态"); emit stateChanged();
 }
 void MediaSession::cancelLoader() {
+    preparedSource_.reset();
     ++loadGeneration_; loader_.request_stop(); if (loader_.joinable()) loader_.join(); loading_ = false;
 }
 void MediaSession::loadFile(const QString& input) {
@@ -202,9 +229,10 @@ void MediaSession::loadFile(const QString& input) {
     });
 }
 void MediaSession::accept(std::vector<danmaku::Item> items, const QString& title, const QVariantMap& source) {
-    if (!active_ || !ready_ || !latest_.found) return;
+    if (!active_ || !ready_) return;
     if (!connected() || MediaMonitor::monotonicSeconds() - latest_.observedAt > 2.5) {
-        error_ = QStringLiteral("播放器连接已断开，未提交弹幕，请重新打开视频"); emit stateChanged(); return;
+        preparedSource_ = PreparedSource{std::move(items), title, source};
+        status_ = QStringLiteral("弹幕已准备，等待播放器恢复同步"); emit stateChanged(); return;
     }
     total_ = static_cast<int>(items.size()); sourceTitle_ = title; source_ = source;
     app_->presentMedia(std::move(items), title, latest_);
@@ -220,6 +248,7 @@ void MediaSession::unload() {
 }
 void MediaSession::retryMatching() {
     if (!active_ || !ready_) return;
+    cancelLoader(); library_.cancel();
     source_.clear(); manualSource_ = false; automatic_.configure(true, servers_); automatic_.retry(); automatic_.observe(latest_);
 }
 void MediaSession::showAutomaticDanmakuChoice() { automatic_.openRecovery(); }

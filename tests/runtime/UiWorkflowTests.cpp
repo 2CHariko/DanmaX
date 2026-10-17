@@ -444,6 +444,7 @@ private slots:
         auto* media = qobject_cast<MediaSession*>(backend.media());
         auto* service = qobject_cast<VideoOpenService*>(backend.videoOpen()); media->openVideo(video);
         MediaSample sample; sample.id = service->sessionId(); sample.found = sample.playing = true;
+        sample.evidence = MediaSample::Evidence::Verified;
         sample.playback = MediaSample::Playback::Playing; sample.duration = 120; sample.sessionToken = 1;
         sample.canPlay = sample.canPause = sample.canSeek = true;
         const auto inject = [&] {

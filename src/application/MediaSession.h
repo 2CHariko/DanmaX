@@ -4,6 +4,7 @@
 #include "infrastructure/RecentVideoStore.h"
 #include <QTimer>
 #include <thread>
+#include <optional>
 class AppController;
 class ExternalPlayerStore;
 
@@ -82,6 +83,7 @@ class MediaSession final : public QObject {
     void beginTask(const QString& path);
     bool requireSource();
     void confirmed();
+    void adoptContent(const MediaSample& sample);
     void beginRestore();
     void restoreError(const QString& error);
     void prepared();
@@ -95,15 +97,17 @@ class MediaSession final : public QObject {
     RecentVideoStore recent_;
     AutomaticDanmaku automatic_;
     DanmakuLibrary library_;
-    QString video_, bound_, status_, error_, sourceTitle_, confirmedTitle_, confirmedUri_, cacheRoot_;
+    QString video_, bound_, status_, error_, sourceTitle_, cacheRoot_;
     QVariantMap source_;
     QVariantMap contentMetadata_;
     QStringList servers_;
-    MediaSample latest_;
+    MediaSample latest_, confirmedSample_;
+    struct PreparedSource { std::vector<danmaku::Item> items; QString title; QVariantMap source; };
+    std::optional<PreparedSource> preparedSource_;
     QTimer seekDeadline_, saveTimer_;
     std::jthread loader_;
-    quint64 task_{}, loadGeneration_{}, contentToken_{}, seekRequest_{}, seekTask_{};
-    double restorePosition_{}, seekAt_{};
+    quint64 task_{}, loadGeneration_{}, seekRequest_{}, seekTask_{};
+    double restorePosition_{}, seekAt_{}, lastObservedAt_{};
     int intent_{Normal}, total_{};
     bool active_{}, confirmed_{}, ready_{}, loading_{}, restoring_{}, restoreFailed_{}, seekAccepted_{}, seekObserved_{}, writing_{}, manualSource_{}, opening_{}, starting_{};
 };

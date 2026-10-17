@@ -117,9 +117,12 @@ ManagedPlaybackOpen VlcHttpBackend::open(const QString& executable, const QStrin
     return {session_, {}};
 }
 void VlcHttpBackend::missing() {
-    MediaSample sample; sample.id = selected_; sample.generation = generation_;
-    sample.observedAt = MediaMonitor::monotonicSeconds(); sample.playback = MediaSample::Playback::Closed;
-    latest_ = {}; latestItem_.clear(); emit sampleReceived(sample);
+    auto sample = latest_; sample.id = selected_; sample.generation = generation_;
+    sample.sessionToken = qHash(selected_); if (!sample.sessionToken) sample.sessionToken = 1;
+    sample.connection = alive() ? MediaSample::Connection::Unavailable : MediaSample::Connection::Exited;
+    sample.found = sample.canPlay = sample.canPause = sample.canSeek = false;
+    sample.observedAt = MediaMonitor::monotonicSeconds(); sample.playback = MediaSample::Playback::Changing;
+    latest_.found = false; emit sampleReceived(sample);
 }
 void VlcHttpBackend::unavailable(const QString& error) {
     missing(); if (lastError_ != error) { lastError_ = error; emit errorOccurred(error); }
@@ -132,7 +135,6 @@ void VlcHttpBackend::poll() {
     }
     const auto owner = hooks_.listener ? hooks_.listener(port_, session_) : PlayerProcessIdentity::listener(port_, session_);
     if (owner != PlayerProcessIdentity::Listener::Owned) {
-        if (owner == PlayerProcessIdentity::Listener::Foreign) timer_.stop();
         unavailable(owner == PlayerProcessIdentity::Listener::Foreign ? QStringLiteral("VLC 控制端口被其他进程占用，请重试打开视频")
             : QStringLiteral("正在等待 VLC 本地接口")); return;
     }
@@ -145,8 +147,8 @@ void VlcHttpBackend::poll() {
         auto command = std::move(commands_.front()); commands_.pop_front();
         const double age = MediaMonitor::monotonicSeconds() - command.expected.observedAt;
         if (!latest_.found || command.expected.id != selected_ || command.expected.generation != generation_
-            || !std::isfinite(age) || age < 0 || age > 2.5 || command.expected.sessionToken != latest_.sessionToken
-            || command.expected.mediaUri != latest_.mediaUri || latestItem_.isEmpty()) {
+            || !std::isfinite(age) || age < 0 || age > 2.5 || !command.expected.sameConnection(latest_)
+            || command.expected.contentDiffers(latest_) || latestItem_.isEmpty()) {
             if (command.seek) emit seekFinished(command.request, false, QStringLiteral("媒体或连接已改变"));
             else emit playbackControlFinished(command.request, false, QStringLiteral("媒体或连接已改变"));
             return;
@@ -213,7 +215,7 @@ void VlcHttpBackend::request(QUrlQuery query, const QString& kind, quint64 contr
             if (!sample.found || QUrl(sample.mediaUri) != QUrl(openingTarget_) || decoded->item == openedFromItem_) { missing(); return; }
             openingTarget_.clear();
         }
-        const bool changed = sample.sessionToken != latest_.sessionToken || sample.position != latest_.position
+        const bool changed = !latest_.found || sample.contentDiffers(latest_) || sample.position != latest_.position
             || sample.playback != latest_.playback || sample.rate != latest_.rate;
         const double now = sample.observedAt;
         if (changed) lastRawChangedAt_ = now;

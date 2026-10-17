@@ -23,8 +23,8 @@ struct Instance {
     QString id, executable, video;
     std::atomic_bool closing{};
     HWND window{}; // Worker-thread confined, never shared with QML.
-    bool invalidContent{}, announcedExit{}, closePosted{}, closeWarned{}, contentSeen{};
-    double closeAt{}, knownDuration{}, rate{1};
+    bool announcedExit{}, closePosted{}, closeWarned{};
+    double closeAt{}, rate{1};
     std::deque<std::pair<double, double>> positions;
     ~Instance() { if (process) CloseHandle(process); }
     bool alive() const { return process && WaitForSingleObject(process, 0) == WAIT_TIMEOUT; }
@@ -54,15 +54,6 @@ struct Instance {
         return qint64(static_cast<INT_PTR>(reply));
     }
 };
-// PotPlayer's native caption can temporarily contain an OSD message. Only a
-// recognizable local media filename is evidence of an external file switch.
-QString captionFile(HWND window) {
-    wchar_t text[2048]{}; GetWindowTextW(window, text, 2048);
-    auto title = QString::fromWCharArray(text).trimmed();
-    if (title.endsWith(" - PotPlayer", Qt::CaseInsensitive)) title.chop(12);
-    static const QStringList extensions{"mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts", "m2ts"};
-    return extensions.contains(QFileInfo(title).suffix().toLower()) ? title : QString();
-}
 }
 struct PotPlayerBackend::Impl {
     struct Command { MediaSample expected; bool play{}; quint64 request{}; double seconds{-1}; bool seek{}; };
@@ -95,38 +86,24 @@ struct PotPlayerBackend::Impl {
     MediaSample read(const std::shared_ptr<Instance>& instance, const QString& id, quint64 revision) {
         MediaSample sample; sample.id = id; sample.generation = revision;
         sample.sessionToken = instance->created;
+        sample.connection = instance->alive() ? MediaSample::Connection::Alive : MediaSample::Connection::Exited;
+        sample.evidence = MediaSample::Evidence::LaunchTarget;
+        sample.launchUri = QUrl::fromLocalFile(instance->video).toString(QUrl::FullyEncoded);
         sample.observedAt = MediaMonitor::monotonicSeconds();
         sample.playback = instance->alive() ? MediaSample::Playback::Changing : MediaSample::Playback::Closed;
-        if (!instance->alive() || instance->closing || instance->invalidContent) return sample;
+        if (!instance->alive() || instance->closing) return sample;
         if (!instance->window) instance->window = instance->findWindow();
         // A replaced window is a new binding, not permission to reuse a stale HWND.
-        if (!instance->validWindow()) return sample;
+        if (!instance->validWindow()) { sample.connection = MediaSample::Connection::Unavailable; return sample; }
         const auto status = instance->message(GetStatus), duration = instance->message(GetDuration), position = instance->message(GetPosition);
-        if (!status || !duration || !position) return sample;
+        if (!status || !duration || !position) { sample.connection = MediaSample::Connection::Unavailable; return sample; }
         if (*status != 1 && *status != 2) { instance->positions.clear(); return sample; }
         if (*duration <= 0 || *duration > 366LL * 86400000 || *position < 0 || *position > *duration + 1000) return sample;
         const auto filename = QFileInfo(instance->video).fileName();
-        const auto caption = captionFile(instance->window);
-        if (!caption.isEmpty()) {
-            const QFileInfo content(caption);
-            const auto actual = content.isAbsolute() ? content.canonicalFilePath() : caption;
-            const auto expected = content.isAbsolute() ? instance->video : filename;
-            if (actual.compare(expected, Qt::CaseInsensitive) != 0) instance->invalidContent = true;
-        }
-        if (instance->knownDuration > 0 && std::abs(instance->knownDuration - *duration / 1000.0) > 0.5) instance->invalidContent = true;
-        if (instance->invalidContent) {
-            emit owner->errorOccurred(QStringLiteral("PotPlayer 内容已切换，已停止本次弹幕同步，请从应用重新打开视频"));
-            // Deliver the identity change once so MediaSession stops checkpointing
-            // the old file, in addition to freezing presentation immediately.
-            sample.found = true; sample.sessionToken = instance->created + 1;
-            sample.title = caption; sample.identity = instance->id + ":changed";
-            return sample;
-        }
-        if (!caption.isEmpty()) instance->contentSeen = true;
-        if (!instance->contentSeen) return sample;
-        instance->knownDuration = *duration / 1000.0;
+        // Captions, OSD messages and changing duration estimates are not media
+        // identity. This protocol only proves the owned instance and timeline.
         sample.observedAt = MediaMonitor::monotonicSeconds();
-        sample.position = *position / 1000.0; sample.duration = instance->knownDuration;
+        sample.position = *position / 1000.0; sample.duration = *duration / 1000.0;
         sample.playing = *status == 2;
         sample.playback = sample.playing ? MediaSample::Playback::Playing : MediaSample::Playback::Paused;
         // The native protocol has no verified rate getter. Estimate interpolation
@@ -144,8 +121,8 @@ struct PotPlayerBackend::Impl {
             }
         }
         sample.rate = instance->rate; sample.found = sample.canSeek = sample.canPlay = sample.canPause = true;
-        sample.title = filename; sample.mediaUri = QUrl::fromLocalFile(instance->video).toString(QUrl::FullyEncoded);
-        sample.identity = instance->id + ':' + sample.mediaUri;
+        sample.title = filename;
+        sample.identity = instance->id + ':' + sample.launchUri;
         return sample;
     }
     void run(std::stop_token stop) {
@@ -173,8 +150,8 @@ struct PotPlayerBackend::Impl {
                 bool currentSelection;
                 { std::lock_guard lock(mutex); currentSelection = selected == id && generation == revision && current == instance; }
                 bool okay = currentSelection && instance && !instance->closing && sample.found && expected.found
-                    && expected.id == id && expected.generation == revision && expected.sessionToken == sample.sessionToken
-                    && expected.mediaUri == sample.mediaUri && expected.title == sample.title && std::isfinite(age) && age >= 0 && age <= 2.5;
+                    && expected.sameConnection(sample) && !expected.contentDiffers(sample)
+                    && sample.usableTimeline() && std::isfinite(age) && age >= 0 && age <= 2.5;
                 if (okay) {
                     okay = instance->message(command->seek ? SetPosition : SetStatus,
                         command->seek ? LPARAM(std::llround(command->seconds * 1000)) : command->play ? 2 : 1).has_value();

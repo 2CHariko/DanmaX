@@ -27,7 +27,7 @@ struct Fixture {
     QString executable, video, uri, item = "1", state = "playing", operation;
     double position = 12.25, rate = 1;
     int opens{}, requests{}, controls{}, launches{}, delay{}, size{};
-    bool living = true, foreign = false;
+    bool living = true, foreign = false, found = true;
     Fixture() {
         executable = write("vlc.exe", playerExecutableFixture());
         write("lua/intf/http.luac", "fixture"); write("lua/intf/modules/httprequests.luac", "fixture");
@@ -51,7 +51,7 @@ struct Fixture {
                         if (ok && command == "seek") position = get("seconds").toDouble();
                         else if (ok) state = command == "pause" ? "paused" : "playing";
                     }
-                    QJsonObject obj{{"protocol", 1}, {"request", get("request")}, {"ok", ok}, {"found", true},
+                    QJsonObject obj{{"protocol", 1}, {"request", get("request")}, {"ok", ok}, {"found", found},
                         {"previous_item", previous}, {"uri", uri}, {"item", item}, {"position", position}, {"duration", 120.5}, {"rate", rate}, {"state", state}, {"canSeek", true}};
                     const auto body = size ? QByteArray(size, 'x') : QJsonDocument(obj).toJson(QJsonDocument::Compact);
                     const auto send = [socket, body] {
@@ -85,10 +85,41 @@ void closeOwned(const QString& session) {
     HANDLE handle = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
     if (handle) { TerminateProcess(handle, 0); WaitForSingleObject(handle, 3000); CloseHandle(handle); }
 }
+void closeNormally(const QString& session) {
+    if (!PlayerProcessIdentity::alive(session)) return;
+    EnumWindows([](HWND hwnd, LPARAM value) -> BOOL {
+        const auto& session = *reinterpret_cast<const QString*>(value);
+        if (IsWindowVisible(hwnd) && !GetWindow(hwnd, GW_OWNER) && PlayerProcessIdentity::matchesWindow(quintptr(hwnd), session)) {
+            PostMessageW(hwnd, WM_CLOSE, 0, 0); return FALSE;
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&session));
+}
 }
 class VlcPlaybackTests final : public QObject {
     Q_OBJECT
 private slots:
+    void temporaryFailuresRecoverWithoutReopening() {
+        Fixture f; f.state = "paused";
+        VlcHttpBackend backend(f.directory.filePath("cache"), nullptr, f.hooks());
+        QSignalSpy samples(&backend, &MediaPlaybackBackend::sampleReceived);
+        const auto opened = backend.open(f.executable, f.video); QVERIFY(opened.error.isEmpty());
+        backend.select(opened.sessionId, 1); QTRY_VERIFY(!samples.isEmpty() && latest(samples).found);
+        const auto original = latest(samples);
+        f.size = 70000; QTRY_VERIFY(!latest(samples).found);
+        QCOMPARE(latest(samples).connection, MediaSample::Connection::Unavailable);
+        f.size = 0; QTRY_VERIFY(latest(samples).found);
+        QVERIFY(original.sameConnection(latest(samples))); QVERIFY(!original.contentDiffers(latest(samples)));
+        f.foreign = true; QTRY_VERIFY(!latest(samples).found);
+        f.foreign = false; QTRY_VERIFY(latest(samples).found);
+        f.found = false; QTRY_VERIFY(!latest(samples).found);
+        QCOMPARE(latest(samples).connection, MediaSample::Connection::Alive);
+        f.found = true; QTRY_VERIFY(latest(samples).found);
+        f.item = "99"; QTRY_COMPARE(latest(samples).contentId, QString("99"));
+        QVERIFY(original.sameConnection(latest(samples))); QVERIFY(original.contentDiffers(latest(samples)));
+        QCOMPARE(f.opens, 1); QCOMPARE(f.launches, 1);
+        f.living = false; QTRY_COMPARE(latest(samples).connection, MediaSample::Connection::Exited);
+    }
     void processDiscoveryAndInactiveCleanup() {
         Fixture f; std::atomic<int> phase{0}; auto hooks = f.hooks();
         const QVariantMap first{{"id", "danmax-vlc:123:456"}, {"label", "VLC A"}, {"connectable", false}};
@@ -117,7 +148,9 @@ private slots:
         const auto decode = [&] { return VlcProtocol::decode(QJsonDocument(obj).toJson(), "7", "danmax-vlc:1:2", 4, 20); };
         auto result = decode(); QVERIFY(result); QCOMPARE(result->sample.position, 12.345678); QCOMPARE(result->sample.generation, 4);
         QCOMPARE(result->sample.playback, MediaSample::Playback::Paused); QVERIFY(!result->sample.playing);
-        const auto token = result->sample.sessionToken; obj["item"] = "3"; QVERIFY(decode()->sample.sessionToken != token);
+        const auto token = result->sample.sessionToken; obj["item"] = "3";
+        QCOMPARE(decode()->sample.sessionToken, token); QVERIFY(decode()->sample.contentDiffers(result->sample));
+        QCOMPARE(result->sample.evidence, MediaSample::Evidence::Verified);
         for (const auto* field : {"request", "protocol", "uri", "position", "duration", "rate", "state", "found"}) {
             const auto old = obj.value(field); obj[field] = "invalid"; QVERIFY(!decode()); obj[field] = old;
         }
@@ -166,6 +199,7 @@ private slots:
         QCOMPARE(requested.first()[1].toString(), f.executable); QCOMPARE(requested.first()[2].toString(), QFileInfo(f.video).canonicalFilePath());
         service.backendPrepared("danmax-vlc:123:456"); QCOMPARE(opening.size(), 1);
         MediaSample sample; sample.id = "danmax-vlc:123:456"; sample.found = true; sample.duration = 120;
+        sample.evidence = MediaSample::Evidence::Verified;
         sample.playback = MediaSample::Playback::Playing; sample.observedAt = MediaMonitor::monotonicSeconds();
         sample.title = QFileInfo(f.video).fileName(); sample.mediaUri = QUrl::fromLocalFile(f.directory.filePath("other/" + sample.title)).toString();
         service.observe(sample); QCOMPARE(confirmed.size(), 0);
@@ -184,6 +218,37 @@ private slots:
         QTRY_VERIFY(!samples.isEmpty()); QVERIFY(!latest(samples).found);
         f.size = 0; backend.open(f.executable, f.video); backend.select(opened.sessionId, 5);
         QTRY_VERIFY(latest(samples).found && latest(samples).generation == 5);
+    }
+    void realVlcSharedPlaybackContract() {
+        const auto video = QFileInfo(qEnvironmentVariable("DANMAKU_REAL_VLC_CONTRACT_VIDEO")).canonicalFilePath();
+        const auto executable = qEnvironmentVariable("DANMAKU_REAL_VLC_EXECUTABLE");
+        if (video.isEmpty() || executable.isEmpty()) QSKIP("Explicit real VLC contract video/executable not supplied");
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        Fixture files;
+        const auto xml = files.write("selected.xml", "<i><d p=\"0,1,25,16777215\">VLC contract</d><d p=\"2,1,25,16777215\">VLC after seek</d></i>");
+        const auto data = directory.filePath("data"); QDir().mkpath(data);
+        { RecentVideoStore recent(data); recent.opened(video); recent.checkpoint(video, 0, 60, {{"kind", "xml"}, {"path", xml}}); }
+        AppController app(data, nullptr, [](const QString&) { return true; }, directory.filePath("cache"));
+        auto* settings = qobject_cast<SettingsStore*>(app.settings()); settings->setDanmakuServers({}); settings->setValue("foregroundOnly", false);
+        auto* players = qobject_cast<ExternalPlayerStore*>(app.players()); ExternalPlayerDraft draft(players);
+        draft.edit("vlc"); draft.enterExecutable(executable); draft.setDefault("vlc"); QVERIFY2(draft.save(), qPrintable(draft.issue()));
+        QQuickWindow overlay; overlay.resize(800, 600); DanmakuItem renderer; renderer.setParentItem(overlay.contentItem());
+        renderer.setSize({800, 600}); app.attach(&renderer, &overlay);
+        connect(&app, &AppController::stateChanged, &overlay, [&] { overlay.setVisible(app.overlayVisible()); });
+        auto* media = qobject_cast<MediaSession*>(app.media()); auto* now = qobject_cast<NowPlayingModel*>(app.nowPlaying());
+        QString session; const auto cleanup = qScopeGuard([&] { now->endPlayback(); closeNormally(session); });
+        MediaSample latest;
+        connect(app.findChild<MediaMonitor*>(), &MediaMonitor::sampleReceived, &app, [&](MediaSample sample) { latest = sample; });
+        media->openVideo(video, MediaSession::FromStart);
+        QTRY_VERIFY2_WITH_TIMEOUT(now->canPlay() && now->count() == 2, qPrintable(media->error() + media->status()), 15000);
+        session = media->boundSession();
+        QCOMPARE(latest.evidence, MediaSample::Evidence::Verified); QVERIFY(!latest.mediaUri.isEmpty()); QVERIFY(!latest.contentId.isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(renderer.snapshotCount() > 0, 5000); QVERIFY(!now->ownsPlayer());
+        now->togglePlayback(); QTRY_VERIFY_WITH_TIMEOUT(!now->busy() && !now->playing(), 5000);
+        now->seek(2); QTRY_VERIFY_WITH_TIMEOUT(!now->busy() && std::abs(now->position() - 2) <= 0.25, 5000);
+        QVERIFY(now->error().isEmpty());
+        now->endPlayback(); QVERIFY(!now->active()); QVERIFY(PlayerProcessIdentity::alive(session));
+        closeNormally(session); QTRY_VERIFY_WITH_TIMEOUT(!PlayerProcessIdentity::alive(session), 5000);
     }
     void realVlcVideoAndAutomaticDanmaku() {
         const auto video = qEnvironmentVariable("DANMAKU_REAL_VLC_VIDEO");

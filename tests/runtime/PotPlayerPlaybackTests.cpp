@@ -44,6 +44,36 @@ QString write(const QString& directory, const QString& name, const QByteArray& d
 class PotPlayerPlaybackTests final : public QObject {
     Q_OBJECT
 private slots:
+    void playlistCaptionChangesKeepPlayback() {
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        const auto exe = directory.filePath("PotPlayerMini64.exe"); QVERIFY(QFile::copy(QString::fromUtf8(POTPLAYER_FIXTURE), exe));
+        const auto name = QStringLiteral("[KitaujiSub] Anime [01][WebRip][CHS_JP].mp4");
+        const auto video = write(directory.path(), name, "fixture");
+        PotPlayerBackend backend; const auto opened = backend.open(exe, video); QVERIFY(opened.error.isEmpty());
+        backend.select(opened.sessionId, 1);
+        QSignalSpy samples(&backend, &MediaPlaybackBackend::sampleReceived), errors(&backend, &MediaPlaybackBackend::errorOccurred);
+        QTRY_VERIFY_WITH_TIMEOUT(latest(samples).found, 5000);
+        const auto original = latest(samples);
+        for (const auto& title : QStringList{name + " - PotPlayer", "[1/13] " + name,
+                 "[12/13] " + name + " - PotPlayer", QStringLiteral("暂停"), name}) {
+            samples.clear();
+            QVERIFY(SetWindowTextW(window(opened.sessionId), reinterpret_cast<LPCWSTR>(title.utf16())));
+            QTRY_VERIFY(samples.size() >= 3);
+            QVERIFY2(latest(samples).found, qPrintable(title));
+            QCOMPARE(latest(samples).title, name);
+            QCOMPARE(latest(samples).mediaUri, original.mediaUri);
+            QCOMPARE(latest(samples).sessionToken, original.sessionToken);
+            QVERIFY(errors.empty());
+        }
+        // This backend has no verified current-file getter: even a filename-like
+        // caption is only display metadata, never proof of a different file.
+        QVERIFY(SetWindowTextW(window(opened.sessionId), L"[2/13] [KitaujiSub] Anime [02].mp4"));
+        QCOMPARE(query(window(opened.sessionId), 0x5ff2, 125000), 1);
+        QTRY_COMPARE(latest(samples).duration, 125.0); QVERIFY(latest(samples).found); QVERIFY(errors.empty());
+        QCOMPARE(latest(samples).evidence, MediaSample::Evidence::LaunchTarget);
+        QVERIFY(latest(samples).mediaUri.isEmpty()); QVERIFY(!latest(samples).launchUri.isEmpty());
+        backend.closeOwned(); QTRY_VERIFY_WITH_TIMEOUT(!PlayerProcessIdentity::alive(opened.sessionId), 5000);
+    }
     void nativeIsolationControlGenerationAndLifetime() {
         QTemporaryDir directory; QVERIFY(directory.isValid());
         const auto exe = directory.filePath("PotPlayerMini64.exe"); QVERIFY(QFile::copy(QString::fromUtf8(POTPLAYER_FIXTURE), exe));
@@ -78,8 +108,8 @@ private slots:
         QTRY_VERIFY(latest(samples).playing);
         const auto expected = latest(samples);
         QVERIFY(SetWindowTextW(window(b.sessionId), L"different.avi"));
-        QTRY_VERIFY(!latest(samples).found);
-        owned.requestSeek(expected, 90, 8); QTRY_COMPARE(seeks.size(), 3); QVERIFY(!seeks[2][1].toBool());
+        QTest::qWait(250); QVERIFY(latest(samples).found);
+        owned.requestSeek(expected, 90, 8); QTRY_COMPARE(seeks.size(), 3); QVERIFY(seeks[2][1].toBool());
         owned.closeOwned(b.sessionId); QTRY_COMPARE_WITH_TIMEOUT(exited.size(), 1, 5000);
         QVERIFY(!PlayerProcessIdentity::alive(b.sessionId)); QVERIFY(PlayerProcessIdentity::alive(a.sessionId));
         owned.requestPlayback(expected, true, 9); QTRY_COMPARE(controls.size(), 6); QVERIFY(!controls[5][1].toBool());
@@ -104,6 +134,42 @@ private slots:
         auto backend = std::make_unique<PotPlayerBackend>(); const auto opened = backend->open(exe, video);
         QVERIFY2(opened.error.isEmpty(), qPrintable(opened.error)); QVERIFY(!window(opened.sessionId));
         backend.reset(); QTRY_VERIFY_WITH_TIMEOUT(!PlayerProcessIdentity::alive(opened.sessionId), 5000);
+    }
+    void realPlaylistVideoKeepsDanmaku() {
+        const auto executable = qEnvironmentVariable("DANMAKU_REAL_POTPLAYER");
+        const auto video = QFileInfo(qEnvironmentVariable("DANMAKU_REAL_POTPLAYER_MP4")).canonicalFilePath();
+        if (executable.isEmpty() || video.isEmpty()) QSKIP("Explicit real playlist MP4 not supplied");
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        QByteArray comments("<i>");
+        for (int n = 0; n < 40; ++n)
+            comments += "<d p=\"" + QByteArray::number(n * 0.5) + ",1,25,16777215\">Playlist regression</d>";
+        comments += "</i>";
+        const auto xml = write(directory.path(), "selected.xml", comments);
+        const auto data = directory.filePath("data"); QDir().mkpath(data);
+        { RecentVideoStore recent(data); recent.opened(video); recent.checkpoint(video, 0, 1500, {{"kind", "xml"}, {"path", xml}}); }
+        AppController app(data, nullptr, [](const QString&) { return true; }, directory.filePath("cache"));
+        auto* settings = qobject_cast<SettingsStore*>(app.settings()); settings->setDanmakuServers({});
+        settings->setValue("foregroundOnly", false);
+        auto* players = qobject_cast<ExternalPlayerStore*>(app.players()); QVERIFY(players->setExecutable(executable));
+        QQuickWindow overlay; overlay.resize(800, 600); DanmakuItem renderer; renderer.setParentItem(overlay.contentItem());
+        renderer.setSize({800, 600}); app.attach(&renderer, &overlay);
+        connect(&app, &AppController::stateChanged, &overlay, [&] { overlay.setVisible(app.overlayVisible()); });
+        auto* media = qobject_cast<MediaSession*>(app.media()); auto* now = qobject_cast<NowPlayingModel*>(app.nowPlaying());
+        media->openVideo(video, MediaSession::FromStart);
+        QTRY_VERIFY2_WITH_TIMEOUT(app.running() && now->canPlay() && now->count() == 40,
+                                 qPrintable(media->error() + media->status()), 15000);
+        const auto session = media->boundSession();
+        QTRY_VERIFY_WITH_TIMEOUT(renderer.snapshotCount() > 0, 5000);
+        QTest::qWait(2500);
+        wchar_t title[2048]{}; GetWindowTextW(window(session), title, 2048);
+        qInfo() << "Real playlist caption:" << QString::fromWCharArray(title);
+        QVERIFY(media->active()); QVERIFY(now->canSelectSource()); QVERIFY(now->canPlay()); QCOMPARE(now->count(), 40);
+        now->togglePlayback(); QTRY_VERIFY_WITH_TIMEOUT(!now->busy() && !now->playing(), 5000);
+        now->seek(6); QTRY_VERIFY_WITH_TIMEOUT(!now->busy(), 6000);
+        QVERIFY2(std::abs(now->position() - 6) <= 1,
+                 qPrintable(QString("MP4 seek readback: %1; %2").arg(now->position()).arg(now->error())));
+        QVERIFY(app.running()); QCOMPARE(now->count(), 40);
+        app.stop(); QTRY_VERIFY_WITH_TIMEOUT(!PlayerProcessIdentity::alive(session), 5000);
     }
     void realManagedWorkflow() {
         const auto executable = qEnvironmentVariable("DANMAKU_REAL_POTPLAYER");

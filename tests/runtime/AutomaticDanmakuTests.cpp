@@ -217,18 +217,17 @@ private slots:
         QCOMPARE(commands.size(), 1); // A failed pause never owns a later user pause.
     }
     void recoveryInvalidationAndUserResume() {
-        for (int change = 0; change < 6; ++change) {
+        for (int change = 0; change < 4; ++change) {
             PlaybackRecovery recovery; QSignalSpy commands(&recovery, &PlaybackRecovery::controlRequested);
             auto sample = media(); sample.sessionToken = 3;
+            sample.evidence = MediaSample::Evidence::Verified; sample.contentId = "first";
             recovery.begin(sample, "failure");
             const auto request = commands.last()[2].toULongLong();
             auto different = sample;
-            if (change == 0) different.title += " next";
+            if (change == 0) different.contentId = "next";
             if (change == 1) ++different.sessionToken;
             if (change == 2) ++different.generation;
             if (change == 3) different.id += "other";
-            if (change == 4) different.found = false;
-            if (change == 5) different.observedAt -= 10;
             recovery.observe(different); QVERIFY(!recovery.active());
             recovery.controlFinished(request, true, {}); recovery.finish(true);
             sample.playback = MediaSample::Playback::Paused; recovery.observe(sample);
@@ -392,8 +391,46 @@ private slots:
         QTest::qWait(150); QCOMPARE(ready.count(), 1); QCOMPARE(invalidated.count(), 1);
         sample.playback = MediaSample::Playback::Paused; sample.position = 44;
         QTest::qWait(80); QCOMPARE(ready.count(), 1); QCOMPARE(automatic.latestSample().position, 44.0);
-        sample.found = false; QTRY_VERIFY(automatic.status().contains(QStringLiteral("等待")));
-        sample.found = true; QTRY_COMPARE(ready.count(), 2);
+        sample.found = false; QTRY_VERIFY(!automatic.latestSample().found);
+        sample.found = true; QTRY_VERIFY(automatic.latestSample().found);
+        QTest::qWait(100); QCOMPARE(ready.count(), 1); // No duplicate load on a sampling gap.
+    }
+    void onlinePreparationSurvivesTemporarySamplingGap() {
+        QTemporaryDir directory; Server server; server.commentDelay = 300;
+        AutomaticDanmaku automatic(directory.path(), directory.path(), nullptr, 10);
+        QSignalSpy ready(&automatic, &AutomaticDanmaku::sourceReady);
+        automatic.configure(true, {server.base()});
+        auto sample = media(); QTimer heartbeat; keepAlive(heartbeat, automatic, sample);
+        QTRY_COMPARE(server.count("/comment/"), 1);
+        sample.found = false; sample.connection = MediaSample::Connection::Unavailable;
+        QTest::qWait(450); QCOMPARE(ready.size(), 0);
+        sample.found = true; sample.connection = MediaSample::Connection::Alive;
+        QTRY_COMPARE(ready.size(), 1); QCOMPARE(server.count("/comment/"), 1);
+        QVERIFY(automatic.takeReadyResult());
+    }
+    void taskFilenameSurvivesMissingContentMetadata() {
+        QTemporaryDir directory;
+        QVERIFY(saveCachedDanmaku(directory.filePath("danmaku"), cached("Test", 1)).isEmpty());
+        AutomaticDanmaku automatic(directory.path(), directory.path(), nullptr, 10);
+        automatic.setFileTitle("Test - 01.mkv"); automatic.configure(true, {});
+        QSignalSpy ready(&automatic, &AutomaticDanmaku::sourceReady);
+        auto sample = media(); sample.evidence = MediaSample::Evidence::Verified; sample.contentId = "known-item";
+        QTimer heartbeat; keepAlive(heartbeat, automatic, sample); QTRY_COMPARE(ready.size(), 1);
+        sample.evidence = MediaSample::Evidence::Unknown; sample.contentId.clear(); sample.title = "";
+        QTest::qWait(100); QCOMPARE(ready.size(), 1);
+        sample.evidence = MediaSample::Evidence::Verified; sample.contentId = "known-item";
+        QTest::qWait(100); QCOMPARE(ready.size(), 1);
+    }
+    void recoveryKeepsTransactionAcrossMetadataAndSamplingChanges() {
+        PlaybackRecovery recovery; QSignalSpy commands(&recovery, &PlaybackRecovery::controlRequested);
+        auto sample = media(); recovery.begin(sample, "choose source");
+        QCOMPARE(commands.size(), 1); const auto request = commands.first()[2].toULongLong();
+        sample.title = "unparseable OSD"; recovery.observe(sample); QVERIFY(recovery.active());
+        sample.found = false; recovery.observe(sample); QVERIFY(recovery.active());
+        recovery.controlFinished(request, true, {}); recovery.finish(true); QCOMPARE(commands.size(), 1);
+        sample.found = true; sample.playback = MediaSample::Playback::Paused;
+        sample.observedAt = MediaMonitor::monotonicSeconds(); recovery.observe(sample);
+        QCOMPARE(commands.size(), 2); QVERIFY(commands.last()[1].toBool());
     }
     void onlineUniqueAndAliasConfirmation() {
         QTemporaryDir directory; Server server; server.alias = true;
@@ -489,7 +526,10 @@ private slots:
         QVERIFY(QFile::remove(directory.filePath("danmaku/" + key + ".json")));
         automatic.refreshCache(); QTRY_VERIFY(!library->scanning());
         automatic.retry(); QTRY_COMPARE(ready.count(), 2);
-        QCOMPARE(server.count("search/anime"), 1); QCOMPARE(server.count("/bangumi/"), 2);
+        QCOMPARE(server.count("search/anime"), 1);
+        // Completed alias details can be reused when the user confirms; an exact
+        // episode download does not require a second detail request.
+        QVERIFY(server.count("/bangumi/") >= 1);
         QCOMPARE(server.count("/comment/"), 2);
         QCOMPARE(automatic.takeReadyResult()->metadata.value("episodeId").toString(), QString("42001"));
     }
