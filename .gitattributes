@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# SVG bytes are pinned by the Fluent asset SHA-256 manifest.
+resources/fluent/*.svg -text
