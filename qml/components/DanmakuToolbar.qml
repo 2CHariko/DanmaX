@@ -284,14 +284,14 @@ Item {
                 }
             }
 
-            // 3. 不透明度调节（官方 Fluent appearance 图标 + 百分比数值）
+            // 3. 不透明度调节（官方 Fluent 透明棋盘格图标 + 不透明度百分比）
             Button {
                 id: opacityBtn
                 objectName: "toolbarOpacityButton"
                 flat: true
                 leftPadding: 6; rightPadding: 6; topPadding: 2; bottomPadding: 2
                 implicitHeight: 34
-                icon.source: Ui.icon("appearance")
+                icon.source: Ui.icon("transparency-square")
                 icon.width: 16
                 icon.height: 16
                 text: Math.round((root.backend && root.backend.settings.values.opacity ? root.backend.settings.values.opacity : 0.85) * 100) + "%"
@@ -509,7 +509,7 @@ Item {
             spacing: 8
 
             FluentIcon {
-                source: Ui.icon("appearance")
+                source: Ui.icon("transparency-square")
                 visible: !Ui.highContrast
                 Layout.preferredWidth: 18
                 Layout.preferredHeight: 18

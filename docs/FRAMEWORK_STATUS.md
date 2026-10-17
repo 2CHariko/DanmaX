@@ -1161,3 +1161,9 @@ Windows 10/早期 Windows 11、系统透明开关与节能切换、高对比度�
 - Release 定向 CTest：overlay_toolbar、application_smoke、application_image_smoke **3/3 通过，11.17 秒**；未重复全量 CTest。Debug／Release 开发运行目录通过 run.ps1 -NoBuild -SmokeTest 更新并启动，最终 EXE SHA-256 与对应构建一致，均包含所需 SVG DLL／插件。原始结果、复现脚本及哈希位于 out/analysis/player-shell/，UI 截图位于 out/validation/player-shell/。
 - 静态单 EXE 在仅系统 PATH、无有效外部 Qt／QML 路径的复制目录完成 **8 项预期结果检查**：冷／热启动、中文空格路径搬迁、XML、原生浅深主题启动、图片后端、原生模块审计和缓存路径受阻；未释放 Qt 运行库文件，缓存受阻按预期退出 1。旧脚本原先把正常创建的 player-presets.json 当成异常文件，已仅补入该已知配置白名单后重新验证。最终结果位于 out/validation/static-20261017-181703-272/。原生 Mica 的 grabWindow PNG 不含系统合成底板，旧验证产物也存在相同现象，不能用这些截图证明材质外观；另以关闭 Mica 的隔离静态副本目视检查 SVG／布局，截图位于 out/validation/player-shell/static-opaque/，日志无加载警告。
 - 本轮没有扩大真实播放器／SMTC、混合 DPI 换屏、实际触控板惯性、高对比度／Narrator、原生 Snap 菜单悬停或透明合成的实机验收；未重打正式发布包。实现、依赖清单与验收记录一并提交。
+
+## 不透明度图标语义修正（2026-10-17）
+
+- 悬浮工具栏不透明度按钮及滑块浮层由 Paint Brush 改为官方 Transparency Square 棋盘格 SVG，继续显示不透明度百分比；应用外观处的画刷不变。原图和深色改色稿沿用同一上游提交并纳入哈希清单，现为 28 组 SVG。未使用的 opacityFormat 统一为“不透明度 %1%”。
+- Release 主程序及 UI 测试目标构建通过；原生后端 toolbarPlaybackWorkflow **3 passed、0 failed、0 skipped，4.846 秒**（含初始化／清理），无 QML 引擎警告，已目视检查窄工具栏棋盘格图标。报告位于 out/analysis/player-shell/opacity-icon.txt，截图为 out/validation/playback-controls/release/toolbar-narrow.png。SVG 离线哈希校验通过。
+- Release 开发运行目录已更新并通过启动冒烟；本次未重新构建 Debug／静态 Release、未重复全量测试；实现与验收记录一并提交。

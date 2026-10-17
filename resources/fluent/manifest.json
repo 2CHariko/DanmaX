@@ -137,6 +137,11 @@
       "file": "open.svg",
       "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Open/SVG/ic_fluent_open_20_regular.svg",
       "sha256": "a6a9e0bcb65b97529e3904b3966b7d9f725d6d9c318aca98ca33827ec514b066"
+    },
+    {
+      "file": "transparency-square.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Transparency%20Square/SVG/ic_fluent_transparency_square_20_regular.svg",
+      "sha256": "53e82cf736ede1da35f7f3fe366a3d5ea43655468b3f764ad8d61ef749563b0c"
     }
   ],
   "derivedAssets": [
@@ -274,6 +279,11 @@
       "file": "open-dark.svg",
       "source": "open.svg",
       "sha256": "3eb2aee55d055b85e1b8ec1ed21dc52e85135e888d875e416e4a32fcbf7a3582"
+    },
+    {
+      "file": "transparency-square-dark.svg",
+      "source": "transparency-square.svg",
+      "sha256": "74c9acebc0358e2a4e6eb524349bccf5cf1d9e593460ebd4dc0721772fd6940c"
     }
   ],
   "rendering": "Official SVG paths preserved; dark SVGs replace #212121 with #DEDEDE. Regenerate offline with scripts/prepare-fluent-assets.ps1 -Offline."

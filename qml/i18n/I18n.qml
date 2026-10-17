@@ -423,7 +423,7 @@ QtObject {
         offsetFormat: "偏移 %1s",
         offsetReset: "重置偏移",
         opacityTitle: "弹幕不透明度",
-        opacityFormat: "透明度 %1%",
+        opacityFormat: "不透明度 %1%",
         fontSizeTitle: "字号调节",
         fontSizeFormat: "字号 %1px",
         fontSizeDec: "减小字号",
