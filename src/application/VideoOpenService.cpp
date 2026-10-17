@@ -66,7 +66,7 @@ void VideoOpenService::open(const QVariantList& files) {
     const auto path = videoPath(files);
     if (path.isEmpty()) { emit failed(QStringLiteral("请一次拖入一个支持的本地视频文件")); return; }
     waitingFile_.clear(); needsPlayer_ = false;
-    if (playerPath_.isEmpty()) {
+    if (adapter()->requiresExecutable() && playerPath_.isEmpty()) {
         const auto discovered = hooks_.discover ? hooks_.discover() : adapter()->discover();
         if (discovered.isEmpty()) {
             cancel(); waitingFile_ = path; needsPlayer_ = true;

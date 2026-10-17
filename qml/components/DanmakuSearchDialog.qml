@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import "../theme"
 
 Dialog {
+    popupType: Ui.embeddedVideoActive ? Popup.Window : Popup.Item
     id: dialog
     objectName: "standaloneDanmakuSearchDialog"
     required property QtObject backend

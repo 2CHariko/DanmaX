@@ -34,6 +34,7 @@ docs/
 - **[完整配置示例 (settings.example.ini)](settings.example.ini)**：包含每个字段详尽中文注释的默认配置文件。
 
 ### 2.2 架构设计与界面规范
+- **[libVLC 内置播放最小验证 (LIBVLC_EMBEDDING_PROBE.md)](LIBVLC_EMBEDDING_PROBE.md)**：项目内运行库、自有原生视频窗口与 Qt Quick 弹幕／浮层的独立实机探针，含失败路径、DPR 1／1.5 结果及正式接入边界。
 - **[VLC 接入调研与实施 (VLC_INTEGRATION_RESEARCH.md)](VLC_INTEGRATION_RESEARCH.md)**：本机 3.0.23 的 SMTC 检查、Lua HTTP 精确状态探针、正式后端与真实视频自动弹幕验证；区分已验证能力和待验收范围。
 - **[拖入视频与 PotPlayer 联动调研 (POTPLAYER_DROP_OPEN_RESEARCH.md)](POTPLAYER_DROP_OPEN_RESEARCH.md)**：保留调研基线及实施记录；已实现单视频拖入、程序发现／绑定、会话确认和自动弹幕，含指定样本真实播放器验证及尚未验收边界。
 - **[C++ / Qt 架构设计 (CPP_QT_ARCHITECTURE.md)](CPP_QT_ARCHITECTURE.md)**：阐述纯 C++20 领域核心（时钟、时间轴、防重叠物理轨道调度）与 Qt Quick 场景图渲染分层架构。
@@ -49,3 +50,5 @@ docs/
 - **[重构交付状态 (FRAMEWORK_STATUS.md)](FRAMEWORK_STATUS.md)**：记录从基线至今所有特性的演进、测试用例覆盖（CTest 13/13）、真机测试数据与待人工验收边界。
 - **[自适应文字预算性能报告 (TEXTURE_BUDGET_PERFORMANCE_20261008.md)](TEXTURE_BUDGET_PERFORMANCE_20261008.md)**：对比固定 64 MiB 与自适应 512 MiB 预算在 165Hz/2K/4K 高 DPI 下的性能表现。
 - **[文字渲染优化记录 (RENDERER_PERFORMANCE_20261007.md)](RENDERER_PERFORMANCE_20261007.md)**：QSGTextNode 矢量渲染与文字纹理图集渲染的实测帧率与 CPU 占用对照。
+
+- [内置播放页开发接入与验证](LIBVLC_INTEGRATION.md)

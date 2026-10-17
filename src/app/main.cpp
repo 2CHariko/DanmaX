@@ -17,6 +17,7 @@
 #include <QQuickItem>
 #include <QSGRendererInterface>
 #include <QTimer>
+#include <QScreen>
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -74,6 +75,14 @@ int main(int argc, char* argv[]) {
         std::fprintf(stderr, "Cannot prepare portable cache/temporary directory\n");
         return 1;
     }
+#ifdef DANMAKU_ENABLE_LIBVLC
+    for (const auto* variable : {L"APPDATA", L"LOCALAPPDATA"}) {
+        const auto directory = QDir(earlyCache).filePath(QStringLiteral("libvlc/") + QString::fromWCharArray(variable));
+        if (!QDir().mkpath(directory) || _wputenv_s(variable, reinterpret_cast<const wchar_t*>(directory.utf16())) != 0) return 1;
+    }
+    const auto plugins = QDir::toNativeSeparators(executableDirectory.filePath("libvlc/plugins"));
+    if (_wputenv_s(L"VLC_PLUGIN_PATH", reinterpret_cast<const wchar_t*>(plugins.utf16())) != 0) return 1;
+#endif
 #ifdef DANMAKU_STATIC_PORTABLE
     // Select the public D3D11 backend before Qt creates any Quick windows.
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
@@ -105,12 +114,19 @@ int main(int argc, char* argv[]) {
     parser.addOption({"seconds", "Benchmark duration", "seconds", "15"});
     parser.addOption({"report", "Write benchmark metrics to JSON", "path"});
     parser.addOption({"file", "Load an XML file on startup", "path"});
+    parser.addOption({"video", "Open a local video using the selected player", "path"});
+    parser.addOption({"video-xml", "Load danmaku for --video after media readiness", "path"});
+    parser.addOption({"playback-validation", "Internal real playback validation duration (seconds)", "seconds"});
     parser.addOption({"page", "Initial page: home, player, logs, settings, about", "page", "home"});
     parser.addOption({"online-search", "Open online danmaku search on the home page (UI validation)"});
     parser.addOption({"theme", "Theme for isolated UI validation", "theme"});
     parser.addOption({"window-width", "Width for layout validation", "pixels"});
     parser.addOption({"capture-state", "UI smoke capture state: settings-middle, font-popup, diagnostics-group, cache-group or metadata-cache-group", "state"});
     parser.process(app);
+    if (parser.isSet("video") && (parser.isSet("smoke-test") || parser.isSet("benchmark"))) {
+        std::fprintf(stderr, "Real video uses --playback-validation; do not combine it with synthetic smoke/benchmark exit drivers.\n");
+        return 1;
+    }
     try {
         const QStringList pageNames{"home", "player", "logs", "settings", "about"};
         const int initialPage = pageNames.indexOf(parser.value("page"));
@@ -165,6 +181,57 @@ int main(int argc, char* argv[]) {
         backdrop.attach(mainWindow);
         bool overlayCaptured = false;
         mainWindow->show();
+        if (parser.isSet("video")) {
+            QTimer::singleShot(0, &controller, [&] {
+                qobject_cast<MediaSession*>(controller.media())->openVideo(parser.value("video"));
+            });
+            if (parser.isSet("video-xml")) {
+                auto loaded = std::make_shared<bool>(false);
+                auto* media = qobject_cast<MediaSession*>(controller.media());
+                QObject::connect(media, &MediaSession::stateChanged, &controller, [&, media, loaded] {
+                    if (!*loaded && media->canSelectSource()) { *loaded = true; media->loadFile(parser.value("video-xml")); }
+                });
+            }
+        }
+        if (parser.isSet("playback-validation")) {
+            if (!parser.isSet("video") || !parser.isSet("report")) throw std::runtime_error("Playback validation requires --video and --report");
+            const int seconds = std::clamp(parser.value("playback-validation").toInt(), 10, 7200);
+            auto* timer = new QTimer(&controller); timer->setInterval(1000);
+            auto elapsed = std::make_shared<int>(0);
+            auto checks = std::make_shared<QVariantMap>();
+            auto playingSamples = std::make_shared<int>(0);
+            auto hiddenPosition = std::make_shared<double>(0);
+            QObject::connect(timer, &QTimer::timeout, &controller, [&, elapsed, seconds, timer, checks, playingSamples, hiddenPosition] {
+                ++*elapsed;
+                // This C++ validation driver is deliberately absent from QML.
+                auto* player = qobject_cast<NowPlayingModel*>(controller.nowPlaying());
+                if (player->playing()) ++*playingSamples;
+                if (*elapsed == 14) (*checks)["media-ready"] = player->playing() && player->position() > 1;
+                if (*elapsed == 17) (*checks)["pause-readback"] = !player->playing() && !player->busy();
+                if (*elapsed == 22) (*checks)["resume-readback"] = player->playing();
+                if (*elapsed == 30) (*checks)["forward-seek-readback"] = !player->seekPending() && player->position() >= 59 && player->position() < 72;
+                if (*elapsed == 46) (*checks)["backward-seek-readback"] = !player->seekPending() && player->position() >= 4 && player->position() < 14;
+                if (*elapsed == 15 || *elapsed == 18) player->togglePlayback();
+                if (*elapsed == 23 && player->canSeek()) player->seek(std::min(60.25, player->duration() / 2));
+                if (*elapsed == 40 && player->canSeek()) player->seek(5);
+                if (*elapsed == 50) { *hiddenPosition = player->position(); mainWindow->setProperty("selectedPage", 0); }
+                if (*elapsed == 54) (*checks)["hidden-page-continues"] = !qobject_cast<VideoViewportController*>(controller.videoViewport())->shown()
+                    && player->position() > *hiddenPosition + 1;
+                if (*elapsed == 55) mainWindow->setProperty("selectedPage", 1);
+                if (*elapsed == 58) (*checks)["return-to-player"] = qobject_cast<VideoViewportController*>(controller.videoViewport())->shown() && player->playing();
+                if (player->completed() && *elapsed < seconds - 10) player->togglePlayback();
+                controller.setProperty("validationElapsedSeconds", *elapsed);
+                controller.setProperty("validationQmlWarning", qmlWarning);
+                controller.setProperty("validationPlayingSamples", *playingSamples);
+                controller.setProperty("validationChecks", *checks);
+                if (*elapsed % 10 == 0 || *elapsed >= seconds) controller.writeReport(parser.value("report"));
+                if (parser.isSet("capture") && *elapsed % 10 == 0 && MediaMonitor::windowOrOwnerForeground(mainWindow->winId())) {
+                    mainWindow->screen()->grabWindow(0, mainWindow->x(), mainWindow->y(), mainWindow->width(), mainWindow->height()).save(parser.value("capture"));
+                }
+                if (*elapsed >= seconds) { timer->stop(); mainWindow->close(); }
+            });
+            timer->start();
+        }
         // Validation workloads must satisfy the same foreground policy as normal playback.
         // UI captures restore the panel after the overlay has actually presented a frame.
         if (parser.isSet("smoke-test") || parser.isSet("benchmark")) {

@@ -1,6 +1,9 @@
 #include "platform/windows/MediaMonitor.h"
 #include "platform/windows/PotPlayerBackend.h"
 #include "infrastructure/VlcHttpBackend.h"
+#ifdef DANMAKU_ENABLE_LIBVLC
+#include "infrastructure/LibVlcBackend.h"
+#endif
 #include "platform/windows/PlayerProcessIdentity.h"
 #include <windows.h>
 #include <QFileInfo>
@@ -19,6 +22,13 @@ MediaMonitor::MediaMonitor(QObject* parent, const QString& playerDirectory) : QO
     connect(vlc_, &VlcHttpBackend::ownedExited, this, &MediaMonitor::ownedPlayerExited);
     connect(vlc_, &VlcHttpBackend::closeFailed, this, &MediaMonitor::ownedPlayerCloseFailed);
     backends_ = {vlc_, pot_};
+#ifdef DANMAKU_ENABLE_LIBVLC
+    embedded_ = new LibVlcBackend(this);
+    backends_.append(embedded_);
+    connect(embedded_, &LibVlcBackend::activityChanged, this, &MediaMonitor::embeddedActivityChanged);
+    connect(embedded_, &LibVlcBackend::released, this, &MediaMonitor::ownedPlayerExited);
+    connect(embedded_, &LibVlcBackend::closeDelayed, this, &MediaMonitor::ownedPlayerCloseFailed);
+#endif
     for (auto* backend : backends_) {
         connect(backend, &MediaPlaybackBackend::sampleReceived, this, [this, backend](MediaSample sample) {
             if (backend == active_ && sample.id == selected_ && sample.generation == generation_) emit sampleReceived(sample);
@@ -36,6 +46,34 @@ MediaMonitor::~MediaMonitor() {
     // Stop the worker while the facade's captured state still exists.
     delete vlc_; vlc_ = nullptr;
     delete pot_; pot_ = nullptr;
+#ifdef DANMAKU_ENABLE_LIBVLC
+    delete embedded_; embedded_ = nullptr;
+#endif
+}
+bool MediaMonitor::embedded(const QString& session) const {
+    for (auto* backend : backends_) if (backend->accepts(session)) return backend->presentation() == MediaPlaybackBackend::Presentation::EmbeddedViewport;
+    return false;
+}
+bool MediaMonitor::embeddedBusy() const {
+#ifdef DANMAKU_ENABLE_LIBVLC
+    return embedded_ && embedded_->busy();
+#else
+    return false;
+#endif
+}
+void MediaMonitor::setVideoOutput(quintptr handle) {
+#ifdef DANMAKU_ENABLE_LIBVLC
+    embedded_->setVideoOutput(handle);
+#else
+    Q_UNUSED(handle);
+#endif
+}
+QVariantMap MediaMonitor::embeddedMetrics() const {
+#ifdef DANMAKU_ENABLE_LIBVLC
+    return embedded_->metrics();
+#else
+    return {};
+#endif
 }
 void MediaMonitor::publishSessions() { auto list = vlcSessions_; emit sessionsChanged(list); }
 quint64 MediaMonitor::select(QString id, bool renew) {

@@ -10,7 +10,7 @@ SettingsSection {
     readonly property QtObject store: backend.players
     property QtObject editor: null
     property var pendingPathInput: null
-    title: "外部播放器"
+    title: "播放器"
     Component.onCompleted: editor = store.createEditor(pane)
     onVisibleChanged: if (!visible && manager.visible) manager.close()
     function manage() { editor.begin(); manager.open() }
@@ -58,6 +58,7 @@ SettingsSection {
         }
     }
     Dialog {
+    popupType: Ui.embeddedVideoActive ? Popup.Window : Popup.Item
         id: manager
         objectName: "externalPlayerDialog"
         parent: Overlay.overlay
@@ -65,7 +66,7 @@ SettingsSection {
         modal: true
         width: Math.min(680, Math.max(0, parent.width - 32))
         height: Math.min(implicitHeight, Math.max(0, parent.height - 32))
-        title: "管理外部播放器"
+        title: "管理播放器"
         leftPadding: Ui.scrollInset(playerBar.implicitWidth, padding)
         rightPadding: leftPadding
         closePolicy: Popup.CloseOnEscape
@@ -100,7 +101,7 @@ SettingsSection {
             implicitWidth: 600
             spacing: 12
             Label {
-                text: "选择预设播放器的程序路径。修改在保存后生效。"
+                text: "选择默认播放器；外部播放器需指定程序路径。修改在保存后影响下一次打开。"
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 color: Ui.secondaryText
@@ -186,6 +187,7 @@ SettingsSection {
                                     RadioButton {
                                         objectName: "defaultPlayer-" + card.profile.id
                                         text: "默认"
+                                        enabled: card.profile.available
                                         ButtonGroup.group: defaultGroup
                                         checked: pane.editor.defaultId === card.profile.id
                                         Accessible.name: "将 " + card.profile.name + " 设为默认播放器"
@@ -201,6 +203,7 @@ SettingsSection {
                                 }
                                 TextField {
                                     id: executableInput
+                                    visible: card.profile.requiresExecutable
                                     objectName: "externalPlayerExecutable-" + card.profile.id
                                     Layout.fillWidth: true
                                     text: card.profile.executable
@@ -232,6 +235,7 @@ SettingsSection {
                                     Accessible.name: text
                                 }
                                 Flow {
+                                    visible: card.profile.requiresExecutable
                                     Layout.fillWidth: true
                                     spacing: 8
                                     Button {

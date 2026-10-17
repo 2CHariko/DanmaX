@@ -22,6 +22,7 @@ struct Fixture {
     QString video = write(directory.path(), "Test - 01.mp4", "video");
     QString xml = write(directory.path(), "first.xml", "<i><d p=\"0,1,25,16777215\">first</d><d p=\"50,1,25,16777215\">later</d></i>");
     QString second = write(directory.path(), "second.xml", "<i><d p=\"1,1,25,16777215\">other</d></i>");
+    Fixture() { ExternalPlayerStore store(data()); store.saveDraft(store.profiles(), "potplayer", store.revision()); }
     int launches{};
     VideoOpenService::Hooks hooks() { return {[this] { return exe; }, [](const QString&) { return QString(); },
         [this](const QString&, const QStringList&) { ++launches; return QString(); }}; }

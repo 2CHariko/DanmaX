@@ -1,5 +1,5 @@
 #requires -Version 7.0
-param([ValidateSet('windows-debug','windows-release','windows-static-release')][string] $Preset = 'windows-debug',
+param([ValidateSet('windows-debug','windows-release','windows-static-release','windows-libvlc-debug','windows-libvlc-release')][string] $Preset = 'windows-debug',
       [switch] $SmokeTest, [string] $BuildDirectory = '', [switch] $NoBuild)
 . "$PSScriptRoot/common.ps1"
 . "$PSScriptRoot/deployment.ps1"
@@ -13,12 +13,8 @@ function Stop-RunningApplication([string] $Executable) {
             if (-not [string]::Equals($processPath, $Executable, [StringComparison]::OrdinalIgnoreCase)) { continue }
             Write-Host "Closing previous instance (PID $($process.Id)): $Executable"
             [void] $process.CloseMainWindow()
-            if (-not $process.WaitForExit(5000)) {
-                Write-Warning "Previous instance did not close within 5 seconds; terminating PID $($process.Id)."
-                $process.Kill()
-                if (-not $process.WaitForExit(5000)) {
-                    throw "Previous instance (PID $($process.Id)) has not exited; refusing to build or launch."
-                }
+            if (-not $process.WaitForExit(10000)) {
+                throw "Previous instance (PID $($process.Id)) is still closing; refusing to overwrite or force termination."
             }
         } catch {
             # The process can exit between discovery, path lookup and shutdown.
@@ -47,12 +43,16 @@ Invoke-ProjectEnvironment {
     }
     if ($NoBuild) {
         $cacheText = Get-Content -LiteralPath (Join-Path $build 'CMakeCache.txt') -Raw
-        $buildType = if ($Preset -eq 'windows-debug') { 'Debug' } else { 'Release' }
+        $buildType = if ($Preset -in @('windows-debug','windows-libvlc-debug')) { 'Debug' } else { 'Release' }
         $staticQt = if ($Preset -eq 'windows-static-release') { '(?:ON|TRUE|1|YES)' } else { '(?:OFF|FALSE|0|NO)' }
         if ($cacheText -notmatch "(?m)^CMAKE_BUILD_TYPE:STRING=$buildType\r?$" -or
             $cacheText -notmatch "(?m)^DANMAKU_STATIC_QT:BOOL=$staticQt\r?$") {
             throw 'Existing build does not match the selected preset. Run without -NoBuild to configure it first.'
         }
+    }
+    if ($NoBuild) {
+        $embedded = if ($Preset -like 'windows-libvlc-*') { '(?:ON|TRUE|1|YES)' } else { '(?:OFF|FALSE|0|NO)' }
+        if ($cacheText -notmatch "(?m)^DANMAKU_ENABLE_LIBVLC:BOOL=$embedded`r?$") { throw 'Existing build has a different libVLC feature selection.' }
     }
     $tools = Initialize-Toolchain -StaticQt:($Preset -eq 'windows-static-release')
     Stop-RunningApplication (Join-Path $runtime 'DanmaX.exe')
@@ -64,7 +64,7 @@ Invoke-ProjectEnvironment {
         # configure, which rewrites QWindowKit headers even when inputs are unchanged.
         $configurationKey = (@($ProjectRoot, $Preset, $includePrefix) + @(
             foreach ($inputFile in @('CMakePresets.json', 'toolchain/dependencies.lock.json',
-                                     'toolchain/qt-static.lock.json', '.local/toolchain.local.json')) {
+                                     'toolchain/qt-static.lock.json', 'toolchain/libvlc.lock.json', '.local/toolchain.local.json')) {
                 (Get-FileHash -LiteralPath (Get-ProjectPath $inputFile) -Algorithm SHA256).Hash
             }
         )) -join "`n"

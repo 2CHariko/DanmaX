@@ -75,6 +75,7 @@ void MediaSession::configure(const QStringList& servers) {
     automatic_.configure(active_ && ready_ && !manualSource_, servers);
 }
 void MediaSession::openVideo(const QString& file, int intent) {
+    if (app_->closingApplication_) return;
     if (intent < Normal || intent > FromStart) return;
     intent_ = intent; opening_ = true;
     service_->configureProfile(players_->current()); service_->open({QUrl::fromLocalFile(RecentVideoStore::normalizedPath(file))});
@@ -162,6 +163,7 @@ void MediaSession::observe(const MediaSample& sample) {
     if (!confirmed_) { service_->observe(sample); return; }
     if (!sample.sameConnection(confirmedSample_)) { app_->nowPlaying_.endPlayback(); return; }
     if (sample.playback == MediaSample::Playback::Stopped || sample.playback == MediaSample::Playback::Closed) {
+        if (monitor_->embedded(bound_)) latest_ = sample;
         flush(); latest_.playing = false;
         status_ = QStringLiteral("播放器已停止，观看进度已保留"); emit stateChanged(); return;
     }

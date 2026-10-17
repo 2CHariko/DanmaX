@@ -12,6 +12,8 @@ ApplicationWindow {
     id: root
     required property QtObject backend
     property QtObject backdrop: null
+    Binding { target: Ui; property: "embeddedVideoActive"; value: root.backend.embeddedVideo }
+    Binding { target: root.backdrop; property: "compatibilityOpaque"; value: root.backend.videoViewport.active; when: root.backdrop !== null }
     Binding { target: Ui; property: "micaActive"; value: root.backdrop ? root.backdrop.effectiveMica : false }
     Binding { target: Ui; property: "systemAnimationsEnabled"; value: root.backend.uiPreferences.animationsEnabled }
     property int selectedPage: 0
@@ -37,6 +39,7 @@ ApplicationWindow {
     }
     Connections {
         target: root.backend
+        function onCloseReady() { root.close() }
         function onRequestShowMainWindow() {
             root.visible = true
             if (root.visibility === Window.Minimized) root.showNormal()
@@ -48,7 +51,7 @@ ApplicationWindow {
         }
     }
     // Keep the swapchain alpha-capable across live material preference changes.
-    color: "transparent"
+    color: root.backdrop && root.backdrop.compatibilityOpaque ? Ui.windowSurface : "transparent"
     background: Rectangle {
         color: Ui.windowSurface
     }
@@ -242,14 +245,35 @@ ApplicationWindow {
     }
 
     VideoDropOverlay {
+        id: dropFeedback
         anchors.fill: parent
         z: 10
         backend: root.backend
         backgroundSource: mainScene
+        paintFeedback: !root.backend.embeddedVideo
         // This is a sibling of the captured UI, outside the popup overlay.
         enabled: root.visible && root.visibility !== Window.Minimized
             && !root.Overlay.overlay.children.some(item => item.visible)
             && !missingPlayerDialog.visible
+    }
+
+    Window {
+        id: embeddedDropWindow
+        transientParent: root
+        flags: Qt.FramelessWindowHint | Qt.Tool | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus
+        color: "transparent"
+        x: root.x; y: root.y; width: root.width; height: root.height
+        visible: root.backend.embeddedVideo && root.visible && root.visibility !== Window.Minimized
+            && (dropFeedback.dragActive || root.backend.videoViewport.dragging)
+        VideoDropOverlay {
+            anchors.fill: parent
+            backend: root.backend
+            backgroundSource: mainScene
+            opaqueFeedback: true
+            presentationOnly: true
+            engaged: dropFeedback.dragActive || root.backend.videoViewport.dragging
+            fileName: root.backend.videoViewport.dragging ? root.backend.videoViewport.dragName : dropFeedback.fileName
+        }
     }
 
     MatchingRecoveryDialog {
@@ -314,5 +338,5 @@ ApplicationWindow {
         root.syncTheme()
         root.backend.attach(overlay.renderer, overlay, toolbarWindow, root)
     }
-    onClosing: root.backend.stop()
+    onClosing: function(event) { if (!root.backend.requestClose()) event.accepted = false }
 }

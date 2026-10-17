@@ -60,7 +60,9 @@ struct ManagedPlaybackOpen { QString sessionId, error; };
 class MediaPlaybackBackend : public QObject {
     Q_OBJECT
   public:
+    enum class Presentation { DesktopOverlay, EmbeddedViewport };
     using QObject::QObject;
+    virtual Presentation presentation() const { return Presentation::DesktopOverlay; }
     virtual QString adapterId() const = 0;
     virtual bool accepts(const QString& id) const = 0;
     virtual ManagedPlaybackOpen open(const QString& executable, const QString& video) = 0;

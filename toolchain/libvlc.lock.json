@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "version": "3.0.23",
+  "architecture": "x64",
+  "archive": "vlc-3.0.23-win64.zip",
+  "url": "https://download.videolan.org/pub/videolan/vlc/3.0.23/win64/vlc-3.0.23-win64.zip",
+  "sha256Url": "https://download.videolan.org/pub/videolan/vlc/3.0.23/win64/vlc-3.0.23-win64.zip.sha256",
+  "sha256": "992d19dbd0b8a7cde9167d2f7780b1ef6f92acc8a71acfa736101a21f35181e1",
+  "sourceDirectory": "vlc-3.0.23",
+  "destination": ".deps/libvlc-probe",
+  "sourceArchive": "vlc-3.0.23.tar.xz",
+  "sourceUrl": "https://download.videolan.org/pub/videolan/vlc/3.0.23/vlc-3.0.23.tar.xz",
+  "sourceSha256": "e891cae6aa3ccda69bf94173d5105cbc55c7a7d9b1d21b9b21666e69eff3e7e0",
+  "extractor": "Windows system component: %SystemRoot%/System32/tar.exe; actual path/version recorded by preparation script",
+  "license": "libVLC LGPL-2.1-or-later; complete upstream probe archive also contains GPL plugins and third-party components; preserve COPYING, COPYING.LIB and THANKS",
+  "scope": "Shared libVLC dependency for the isolated probe and opt-in integrated developer builds. Not a production redistribution manifest."
+}

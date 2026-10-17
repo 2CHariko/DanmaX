@@ -110,3 +110,7 @@ pwsh -NoProfile -File scripts/release.ps1
 ### SVG 功能图标（2026-10-17）
 
 功能图标直接嵌入官方 Fluent SVG 与深色改色稿；构建仅收集 SVG，不联网、不转图。动态部署显式包含 qsvg／qsvgicon 和锁定 Qt6Svg，必须在隔离 PATH 的部署目录启动验证。静态锁新增 qtsvg 6.11.0 原始源码与 SHA-256，需先显式运行 prepare-qt-static.ps1，再离线 build-qt-static.ps1 -Reconfigure；应用导入 QSvgPlugin 与 QSvgIconPlugin，静态分发材料须包含匹配的 qtsvg 源码和许可证。原有静态 SDK／旧发布包不自动获得本次图标支持，须重新构建及验收。
+
+## libVLC 开发构建边界
+
+`windows-libvlc-debug/release` 只用于开发验证，通过 `DANMAKU_ENABLE_LIBVLC` 启用并在开发运行目录携带 DLL／插件。现有发布格式不包含该运行库；package 脚本检查配置并拒绝内置构建，禁止把缺失运行库的程序标为可用内置播放器。无需释放运行库的单 EXE 方案及可分发插件清单另行研究。

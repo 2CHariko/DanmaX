@@ -21,6 +21,8 @@ class IExternalPlayerAdapter {
     virtual QString id() const = 0;
     virtual QString displayName() const { return id(); }
     virtual bool managedPlayback() const { return false; }
+    virtual bool requiresExecutable() const { return true; }
+    virtual bool available() const { return true; }
     virtual QString synchronizationLabel() const { return QStringLiteral("SMTC 同步"); }
     virtual QString executableFilter() const { return QStringLiteral("播放器 (*.exe)"); }
     virtual bool canDiscover() const { return false; }

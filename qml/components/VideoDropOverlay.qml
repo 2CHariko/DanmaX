@@ -7,7 +7,7 @@ import "../theme"
 
 Item {
     id: feedback
-    objectName: "videoDropOverlay"
+    objectName: presentationOnly ? "embeddedVideoDropFeedback" : "videoDropOverlay"
     required property QtObject backend
     required property Item backgroundSource
     readonly property bool dragActive: engaged && enabled && visible
@@ -18,6 +18,9 @@ Item {
     readonly property bool blurLoaded: backdropLoader.item !== null
     property bool engaged: false
     property string fileName: ""
+    property bool presentationOnly: false
+    property bool opaqueFeedback: false
+    property bool paintFeedback: true
     function reset() { engaged = false; fileName = "" }
     onEnabledChanged: { if (!enabled) reset() }
     onVisibleChanged: { if (!visible) reset() }
@@ -28,7 +31,7 @@ Item {
         id: backdropLoader
         objectName: "videoDropBlurLoader"
         anchors.fill: parent
-        active: feedback.dragActive && feedback.blurSupported
+        active: feedback.paintFeedback && feedback.dragActive && feedback.blurSupported && !feedback.opaqueFeedback
         sourceComponent: Item {
             clip: true
             ShaderEffectSource {
@@ -62,13 +65,13 @@ Item {
     }
     Rectangle {
         anchors.fill: parent
-        visible: feedback.dragActive
-        color: feedback.blurSupported ? Ui.dragScrim : Ui.dragFallbackSurface
+        visible: feedback.paintFeedback && feedback.dragActive
+        color: feedback.blurSupported && !feedback.opaqueFeedback ? Ui.dragScrim : Ui.dragFallbackSurface
     }
     Rectangle {
         anchors.fill: parent
         anchors.margins: 8
-        visible: feedback.dragActive
+        visible: feedback.paintFeedback && feedback.dragActive
         color: "transparent"
         border.width: 2
         border.color: Ui.accentColor
@@ -79,7 +82,7 @@ Item {
         anchors.centerIn: parent
         width: Math.max(0, Math.min(Ui.dragPromptMaxWidth, parent.width - 2 * Ui.pagePadding))
         spacing: 16
-        visible: feedback.dragActive
+        visible: feedback.paintFeedback && feedback.dragActive
         opacity: feedback.dragActive ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: Ui.motionEnabled ? Ui.dragFeedbackDuration : 0 } }
         FluentIcon {
@@ -122,8 +125,9 @@ Item {
     }
     DropArea {
         id: detector
-        objectName: "videoDropArea"
+        objectName: feedback.presentationOnly ? "embeddedVideoDropPresentation" : "videoDropArea"
         anchors.fill: parent
+        enabled: !feedback.presentationOnly
         onEntered: drag => {
             const valid = drag.hasUrls && (drag.supportedActions & (Qt.CopyAction | Qt.LinkAction)) !== 0
                 && feedback.backend.videoOpen.accepts(drag.urls)

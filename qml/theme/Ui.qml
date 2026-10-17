@@ -12,6 +12,7 @@ QtObject {
         NumberAnimation { target: ui; property: "coverPulse"; from: 0.55; to: 1; duration: 800; easing.type: Easing.InOutSine }
     }
     readonly property SystemPalette colors: SystemPalette { colorGroup: SystemPalette.Active }
+    property bool embeddedVideoActive: false
     property bool micaActive: false
     property bool systemAnimationsEnabled: true
     readonly property bool motionEnabled: systemAnimationsEnabled && !highContrast

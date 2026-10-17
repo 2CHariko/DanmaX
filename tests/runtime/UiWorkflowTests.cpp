@@ -264,6 +264,8 @@ private slots:
         }
         VideoOpenService::Hooks hooks{[=] { return executable; }, [](const QString&) { return QString(); },
             [](const QString&, const QStringList&) { return QString(); }};
+        ExternalPlayerStore presets(directory.filePath("data"));
+        QVERIFY(presets.saveDraft(presets.profiles(), "potplayer", presets.revision()).value("ok").toBool());
         AppController backend(directory.filePath("data"), nullptr, {}, directory.filePath("cache"), {}, {}, {}, hooks);
         auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({}); settings->setValue("micaEnabled", false);
         qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
@@ -430,6 +432,8 @@ private slots:
         }
         VideoOpenService::Hooks hooks{[=] { return executable; }, [](const QString&) { return QString(); },
             [](const QString&, const QStringList&) { return QString(); }};
+        ExternalPlayerStore presets(directory.filePath("data"));
+        QVERIFY(presets.saveDraft(presets.profiles(), "potplayer", presets.revision()).value("ok").toBool());
         AppController backend(directory.filePath("data"), nullptr, {}, directory.filePath("cache"), {}, {}, {}, hooks);
         auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({}); settings->setValue("micaEnabled", false);
         qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
@@ -599,6 +603,8 @@ private slots:
     }
     void externalPlayerConfigurationWorkflow() {
         QTemporaryDir directory;
+        ExternalPlayerStore presets(directory.path());
+        QVERIFY(presets.saveDraft(presets.profiles(), "potplayer", presets.revision()).value("ok").toBool());
         AppController backend(directory.path());
         auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});
         qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
@@ -748,7 +754,7 @@ private slots:
         draft->chooseExecutable(directory.filePath("invalid.exe")); QVERIFY(!draft->issue().isEmpty());
         QCOMPARE(draft->editing().value("executable").toString(), QFileInfo(candidates.last()).canonicalFilePath());
         window->setProperty("selectedPage", 0); QTRY_VERIFY(!dialog->property("visible").toBool());
-        QCOMPARE(store->profiles().size(), 2); QVERIFY(!draft->dirty());
+        QCOMPARE(store->profiles().size(), 3); QVERIFY(!draft->dirty());
         QCOMPARE(warnings.size(), 0); backend.stop(); window->close();
     }
     void videoDropWorkflow() {
@@ -766,6 +772,8 @@ private slots:
                 if (args != QStringList{QFileInfo(videoFile).canonicalFilePath(), "/new"}) return QString("bad arguments");
                 ++launches; return QString();
             }};
+        ExternalPlayerStore presets(directory.path());
+        QVERIFY(presets.saveDraft(presets.profiles(), "potplayer", presets.revision()).value("ok").toBool());
         AppController backend(directory.path(), nullptr, {}, directory.filePath("cache"), {}, {}, {}, hooks);
         auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});
         qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");

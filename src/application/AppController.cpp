@@ -53,11 +53,23 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     });
     connect(&videoOpen_, &VideoOpenService::managedOpenRequested, this,
             [this](const QString& adapter, const QString& executable, const QString& video) {
+        monitor_.setVideoOutput(videoViewport_.nativeHandle());
         const auto result = monitor_.openManaged(adapter, executable, video);
         if (!result.error.isEmpty()) videoOpen_.backendFailed(result.error);
         else videoOpen_.backendPrepared(result.sessionId);
     });
     connect(&videoOpen_, &VideoOpenService::managedOpenCancelled, &monitor_, &MediaMonitor::cancelManagedOpen);
+    connect(&monitor_, &MediaMonitor::embeddedActivityChanged, this, [this] {
+        videoViewport_.setActive(monitor_.embeddedBusy());
+        updateWindow(); updatePresentationVisibility(true);
+        emit stateChanged();
+        if (closingApplication_ && !monitor_.embeddedBusy()) emit closeReady();
+    });
+    connect(&videoViewport_, &VideoViewportController::changed, this, [this] { updatePresentationVisibility(true); });
+    connect(&videoViewport_, &VideoViewportController::videoDropped, this, [this](const QString& path) { media_.openVideo(path); });
+    connect(&monitor_, &MediaMonitor::ownedPlayerCloseFailed, this, [this](const QString& error) {
+        if (monitor_.embeddedBusy()) { videoViewport_.setReleaseStatus(error); fail(error); }
+    });
     connect(&monitor_, &MediaMonitor::ownedPlayerCloseFailed, this, [this](const QString& error) { logs_.append("WARNING", error); });
     connect(&monitor_, &MediaMonitor::ownedPlayerExited, this, [this](const QString& id) {
         if (media_.boundSession() != id) return;
@@ -149,6 +161,13 @@ AppController::~AppController() {
     discardLoad();
     LogModel::uninstall();
 }
+bool AppController::requestClose() {
+    if (!closingApplication_) {
+        closingApplication_ = true;
+        nowPlaying_.endPlayback(); stop(); monitor_.cancelManagedOpen();
+    }
+    return !monitor_.embeddedBusy();
+}
 QString AppController::localPath(const QString& path) {
     const QUrl url(path);
     return url.isLocalFile() ? url.toLocalFile() : path;
@@ -193,6 +212,7 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
     overlay_ = qobject_cast<QWindow*>(overlay);
     toolbarWindow_ = qobject_cast<QWindow*>(toolbar);
     mainWindow_ = qobject_cast<QWindow*>(mainWindow);
+    videoViewport_.setOverlay(overlay_);
     if (!renderer_ || !overlay_) {
         fail(QStringLiteral("弹幕窗口初始化失败"));
         return;
@@ -209,7 +229,7 @@ void AppController::attach(QObject* renderer, QObject* overlay, QObject* toolbar
     connect(overlay_, &QWindow::widthChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::heightChanged, this, [this] { configure(); });
     connect(overlay_, &QWindow::visibleChanged, this, [this](bool shown) {
-        windowLayers_.reconcile(settings_.values()["onTop"].toBool(), panelForeground_, desiredOverlayAllowed_);
+        if (!embeddedVideo()) windowLayers_.reconcile(settings_.values()["onTop"].toBool(), panelForeground_, desiredOverlayAllowed_);
         toolbarPointer_.setEnabled(toolbarAllowed_ && shown);
         snapshotDirty_ = true;
         if (shown && running_ && visible_ && renderer_) {
@@ -295,6 +315,20 @@ bool AppController::updatePresentationVisibility(bool forceForeground, bool noti
     // Leaving the panel must not reuse its preceding player foreground sample.
     forceForeground = forceForeground || (panelForeground_ && !panelForeground);
     panelForeground_ = panelForeground;
+    if (embeddedVideo()) {
+        // The owned overlay belongs above the video, below popup windows. It
+        // never participates in desktop-wide topmost ordering or player focus.
+        windowLayers_.reconcile(false, false, false);
+        videoViewport_.synchronize();
+        const bool show = running_ && videoViewport_.shown();
+        const bool changed = show != visible_ || toolbarAllowed_;
+        visible_ = desiredOverlayAllowed_ = show; toolbarAllowed_ = false;
+        toolbarPointer_.setEnabled(false);
+        if (toolbarWindow_) toolbarWindow_->hide();
+        if (changed) snapshotDirty_ = true;
+        if (changed && notify) emit stateChanged();
+        return changed;
+    }
     const bool checkForeground = !manual_ && settings_.values()["foregroundOnly"].toBool();
     if (running_ && checkForeground &&
         (forceForeground || !foregroundTime_.isValid() || foregroundTime_.elapsed() >= 250)) {
@@ -347,6 +381,8 @@ void AppController::applyRendererSettings() {
 void AppController::updateWindow() {
     if (!overlay_)
         return;
+    if (embeddedVideo()) { videoViewport_.synchronize(); return; }
+    overlay_->setTransientParent(nullptr);
     const auto s = settings_.values();
     const auto list = qGuiApp->screens();
     if (list.isEmpty())
@@ -862,6 +898,7 @@ void AppController::tick() {
 }
 void AppController::updateMetrics() {
     metrics_ = MediaMonitor::processMetrics();
+    metrics_["embeddedPlayback"] = monitor_.embeddedMetrics();
     metrics_["active"] = static_cast<int>(engine_.activeCount());
     metrics_["dropped"] = static_cast<qulonglong>(engine_.dropped());
     metrics_["retiredBySettings"] = static_cast<qulonglong>(engine_.retiredBySettings());
@@ -954,6 +991,16 @@ void AppController::writeReport(const QString& path) {
     metrics_["status"] = status_;
     metrics_["qtVersion"] = qVersion();
     metrics_["requestedCount"] = total();
+    metrics_["videoPosition"] = nowPlaying_.position();
+    metrics_["videoDuration"] = nowPlaying_.duration();
+    metrics_["videoPlaying"] = nowPlaying_.playing();
+    metrics_["videoActive"] = nowPlaying_.active();
+    metrics_["videoViewportShown"] = videoViewport_.shown();
+    metrics_["videoError"] = nowPlaying_.error();
+    metrics_["validationElapsedSeconds"] = property("validationElapsedSeconds");
+    metrics_["validationQmlWarning"] = property("validationQmlWarning");
+    metrics_["validationPlayingSamples"] = property("validationPlayingSamples");
+    metrics_["validationChecks"] = property("validationChecks");
     metrics_["metricNote"] =
         "p95/p99 are GUI tick intervals; presentedPerSecond counts overlay frameSwapped, not optical FPS; CPU normalized across logical processors";
     if (overlay_) {

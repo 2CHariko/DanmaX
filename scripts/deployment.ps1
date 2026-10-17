@@ -67,7 +67,7 @@ function Sync-DevelopmentRuntime([string] $Executable, [string] $Directory, [str
     $destination = Join-Path $Directory 'DanmaX.exe'
     $identity = (@($ProjectRoot, $Directory, $Preset, $Tools.Qt) + @(
         foreach ($inputFile in @($Executable, (Get-ProjectPath 'scripts/deployment.ps1'),
-            (Get-ProjectPath 'toolchain/dependencies.lock.json'), (Get-ProjectPath 'LICENSE'),
+            (Get-ProjectPath 'toolchain/dependencies.lock.json'), (Get-ProjectPath 'toolchain/libvlc.lock.json'), (Get-ProjectPath 'LICENSE'),
             (Get-ProjectPath 'docs/THIRD_PARTY.md'), (Get-ProjectPath 'docs/PACKAGING.md'),
             (Get-ProjectPath 'resources/fluent/LICENSE'))) {
             (Get-FileHash -LiteralPath $inputFile -Algorithm SHA256).Hash
@@ -106,7 +106,7 @@ function Sync-DevelopmentRuntime([string] $Executable, [string] $Directory, [str
             Assert-DeploymentDirectory $stage
             New-Item -ItemType Directory -Force $stage | Out-Null
             Copy-Item -LiteralPath $Executable -Destination (Join-Path $stage 'DanmaX.exe')
-            foreach ($file in @(Invoke-QtDeployment $stage $Tools -Debug:($Preset -eq 'windows-debug'))) {
+            foreach ($file in @(Invoke-QtDeployment $stage $Tools -Debug:($Preset -in @('windows-debug','windows-libvlc-debug')))) {
                 $target = Join-Path $Directory ([IO.Path]::GetRelativePath($stage, $file))
                 New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
                 Copy-Item -LiteralPath $file -Destination $target -Force
@@ -115,8 +115,27 @@ function Sync-DevelopmentRuntime([string] $Executable, [string] $Directory, [str
             Assert-DeploymentDirectory $stage
             Remove-Item -LiteralPath $stage -Recurse -Force
         } else {
-            $managed += @(Invoke-QtDeployment $Directory $Tools -Debug:($Preset -eq 'windows-debug'))
+            $managed += @(Invoke-QtDeployment $Directory $Tools -Debug:($Preset -in @('windows-debug','windows-libvlc-debug')))
         }
+    }
+    if ($Preset -like 'windows-libvlc-*') {
+        $lockPath = Get-ProjectPath 'toolchain/libvlc.lock.json'
+        $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+        $root = Get-ProjectPath $lock.destination
+        $marker = Join-Path $root '.prepared-lock'
+        if (-not (Test-Path -LiteralPath $marker) -or (Get-Content -LiteralPath $marker -Raw).Trim() -ne (Get-FileHash -LiteralPath $lockPath).Hash) {
+            throw 'Prepare the shared libVLC dependency explicitly before deployment.'
+        }
+        $source = Join-Path $root $lock.sourceDirectory
+        $vlcDestination = Join-Path $Directory 'libvlc'
+        New-Item -ItemType Directory -Force $vlcDestination | Out-Null
+        # Preserve the complete validated development runtime, including notices.
+        # Public headers and executables are retained for this development-only copy.
+        # LiteralPath does not expand wildcards: enumerate only this locked root.
+        foreach ($entry in Get-ChildItem -LiteralPath $source -Force) {
+            Copy-Item -LiteralPath $entry.FullName -Destination $vlcDestination -Recurse -Force
+        }
+        $managed += @(Get-ChildItem -LiteralPath $vlcDestination -File -Recurse | ForEach-Object FullName)
     }
     # Keep the application's debug symbols beside its deployed EXE for debugging.
     $pdb = [IO.Path]::ChangeExtension($Executable, '.pdb')

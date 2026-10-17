@@ -6,6 +6,8 @@ DanmaX 是一款 Windows 平台下的原生高性能外挂弹幕工具，基于 
 
 工具版本与下载校验见 `toolchain/dependencies.lock.json`，静态 Qt 源码清单与模块特性见 `toolchain/qt-static.lock.json`，QWindowKit 锁定见 `toolchain/qwindowkit.lock.json`，图标清单见 `resources/fluent/manifest.json`。
 
+内置开发构建与独立探针共用 **libVLC 3.0.23 x64**，锁定于 `toolchain/libvlc.lock.json`。公共库为 LGPL-2.1-or-later；完整官方归档还包含 GPL 插件及其他组件。开发运行目录保留完整运行库与 COPYING.txt、COPYING.LIB、THANKS.txt 等材料，未确定正式可分发插件清单。仅 opt-in 开发预设加载，不进入默认静态单 EXE 发布包；打包脚本拒绝内置构建。见 [接入报告](LIBVLC_INTEGRATION.md)。
+
 ---
 
 ## 1. 上游开源项目与第三方组件全览

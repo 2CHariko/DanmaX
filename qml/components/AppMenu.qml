@@ -4,6 +4,7 @@ import "../theme"
 
 Menu {
     id: menu
+    popupType: Ui.embeddedVideoActive ? Popup.Window : Popup.Item
     property real revealProgress: 1
     height: implicitHeight * revealProgress
     leftInset: 0

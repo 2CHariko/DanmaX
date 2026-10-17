@@ -49,7 +49,7 @@ Control {
             spacing: 8
             ToolButton {
                 objectName: "nowPlayingToggle"
-                text: bar.player.playing ? "暂停" : "播放"
+                text: bar.player.completed ? "重新播放" : bar.player.playing ? "暂停" : "播放"
                 icon.source: Ui.icon(bar.player.playing ? "pause" : "play")
                 enabled: bar.player.canPlay
                 Accessible.description: bar.player.controlHint
@@ -90,7 +90,7 @@ Control {
         focus: true
         onOpened: currentIndex = 1
         MenuItem { text: "当前播放器 · " + bar.backend.videoOpen.playerName; enabled: false }
-        MenuItem { text: "外部播放器设置"; onTriggered: bar.showSettings() }
+        MenuItem { text: "播放器设置"; onTriggered: bar.showSettings() }
     }
     AppMenu {
         id: moreMenu
@@ -100,6 +100,6 @@ Control {
         MenuItem { text: "打开视频"; onTriggered: bar.openVideo() }
         MenuItem { objectName: "openStandaloneDanmaku"; text: "独立播放弹幕 XML"; onTriggered: bar.openStandalone() }
         MenuSeparator {}
-        MenuItem { objectName: "stopPlayback"; text: bar.player.ownsPlayer ? "结束播放并关闭播放器" : bar.player.standalone ? "结束独立弹幕播放" : "结束本次播放"; enabled: bar.player.active || bar.player.openingStandalone; onTriggered: bar.player.endPlayback() }
+        MenuItem { objectName: "stopPlayback"; text: bar.backend.embeddedVideo ? "结束内置播放" : bar.player.ownsPlayer ? "结束播放并关闭播放器" : bar.player.standalone ? "结束独立弹幕播放" : "结束本次播放"; enabled: bar.player.active || bar.player.openingStandalone; onTriggered: bar.player.endPlayback() }
     }
 }

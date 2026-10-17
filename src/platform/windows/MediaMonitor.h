@@ -5,6 +5,7 @@
 #include "infrastructure/MediaPlaybackBackend.h"
 class VlcHttpBackend;
 class PotPlayerBackend;
+class LibVlcBackend;
 class MediaMonitor final : public QObject {
     Q_OBJECT
   public:
@@ -18,6 +19,10 @@ class MediaMonitor final : public QObject {
     void cancelManagedOpen();
     void closeOwnedPlayer(const QString& session);
     bool closesWithTask(const QString& session) const;
+    bool embedded(const QString& session) const;
+    bool embeddedBusy() const;
+    void setVideoOutput(quintptr handle);
+    QVariantMap embeddedMetrics() const;
     static double monotonicSeconds();
     static bool targetForeground(const QString& applicationId);
     static bool windowMatchesSession(quintptr handle, const QString& id);
@@ -33,11 +38,13 @@ class MediaMonitor final : public QObject {
     void seekDispatched(SeekDispatch result);
     void ownedPlayerExited(QString session);
     void ownedPlayerCloseFailed(QString error);
+    void embeddedActivityChanged();
 
   private:
     void publishSessions();
     VlcHttpBackend* vlc_{};
     PotPlayerBackend* pot_{};
+    LibVlcBackend* embedded_{};
     MediaPlaybackBackend* active_{};
     QList<MediaPlaybackBackend*> backends_;
     QVariantList vlcSessions_;

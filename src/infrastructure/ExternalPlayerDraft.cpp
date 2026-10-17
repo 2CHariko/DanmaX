@@ -8,6 +8,9 @@ namespace {
 QVariantMap withValidation(QVariantMap map) {
     ExternalPlayerRegistry registry; const auto* adapter = registry.find(map.value("id").toString());
     const auto path = map.value("executable").toString();
+    if (adapter && !adapter->requiresExecutable()) {
+        map["validation"] = adapter->synchronizationLabel(); map["pathValid"] = adapter->available(); return map;
+    }
     const auto issue = path.isEmpty() ? QString() : adapter->validate(path);
     map["validation"] = path.isEmpty() ? QStringLiteral("未指定路径，打开视频时自动发现")
         : issue.isEmpty() ? QStringLiteral("路径验证通过 · Windows x64") : issue;

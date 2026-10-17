@@ -1,5 +1,5 @@
 #requires -Version 7.0
-param([ValidateSet('','windows-release','windows-static-release')][string] $Preset = '',
+param([ValidateSet('','windows-release','windows-static-release','windows-libvlc-release','windows-libvlc-debug')][string] $Preset = '',
       [ValidateSet('static-exe','directory','single-exe')][string] $Format = 'static-exe')
 . "$PSScriptRoot/common.ps1"
 . "$PSScriptRoot/portable.ps1"
@@ -17,6 +17,9 @@ function Copy-AnitomyMaterials([string] $Destination) {
     Copy-Item -LiteralPath (Get-ProjectPath ".deps/anitomy/$($parserLock.sourceDirectory)/LICENSE") -Destination $parserMaterials
 }
 Invoke-ProjectEnvironment {
+    if ($Preset -like 'windows-libvlc-*') {
+        throw 'Embedded libVLC builds are development-only. DLL/plugin redistribution and pure single-EXE delivery are not validated; this build cannot be packaged.'
+    }
     if (-not $Preset) { $Preset = if ($Format -eq 'static-exe') { 'windows-static-release' } else { 'windows-release' } }
     if (($Format -eq 'static-exe') -ne ($Preset -eq 'windows-static-release')) {
         throw 'static-exe requires windows-static-release; directory/single-exe require windows-release.'
@@ -27,6 +30,10 @@ Invoke-ProjectEnvironment {
     # remains a separate explicit step; configuration/build never downloads.
     $includePrefix = Get-MsvcIncludesPrefix
     Invoke-Checked $tools.CMake @('--preset', $Preset, "-DDANMAKU_MSVC_INCLUDES_PREFIX=$includePrefix")
+    $cacheText = Get-Content -LiteralPath (Get-ProjectPath "out/build/$Preset/CMakeCache.txt") -Raw
+    if ($cacheText -match '(?m)^DANMAKU_ENABLE_LIBVLC:BOOL=(?:ON|TRUE|1|YES)\r?$') {
+        throw 'Embedded libVLC builds are development-only; runtime redistribution is not approved by this package format.'
+    }
     Invoke-Checked $tools.CMake @('--build', '--preset', $Preset, '--target', 'danmaku_app', '--parallel')
     $exe = Get-ProjectPath "out/build/$Preset/bin/DanmaX.exe"
     if (-not (Test-Path -LiteralPath $exe)) { throw 'Application build did not produce the packaging executable.' }

@@ -12,12 +12,18 @@ QVariantMap ExternalPlayerStore::toMap(const ExternalPlayerProfile& p) {
     return {{"id", p.id}, {"adapter", p.adapter}, {"name", p.name}, {"executable", p.executable},
         {"synchronize", adapter && (adapter->managedPlayback() || !adapter->sessionId(p).isEmpty())},
         {"synchronizationLabel", adapter ? adapter->synchronizationLabel() : QString()},
-        {"canDiscover", adapter && adapter->canDiscover()}};
+        {"canDiscover", adapter && adapter->canDiscover()}, {"requiresExecutable", !adapter || adapter->requiresExecutable()},
+        {"available", adapter && adapter->available()}};
 }
 ExternalPlayerStore::ExternalPlayerStore(const QString& directory, QObject* parent)
     : QObject(parent), profiles_(ExternalPlayerRegistry().presets()), path_(QDir(directory).filePath("player-presets.json")) {
     QFile file(path_);
-    if (!file.exists()) { commit(profiles_, selectedId_); return; }
+    if (!file.exists()) {
+#ifdef DANMAKU_ENABLE_LIBVLC
+        selectedId_ = "libvlc";
+#endif
+        commit(profiles_, selectedId_); return;
+    }
     const auto invalid = [this](const QString& message) { readable_ = false; error_ = message; };
     if (!file.open(QIODevice::ReadOnly)) { invalid(file.errorString()); return; }
     if (file.size() > 65536) { invalid(QStringLiteral("播放器配置过大，原文件保留")); return; }
@@ -82,6 +88,7 @@ QVariantMap ExternalPlayerStore::saveDraft(const QVariantList& entries, const QS
             return failure(QStringLiteral("播放器预设或路径字段无效"), id);
         ids.append(id);
         const auto path = map.value("executable").toString();
+        if (!adapter->requiresExecutable() && !path.isEmpty()) return failure(QStringLiteral("内置播放器不接受外部程序路径"), id);
         if (!path.isEmpty()) {
             const auto issue = adapter->validate(path);
             if (!issue.isEmpty()) return failure(issue, id);

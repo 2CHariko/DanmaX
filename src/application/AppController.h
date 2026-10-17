@@ -20,6 +20,7 @@
  #include "platform/windows/ToolbarInputFilter.h"
 #include "platform/windows/ToolbarPointerMonitor.h"
 #include "platform/windows/WindowLayerController.h"
+#include "platform/windows/VideoViewportController.h"
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QTimer>
@@ -41,6 +42,8 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* metadata READ metadata CONSTANT)
     Q_PROPERTY(QObject* uiPreferences READ uiPreferences CONSTANT)
     Q_PROPERTY(QObject* toolbarPointer READ toolbarPointer CONSTANT)
+    Q_PROPERTY(QObject* videoViewport READ videoViewport CONSTANT)
+    Q_PROPERTY(bool embeddedVideo READ embeddedVideo NOTIFY stateChanged)
     Q_PROPERTY(QString sourceTitle READ sourceTitle NOTIFY stateChanged)
     Q_PROPERTY(bool targetSessionConnected READ targetSessionConnected NOTIFY stateChanged)
     Q_PROPERTY(QStringList screens READ screens NOTIFY screensChanged)
@@ -94,6 +97,9 @@ class AppController final : public QObject {
     QObject* metadata() { return &metadata_; }
     QObject* uiPreferences() { return &uiPreferences_; }
     QObject* toolbarPointer() { return &toolbarPointer_; }
+    QObject* videoViewport() { return &videoViewport_; }
+    bool embeddedVideo() const { return media_.active() && monitor_.embedded(media_.boundSession()); }
+    Q_INVOKABLE bool requestClose();
     QString sourceTitle() const { return sourceTitle_; }
     QVariantList sessions() const {
         return sessions_;
@@ -191,6 +197,7 @@ class AppController final : public QObject {
      void requestShowMainWindow();
     void requestNavigateToPage(int page, int sourceTab = 0);
     void requestOnlineDanmakuSearch();
+    void closeReady();
 
   private slots:
     void onSample(const MediaSample& sample);
@@ -233,11 +240,13 @@ class AppController final : public QObject {
     bool bindingVideo_{};
     bool automaticCommit_{}, automaticSource_{};
     SystemUiPreferences uiPreferences_;
+    VideoViewportController videoViewport_;
     MediaMonitor monitor_;
     SeekController seek_;
     MediaSession media_;
     NowPlayingModel nowPlaying_;
     bool presentingMedia_{};
+    bool closingApplication_{};
     bool startup_{true};
     bool targetSessionConnected_{};
     bool disconnectedContentCleared_{};

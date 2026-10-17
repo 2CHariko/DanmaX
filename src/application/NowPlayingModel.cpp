@@ -39,6 +39,9 @@ NowPlayingModel::NowPlayingModel(AppController* app) : QObject(app), app_(app) {
 
 }
 bool NowPlayingModel::video() const { return app_->coordinator_.owner() == PlaybackCoordinator::Media; }
+bool NowPlayingModel::completed() const { return video() && app_->embeddedVideo() && active() && app_->media_.confirmed_
+    && sample_.id == app_->boundSession() && sample_.generation == app_->mediaGeneration_
+    && app_->media_.sameContent(sample_) && sample_.playback == MediaSample::Playback::Stopped; }
 bool NowPlayingModel::standalone() const { return app_->danmaku_.active(); }
 bool NowPlayingModel::openingStandalone() const { return app_->danmaku_.preparing(); }
 bool NowPlayingModel::canSelectSource() const { return standalone() || app_->media_.canSelectSource(); }
@@ -56,7 +59,7 @@ bool NowPlayingModel::fresh() const {
         && std::isfinite(age) && age >= 0 && age <= 2.5 && app_->targetSessionConnected_
         && (sample_.playback == MediaSample::Playback::Playing || sample_.playback == MediaSample::Playback::Paused);
 }
-bool NowPlayingModel::canPlay() const { return standalone() ? !busy() && count() > 0 : !busy() && fresh() && (playing() ? sample_.canPause : sample_.canPlay); }
+bool NowPlayingModel::canPlay() const { return standalone() ? !busy() && count() > 0 : !busy() && (completed() || (fresh() && (playing() ? sample_.canPause : sample_.canPlay))); }
 bool NowPlayingModel::canSeek() const {
     if (standalone()) return !busy() && count() > 0 && duration() > 0;
     const bool available = seekPending() ? active() && expected_.canSeek : fresh() && sample_.canSeek;
@@ -90,6 +93,7 @@ QString NowPlayingModel::source() const {
     return !server.isEmpty() ? server : QFileInfo(title).isAbsolute() ? QFileInfo(title).fileName() : title;
 }
 QString NowPlayingModel::status() const {
+    if (completed()) return QStringLiteral("播放完成，观看进度已保留");
     if (standalone()) return app_->danmaku_.preparing() ? QStringLiteral("正在准备新的弹幕来源…")
         : app_->danmaku_.completed() ? QStringLiteral("独立弹幕播放完成")
         : count() == 0 ? app_->danmaku_.status() : playing() ? QStringLiteral("正在独立播放弹幕") : QStringLiteral("独立弹幕已暂停");
@@ -152,6 +156,7 @@ void NowPlayingModel::finish(bool success, const QString& error) {
 
 void NowPlayingModel::togglePlayback() {
     if (!canPlay()) return;
+    if (completed()) { app_->media_.openVideo(app_->media_.videoPath(), MediaSession::FromStart); return; }
     if (standalone()) { if (!app_->running_) app_->start(true); else app_->togglePause(); }
     else request(!playing());
 }
@@ -167,7 +172,7 @@ void NowPlayingModel::endPlayback() {
     emit app_->stateChanged(); emit changed();
 }
 
-void NowPlayingModel::openStandalone(const QString& path) { error_.clear(); app_->danmaku_.openFile(path); }
+void NowPlayingModel::openStandalone(const QString& path) { if (app_->closingApplication_) return; error_.clear(); app_->danmaku_.openFile(path); }
 void NowPlayingModel::cancelStandaloneOpen() { app_->danmaku_.cancelPreparation(); emit changed(); }
 void NowPlayingModel::replaceDanmaku(const QString& path) {
     error_.clear();

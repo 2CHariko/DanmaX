@@ -12,12 +12,15 @@ class WindowBackdropController final : public QObject, public QAbstractNativeEve
     Q_OBJECT
     Q_PROPERTY(bool effectiveMica READ effectiveMica NOTIFY changed)
     Q_PROPERTY(QString fallbackReason READ fallbackReason NOTIFY changed)
+    Q_PROPERTY(bool compatibilityOpaque READ compatibilityOpaque WRITE setCompatibilityOpaque NOTIFY changed)
 public:
     WindowBackdropController(SettingsStore* settings, LogModel* logs, QObject* parent = nullptr);
     ~WindowBackdropController() override;
     void attach(QWindow* window);
     bool effectiveMica() const { return effective_; }
     QString fallbackReason() const { return reason_; }
+    bool compatibilityOpaque() const { return compatibilityOpaque_; }
+    void setCompatibilityOpaque(bool value) { if (compatibilityOpaque_ != value) { compatibilityOpaque_ = value; refresh(); emit changed(); } }
     static QString fallback(bool requested, bool nativeWindows, bool supported,
                             bool highContrast, bool transparent, bool savingPower);
 signals:
@@ -35,6 +38,7 @@ private:
     bool surfaceReady_ = false;
     bool pending_ = false;
     bool effective_ = false;
+    bool compatibilityOpaque_{};
     WId nativeId_ = 0;
     void* powerNotification_ = nullptr;
     QString reason_ = QStringLiteral("窗口尚未就绪");

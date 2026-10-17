@@ -9,6 +9,7 @@ class AppController;
 class NowPlayingModel final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool video READ video NOTIFY changed)
+    Q_PROPERTY(bool completed READ completed NOTIFY changed)
     Q_PROPERTY(bool standalone READ standalone NOTIFY changed)
     Q_PROPERTY(bool openingStandalone READ openingStandalone NOTIFY changed)
     Q_PROPERTY(bool canSelectSource READ canSelectSource NOTIFY changed)
@@ -35,6 +36,7 @@ class NowPlayingModel final : public QObject {
   public:
     explicit NowPlayingModel(AppController* app);
     bool video() const;
+    bool completed() const;
     bool standalone() const;
     bool openingStandalone() const;
     bool canSelectSource() const;

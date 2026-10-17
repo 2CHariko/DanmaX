@@ -5,6 +5,7 @@ import QtQuick.Dialogs
 import "../theme"
 
 Dialog {
+    popupType: Ui.embeddedVideoActive ? Popup.Window : Popup.Item
     id: dialog
     objectName: "matchingRecoveryDialog"
     required property QtObject backend

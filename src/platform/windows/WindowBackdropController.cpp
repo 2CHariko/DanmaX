@@ -120,6 +120,7 @@ void WindowBackdropController::refresh() {
     QString reason = fallback(settings_->values().value("micaEnabled").toBool(), native, supported,
         qGuiApp->styleHints()->accessibility()->contrastPreference() == Qt::ContrastPreference::HighContrast,
         transparent, saving);
+    if (compatibilityOpaque_) reason = QStringLiteral("内置播放兼容模式：原生视频使用不透明主窗");
     if (!native || !supported) { publish(false, reason); return; }
     const auto hwnd = reinterpret_cast<HWND>(window_->winId());
     nativeId_ = window_->winId();
