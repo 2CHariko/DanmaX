@@ -1,5 +1,46 @@
 # C++ 重构交付状态
 
+## 下拉浮层布局、底色与阴影微调（2026-10-17）
+
+- `AppComboBox` 将指示条从文字布局独立出来，文字左内衬 12、指示条左侧 2，垂直内衬 8、行高至少 36 并响应字体。选中／悬停底板在浮层背景内绘制，左右各留 4，解决右侧滚动通道造成的底板缺口；文字视口、滚动条及留白输入范围保持隔离。保留原地展开、编辑分支、键盘、缩窗和滚轮行为。
+- 共享 `PopupSurface` 改为浅色冷白／深色炭灰与低对比描边，并通过已包含的 QtQuick.Effects `RectangularShadow` 添加模糊范围 12、下移 3 的柔和阴影。浮层预留 20 的窗口边距，软件后端／高对比度禁用阴影；阴影随可见性创建和释放。没有新依赖、真实 Acrylic 或 Windows 原生 ThemeShadow 接入。
+- Debug／Release 主程序、Release 界面测试构建通过。常规软件后端四项专项 **6 passed、0 failed、0 skipped，16.456 秒**；原生图形后端在 `QT_SCALE_FACTOR=1.5`＋13.5pt 字体下六项专项 **8 passed、0 failed、0 skipped，52.895 秒**，均含初始化／清理。新增底板宽度、文字／指示条位置断言；GPU 浅深主题通过开关阴影的实际图像像素差确认阴影延伸到浮层外，软件模式验证不创建阴影加载器。原对齐、动画、长列表、滚轮／滑块、页面与全局布局回归通过，无 QML 引擎警告。
+- 浅深截图及日志 `out/validation/popup-polish/{standard,150}/` 已目视检查，长下拉与缩窗证据在 `out/validation/scroll-popup-polish{,-150}/`。当前为接近参考图的 Qt 外观，不承诺像素级 WinUI 一致；系统高对比度、真实触控板、混合系统 DPI 与 Narrator 仍未验收。
+- Debug／Release 开发运行目录已同步并通过启动冒烟，EXE 与构建产物哈希一致，记录 `out/validation/popup-polish/runtime-hashes.json`；未重打正式发布包或重复播放器／领域套件。设计规范和用户说明已同步更新，更改尚未提交。
+
+## 下拉选中项原地展开落地（2026-10-17）
+
+- `AppComboBox` 非编辑且有选择时，浮层覆盖原字段，选中行中心与字段中心对齐；展开期间隐藏原文字、箭头和背景，关闭后恢复，保留布局、焦点和标准键盘操作。固定候选行高随字体测量调整，长列表按选中项／窗口上下空间分配可见行，展开动画围绕选中行推进；可编辑、未选中和空列表保留上下展开。保留共享纯色 `PopupSurface`、标准滚动条通道与留白滚轮，不接入 Acrylic、原生宿主或新依赖。
+- 新增 `comboSelectedItemPlacement`，覆盖浅深主题、5／120 项、首／中／末项、窗口顶部／中间／底部共 36 组对齐与关闭恢复，并检查编辑分支和无选择状态。Release 常规软件后端与背景／动画、长列表输入、留白生命周期专项合计 **6 passed、0 failed、0 skipped，15.946 秒**；原页面工作流和全局布局另为 **4 passed、0 failed、0 skipped，28.976 秒**。
+- Release 原生图形后端、`QT_SCALE_FACTOR=1.5`＋13.5pt 字体，重跑上述六个专项为 **8 passed、0 failed、0 skipped，50.323 秒**（均含初始化／清理），无 QML 引擎警告。覆盖窗口缩小、滚轮／滑块、键盘、主题、关闭动画偏好和字体编辑。浅深截图 `out/validation/combo-in-place/{standard,150}/` 已目视检查，长下拉／缩窗截图位于 `out/validation/scroll-popup-in-place{,-150}/`。混合系统 DPI、真实触控板、Narrator 与系统高对比度仍未验收，不称为完整 WinUI SplitOpen。
+- Debug／Release 主程序及 Release 界面测试目标构建通过；两份开发运行目录均已同步并通过 `run.ps1 -NoBuild -SmokeTest`，构建与运行 EXE 哈希一致，记录在 `out/validation/combo-in-place/runtime-hashes.json`。未重打正式发布包或重复播放器／领域套件。用户已决定暂缓材质接入研究，探针仅保留为历史记录；其条纹响应阈值不作正式 WinUI 外观验收门槛。规范与用户说明分别更新于 `UI_DESIGN_SYSTEM.md`、`USER_GUIDE.md`。
+
+## 下拉原地展开与 Acrylic 独立最小验证（2026-10-17）
+
+- 默认关闭的 `DANMAKU_BUILD_ACRYLIC_POPUP_PROBE` 现已比较直接 DWM、现有 QWindowKit 完整初始化、创建前禁用重定向表面及其组合，并补测原生 owner／移除 Layered／非客户区合成和独立无边框 QQuickView。不替换正式界面或播放器，不增加第三方依赖。
+- 最终串行重跑的 DPR 1 六种配置与 Baseline DPR 1.5 均为 **5 passed、4 failed**：4 个失败分别来自浅深下拉及浅深独立窗口材质。各轮真实前台和已知背景条纹检查通过、DWM 读回类型 3，但颜色响应均为 0，目视仍为纯色，不能标为真实 Acrylic 已验收。普通模式的对齐、键盘、长列表角度滚轮、外部关闭、菜单及 12 次重开通过，销毁后桥接记录为 0。
+- Combined＋原生样式对照 DPR 1.5 为 **3 passed、6 failed**：除材质外，还有约 **1.67** 逻辑单位对齐偏差；对齐失败后停止该用例，长列表后续输入不算验收。该偏差在用户停止操作后仍可复现，没有放宽容差。
+- 修正副屏抓图重复加屏幕原点导致黑图的问题；新增每次材质采样的截图／实际前台有效性门槛，并以 computer-use 实际窗口交叉观察确认。之前受手动操作、中断和无效截图影响的轮次不作最终依据。浅深及 150% 新证据已检查；完整 SplitOpen、可编辑分支、混合系统 DPI、无障碍和生产集成仍未验收。详见 [最小验证记录](ACRYLIC_POPUP_PROBE.md)，证据 `out/validation/acrylic-popup-probe/`。
+
+## 菜单与下拉背景、动画优化（2026-10-17）
+
+- 按用户要求新增共享 `PopupSurface` 和 `AppMenu`，底部菜单及 AppComboBox 统一为无位图的圆角／描边主题底色；去掉菜单背景图片及其阴影内缩，不改标准菜单项、勾选和控件主体交互。当前为不透明纯色浮层，未接入 Acrylic，不宣称菜单继承主窗口 Mica。
+- 下拉改用应用公开的展开进度与目标高度，恢复 250ms OutCubic 展开；向上打开时固定靠近字段的边缘，保持最终窗口约束和完成后的末项可见性。菜单同用该节奏；系统关闭动画或高对比度直接显示，关闭不增加动画等待。未访问 Qt 样式内部属性。
+- Debug／Release 应用构建通过。Release 软件后端专项 **8 passed、0 failed、0 skipped，18.101 秒**，覆盖动画真实中间帧、关闭动画、背景一致性、长候选末项、上下展开／缩窗、键盘、像素／角度留白滚轮、滑块拖动、无溢出与嵌套滚动，以及底栏菜单和 VLC 会话下拉。浅深主题截图位于 `out/validation/popup-surfaces/standard/`，已目视检查。
+- Release 原生 150% 缩放＋放大文字相同专项 **8 passed、0 failed、0 skipped，21.723 秒**；浅深截图 `out/validation/popup-surfaces/150/` 已目视检查，长列表／向上展开证据位于 `out/validation/scroll-popup-clean-popup-150/`。日志 `out/popup-ui-{standard,150}.txt`。本轮没有重复领域、真实播放器或完整 UI 套件；高对比度实际桌面效果、混合 DPI 和真实 Acrylic 仍未验收。
+- Debug／Release 开发运行目录已同步并通过 `run.ps1 -NoBuild -SmokeTest`，构建与运行 EXE SHA-256 相同，记录 `out/validation/popup-surfaces/runtime-hashes.json` 及 `out/popup-deploy-{debug,release}.txt`。未重打正式发布包，更改尚未提交。
+
+## 统一播放中心初版（2026-10-17）
+
+- 侧栏第二项统一为“播放”，中心展示当前弹幕或视频的名称、分集、封面、来源与状态；媒体库保留打开视频和最近播放。底部播放条跨页面常驻，集中播放／暂停、进度、选集、弹幕和播放器操作。来源与连接设置按操作展开，保留既有 Fluent 控件、滚动及键盘规范。
+- 新增 `NowPlayingModel` 作为界面入口，复用原有两类任务及唯一协调器、引擎和帧驱动。外部播放状态与弹幕载入分开；视频卸载弹幕后仍能控制视频。控制等待真实能力、内容／代次／采样校验及状态读回，旧结果不能接管新任务；首次跟随已暂停的已连接媒体须等待新代次确认再请求继续。
+- 视频番剧信息独立于弹幕来源持久化，更换 XML 保留名称与封面；文件替换使信息失效。独立 XML 可直接开始，替换保留模式及暂停意图，结束后可重新开始；载入失败保留原视频任务。
+- 独立弹幕与受控 VLC 支持底栏定位；PotPlayer 保持只读进度，其既有精确续播限制仍有效。选集首轮仅支持已识别番剧的弹幕分集；尚未实现本地视频剧集映射、下一集队列或内嵌视频解码。操作与架构见 [统一播放说明](NOW_PLAYING.md)。
+- Debug／Release 完整构建通过。工作流专项两种构建均 **17 passed**；Debug 最终定向 CTest **8/8，97.68 秒**。Release 首轮全量其余 **20** 项通过，UI 的旧入口测试改为通过新菜单／展开区域操作；自动匹配重连测试改为模拟真实推进的采样，检查窗口恢复后下一条弹幕，保留失联隐藏／清理断言。自动匹配最终 **46 passed，25.50 秒**。
+- 原生 150% 缩放＋放大文字专项 **7 passed、0 failed、0 skipped，27.350 秒**，覆盖播放页、跨页底栏、菜单键盘、全局视频拖放、VLC 发现、自动匹配及留白滚轮生命周期；浅深主题截图 `out/validation/unified/ui-150/` 已目视检查。完整 UI 的滚动用例曾失败，软件后端单独复测 **3 passed，10.329 秒**；最终完整 UI CTest 通过，内部 **30 passed、0 failed、3 skipped，120.288 秒**，记录 `out/unified-ui-complete-verified.log`。跳过的原生前台／显式真实会话项不计为通过；对应原生专项另记。最终未再次重复全部 22 项。合成触控板事件不扩大为真实硬件惯性、高对比度或混合 DPI 验收。
+- 使用用户指定的 KitaujiSub 第 1 集，真实 VLC 专项 **3 passed，11.887 秒**，实际弹幕文字像素、底栏模型播放／暂停、换 XML 保留连接与视频信息、卸载后视频仍可控制、精确定位／续播、选源暂停恢复及关闭后重开通过。真实 PotPlayer 边界专项 **3 passed，38.434 秒**，底栏播放／暂停与上述来源保护通过，但精确定位／续播和关闭后精确恢复仍未通过；失败后保留历史并显式按当前位置继续的保护通过，不宣称精确续播已验收。两者均只关闭核验过身份的测试实例。证据位于 `out/validation/unified/real-{vlc,potplayer}-verified/`。
+- 最终 Debug／Release 开发运行目录已同步，`run.ps1 -NoBuild -SmokeTest` 均退出 0，构建与运行 EXE SHA-256 一致；记录 `out/unified-deploy-{debug,release}.txt`、`out/validation/unified/runtime-hashes.json`。未重打正式发布包，更改尚未提交。
+
 ## 双路径与媒体库起步（2026-10-17）
 
 - 增加 `DanmakuSession`、`MediaSession` 与 `PlaybackCoordinator`；共用唯一引擎、渲染器和帧驱动。原路由 1 改名“弹幕”，媒体库追加路由 5。浏览／准备不交接，明确开始／通过预检打开视频才交接；交接不主动暂停或关闭旧视频。修正首次独立启动的多余窗口重置，避免零时刻弹幕被隐藏策略跳过。

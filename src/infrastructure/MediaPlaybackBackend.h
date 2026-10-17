@@ -7,7 +7,7 @@ struct MediaSample {
     enum class Playback { Unknown, Playing, Paused, Stopped, Closed, Changing };
     QString id, title, identity, mediaUri;
     double position{}, duration{}, rate{1};
-    bool playing{}, found{}, canSeek{};
+    bool playing{}, found{}, canSeek{}, canPlay{}, canPause{};
     Playback playback{Playback::Unknown};
     quint64 generation{}, sessionToken{};
     double observedAt{};

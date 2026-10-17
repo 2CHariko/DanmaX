@@ -74,6 +74,7 @@ class MediaSession final : public QObject {
     void seekRequested(MediaSample expected, double seconds, quint64 request);
   private:
     friend class AppController;
+    friend class NowPlayingModel;
     void beginTask(const QString& path);
     void confirmed();
     void beginRestore();
@@ -91,6 +92,7 @@ class MediaSession final : public QObject {
     DanmakuLibrary library_;
     QString video_, bound_, status_, error_, sourceTitle_, confirmedTitle_, confirmedUri_, cacheRoot_;
     QVariantMap source_;
+    QVariantMap contentMetadata_;
     QStringList servers_;
     MediaSample latest_;
     QTimer seekDeadline_, saveTimer_;

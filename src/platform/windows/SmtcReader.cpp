@@ -35,7 +35,10 @@ MediaSample readSample(const GlobalSystemMediaTransportControlsSession& session,
     require(timeline, "SMTC returned null timeline properties");
     const auto playback = session.GetPlaybackInfo();
     require(playback, "SMTC returned null playback info");
-    if (const auto controls = playback.Controls()) sample.canSeek = controls.IsPlaybackPositionEnabled();
+    if (const auto controls = playback.Controls()) {
+        sample.canSeek = controls.IsPlaybackPositionEnabled();
+        sample.canPlay = controls.IsPlayEnabled(); sample.canPause = controls.IsPauseEnabled();
+    }
     const auto start = timeline.StartTime();
     sample.duration = std::max(0.0, std::chrono::duration<double>(timeline.EndTime() - start).count());
     sample.position = std::chrono::duration<double>(timeline.Position() - start).count();

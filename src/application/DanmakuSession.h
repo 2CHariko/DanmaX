@@ -48,10 +48,12 @@ class DanmakuSession final : public QObject {
     void changed();
   private:
     friend class AppController;
+    friend class NowPlayingModel;
     AppController* app_;
     DanmakuLibrary library_;
     AutomaticDanmaku automatic_;
     std::vector<danmaku::Item> items_;
+    QVariantMap metadata_;
     QString title_, file_, error_, status_{QStringLiteral("请选择弹幕来源")};
     bool manual_{};
 };

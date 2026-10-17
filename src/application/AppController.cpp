@@ -29,6 +29,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
       players_(dataDirectory, this),
       monitor_(this, QDir(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory).filePath("players/vlc")),
       media_(dataDirectory, cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this, &videoOpen_, &players_, &monitor_),
+      nowPlaying_(this),
       foregroundQuery_(foregroundQuery ? std::move(foregroundQuery) : ForegroundQuery(MediaMonitor::targetForeground)),
       mainForegroundQuery_(mainForegroundQuery ? std::move(mainForegroundQuery) : MainForegroundQuery([](QWindow* window) {
           return window && window->handle() && MediaMonitor::windowOrOwnerForeground(window->winId());
@@ -85,7 +86,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
         QScopedValueRollback guard(automaticCommit_, true);
         discardLoad(); library_.cancel();
         commitDanmakuItems(std::move(result->items), result->metadata.value("animeTitle").toString() + QStringLiteral(" · ") +
-                    result->metadata.value("episodeTitle").toString());
+                    result->metadata.value("episodeTitle").toString(), result->metadata);
         automaticSource_ = true;
         start(false);
         sample.generation = mediaGeneration_;
@@ -103,7 +104,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
         if (!result || onlineLoadGeneration_ != loadGeneration_) return;
         const auto title = result->metadata.value("animeTitle").toString() + QStringLiteral(" · ") +
                            result->metadata.value("episodeTitle").toString();
-        commitDanmakuItems(std::move(result->items), title);
+        commitDanmakuItems(std::move(result->items), title, result->metadata);
         emit loadCompleted(true);
     });
     connect(&settings_, &SettingsStore::changed, this, &AppController::configure);
@@ -519,7 +520,7 @@ void AppController::start(bool manual) {
         startup_ = false; manual_ = manual; danmaku_.manual_ = manual;
         // With no previous owner, the prepared engine is already loaded. Keeping
         // its surface avoids losing exposure and suppressing time-zero comments.
-        if (replacingMedia && !danmaku_.items_.empty()) commitItems(danmaku_.items_, danmaku_.title_);
+        if ((replacingMedia || engine_.items().empty()) && !danmaku_.items_.empty()) commitItems(danmaku_.items_, danmaku_.title_);
         configure();
         if (danmaku_.items_.empty()) { status_ = QStringLiteral("正在等待播放器并自动匹配弹幕"); emit stateChanged(); return; }
     }
@@ -574,6 +575,7 @@ void AppController::unloadDanmaku() {
     library_.cancel();
     discardLoad();
     danmaku_.items_.clear(); danmaku_.title_.clear(); danmaku_.status_ = QStringLiteral("请选择弹幕来源");
+    danmaku_.metadata_.clear();
     danmaku_.error_.clear();
     if (coordinator_.owner() != PlaybackCoordinator::Media) resetPlayback(true);
     emit danmaku_.changed();
@@ -605,7 +607,8 @@ void AppController::commitItems(std::vector<danmaku::Item> items, const QString&
     logs_.append("INFO", status_);
     emit stateChanged();
 }
-void AppController::commitDanmakuItems(std::vector<danmaku::Item> items, const QString& title) {
+void AppController::commitDanmakuItems(std::vector<danmaku::Item> items, const QString& title, const QVariantMap& metadata) {
+    danmaku_.metadata_ = metadata;
     danmaku_.items_ = items; danmaku_.title_ = title;
     danmaku_.error_.clear();
     danmaku_.status_ = QStringLiteral("已载入 %1 条弹幕，可开始播放").arg(items.size());
@@ -795,6 +798,7 @@ void AppController::onSample(const MediaSample& s) {
         if (coordinator_.owner() == PlaybackCoordinator::Media) {
             if (!presentingMedia_) media_.observe(s);
         } else if (!manual_ && !startup_ && coordinator_.owner() == PlaybackCoordinator::Danmaku) automatic_.observe(s);
+        nowPlaying_.observe(s);
     }
     if (!running_ || manual_ || s.generation != mediaGeneration_ ||
         s.id != boundSession() ||

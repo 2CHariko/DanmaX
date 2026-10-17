@@ -12,8 +12,9 @@ set_source_files_properties(theme/Ui.qml i18n/I18n.qml PROPERTIES QT_QML_SINGLET
 qt_add_qml_module(danmaku_app URI DanmaX VERSION 1.0
     QML_FILES Main.qml OverlayWindow.qml ToolbarWindow.qml theme/Ui.qml i18n/I18n.qml
     components/PageFrame.qml components/Disclosure.qml components/AppScrollBar.qml components/VideoOpenPane.qml components/VideoDropOverlay.qml components/ExternalPlayerPane.qml
+    components/NowPlayingBar.qml components/PlaybackSetupPane.qml
     components/LoadingPlaceholder.qml components/ContentReveal.qml components/CoverPlaceholder.qml
-    components/AppComboBox.qml components/AnimeSearchPane.qml components/AnimeSearchField.qml
+    components/AppComboBox.qml components/AppMenu.qml components/PopupSurface.qml components/AnimeSearchPane.qml components/AnimeSearchField.qml
     components/SettingsSection.qml components/SettingsRow.qml components/NavigationPane.qml components/FontSelector.qml
     components/ActionCard.qml components/WindowCaptionButtons.qml components/DanmakuToolbar.qml
     components/OnlineDanmakuPane.qml components/CachedDanmakuPane.qml components/MatchingRecoveryDialog.qml

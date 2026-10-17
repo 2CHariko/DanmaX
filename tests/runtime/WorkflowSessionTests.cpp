@@ -47,6 +47,7 @@ struct Harness {
         renderer.setParentItem(window.contentItem()); window.resize(800, 600); renderer.setSize(QSizeF(800, 600)); app.attach(&renderer, &window);
         sample.found = true; sample.playing = true; sample.playback = MediaSample::Playback::Playing;
         sample.duration = 120; sample.position = 12; sample.sessionToken = 101; sample.canSeek = true;
+        sample.canPlay = sample.canPause = true;
     }
     void send() {
         QTest::qWait(2); sample.id = service->sessionId(); sample.generation = monitor->generation(); sample.observedAt = MediaMonitor::monotonicSeconds();
@@ -119,6 +120,66 @@ private slots:
         h.app.start(true); QVERIFY(h.app.running()); QVERIFY(h.app.manualMode()); QVERIFY(!h.media->active());
         QCOMPARE(qobject_cast<PlaybackCoordinator*>(h.app.coordinator())->owner(), PlaybackCoordinator::Danmaku);
         QCOMPARE(h.app.total(), 1); QCOMPARE(settings->values().value("targetSession").toString(), QString("Browser"));
+    }
+    void unifiedIndependentPlaybackAndEnd() {
+        Fixture f; Harness h(f); auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying()); QVERIFY(now);
+        now->openDanmaku(f.xml); QTRY_VERIFY(h.app.running()); QVERIFY(now->playing()); QVERIFY(now->canSeek());
+        QCOMPARE(now->count(), 2); QVERIFY(!now->video());
+        now->togglePlayback(); QVERIFY(!now->playing()); now->seek(1); QCOMPARE(now->position(), 1.0);
+        now->replaceDanmaku(f.second); QTRY_VERIFY(!now->busy()); QCOMPARE(now->count(), 1); QVERIFY(!now->playing());
+        now->togglePlayback(); QVERIFY(now->playing()); h.app.setDanmakuVisible(false); QVERIFY(now->playing());
+        now->endPlayback(); QVERIFY(!now->active()); QCOMPARE(qobject_cast<PlaybackCoordinator*>(h.app.coordinator())->owner(), PlaybackCoordinator::None);
+        QVERIFY(now->canPlay()); now->togglePlayback(); QVERIFY(now->active());
+    }
+    void unifiedExternalControlNeedsAckAndReadback() {
+        Fixture f; f.seed(); Harness h(f); h.open(); QTRY_COMPARE(h.media->total(), 2);
+        auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying()); QVERIFY(now->video()); QVERIFY(now->playing());
+        disconnect(now, &NowPlayingModel::playbackRequested, h.monitor, &MediaMonitor::requestPlayback);
+        QSignalSpy commands(now, &NowPlayingModel::playbackRequested);
+        h.media->unload(); QCOMPARE(now->count(), 0); QVERIFY(now->playing()); QVERIFY(now->canPlay());
+        QVERIFY(!now->canSeek());
+        now->togglePlayback(); QCOMPARE(commands.size(), 1); QVERIFY(now->busy());
+        const auto id = commands.first()[2].toULongLong();
+        h.monitor->playbackControlFinished(id, true, {}); QVERIFY(now->busy()); QVERIFY(now->playing());
+        h.sample.playing = false; h.sample.playback = MediaSample::Playback::Paused; h.send();
+        QVERIFY(!now->busy()); QVERIFY(!now->playing()); QVERIFY(now->canPlay());
+        now->togglePlayback(); QCOMPARE(commands.size(), 2);
+        now->endPlayback(); h.monitor->playbackControlFinished(commands.last()[2].toULongLong(), true, {});
+        QVERIFY(!now->busy()); QVERIFY(!now->active());
+    }
+    void failedIndependentOpenKeepsCurrentVideoAndReportsError() {
+        Fixture f; f.seed(); Harness h(f); h.open(); QTRY_COMPARE(h.media->total(), 2);
+        auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
+        now->openDanmaku(f.directory.filePath("missing.xml")); QTRY_VERIFY(!now->busy());
+        QVERIFY(!now->error().isEmpty()); QVERIFY(now->video()); QVERIFY(h.media->active()); QCOMPARE(now->count(), 2);
+    }
+    void firstFollowPlayResumesOnlyFreshConfirmedContent() {
+        Fixture f; Harness h(f); auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
+        h.app.selectSession("Test.Player"); QSignalSpy loaded(&h.app, &AppController::loadCompleted);
+        h.app.loadFile(f.xml); QTRY_VERIFY(!loaded.isEmpty());
+        disconnect(now, &NowPlayingModel::playbackRequested, h.monitor, &MediaMonitor::requestPlayback);
+        QSignalSpy commands(now, &NowPlayingModel::playbackRequested);
+        h.sample.id = "Test.Player"; h.sample.title = "Video.mp4"; h.sample.playing = false; h.sample.playback = MediaSample::Playback::Paused;
+        const auto inject = [&] {
+            QTest::qWait(2); h.sample.generation = h.monitor->generation(); h.sample.observedAt = MediaMonitor::monotonicSeconds();
+            QMetaObject::invokeMethod(&h.app, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, h.sample));
+        };
+        inject(); QVERIFY(now->canPlay()); now->togglePlayback(); QVERIFY(now->busy()); QVERIFY(h.app.running());
+        QCOMPARE(commands.size(), 0); inject(); QCOMPARE(commands.size(), 1); QVERIFY(commands.first()[1].toBool());
+        h.monitor->playbackControlFinished(commands.first()[2].toULongLong(), true, {});
+        h.sample.playing = true; h.sample.playback = MediaSample::Playback::Playing; inject();
+        QVERIFY(!now->busy()); QVERIFY(now->playing());
+    }
+    void videoMetadataSurvivesXmlAndReopen() {
+        Fixture f; RecentVideoStore store(f.data()); store.opened(f.video);
+        const QVariantMap content{{"animeTitle", "Video title"}, {"episodeTitle", "Episode 1"}, {"imageUrl", "https://example.test/cover.jpg"}};
+        store.checkpoint(f.video, 0, 120, {{"kind", "xml"}, {"path", f.xml}}, content);
+        Harness h(f); h.open(); QTRY_COMPARE(h.media->total(), 2);
+        auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying()); QCOMPARE(now->title(), QString("Video title"));
+        h.media->loadFile(f.second); QTRY_COMPARE(h.media->total(), 1); QCOMPARE(now->coverUrl(), content.value("imageUrl").toString());
+        h.media->flush(); RecentVideoStore loaded(f.data()); QCOMPARE(loaded.lookup(f.video).value("content").toMap(), content);
+        write(f.directory.path(), "Test - 01.mp4", "replacement contents");
+        QVERIFY(loaded.lookup(f.video).value("content").toMap().isEmpty());
     }
     void mediaSourceReplacementKeepsConnectionAndHistory() {
         Fixture f; f.seed(); Harness h(f); h.open(); QTRY_COMPARE(h.media->total(), 2);

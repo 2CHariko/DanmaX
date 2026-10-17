@@ -12,7 +12,7 @@ class RecentVideoStore final : public QAbstractListModel {
     QString error() const { return error_; }
     QVariantMap lookup(const QString& path) const;
     void opened(const QString& path);
-    void checkpoint(const QString& path, double position, double duration, const QVariantMap& source);
+    void checkpoint(const QString& path, double position, double duration, const QVariantMap& source, const QVariantMap& content = {});
     Q_INVOKABLE void remove(const QString& path);
     static QString normalizedPath(const QString& input);
     int rowCount(const QModelIndex& parent = {}) const override { return parent.isValid() ? 0 : static_cast<int>(entries_.size()); }

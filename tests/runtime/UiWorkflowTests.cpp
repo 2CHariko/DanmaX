@@ -249,6 +249,53 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void unifiedPlaybackPageAndPersistentControls() {
+        QTemporaryDir directory; AppController backend(directory.path());
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}, {"selectedPage", 1}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty()); auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        window->resize(900, 700); window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
+        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
+            if (parent->objectName() == name) return parent;
+            for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
+            return nullptr;
+        };
+        auto* page = find(window->contentItem(), "playerPage"); auto* bar = find(window->contentItem(), "nowPlayingBar");
+        auto* toggle = find(window->contentItem(), "nowPlayingToggle"); QVERIFY(page && bar && toggle);
+        QCOMPARE(page->property("title").toString(), QString("播放")); QVERIFY(bar->isVisible());
+        auto* now = qobject_cast<NowPlayingModel*>(backend.nowPlaying()); QVERIFY(now);
+        now->openDanmaku(QStringLiteral(DANMAKU_SOURCE_DIR "/tests/fixtures/sample.xml")); QTRY_VERIFY(backend.running());
+        QTRY_VERIFY(toggle->isEnabled()); toggle->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space); QVERIFY(!now->playing());
+        const double paused = now->position();
+        for (int index = 0; index < 6; ++index) {
+            QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, index))); QTest::qWait(30);
+            QVERIFY(bar->isVisible()); QCOMPARE(now->position(), paused);
+            QVERIFY(bar->mapToScene(QPointF(0, bar->height())).y() <= window->height() + 1);
+        }
+        QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 1)));
+        toggle->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space); QVERIFY(now->playing());
+        auto* button = find(window->contentItem(), "nowPlayingDanmaku"); QVERIFY(button);
+        button->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        auto* menu = bar->findChild<QObject*>("nowPlayingDanmakuMenu"); QVERIFY(menu); QTRY_VERIFY(menu->property("opened").toBool());
+        auto* menuContent = menu->property("contentItem").value<QQuickItem*>(); QVERIFY(menuContent);
+        auto* visibilityItem = find(menuContent, "nowPlayingVisibility"); QVERIFY(visibilityItem);
+        visibilityItem->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        QTRY_VERIFY(!backend.danmakuVisible()); QVERIFY(now->playing()); backend.setDanmakuVisible(true);
+        QVERIFY(QMetaObject::invokeMethod(page, "openOptions", Q_ARG(QVariant, true))); QTest::qWait(100);
+        auto* scroll = page->property("contentItem").value<QObject*>(); auto* scrollbar = page->findChild<QQuickItem*>("pageVerticalScrollBar");
+        QVERIFY(scroll && scrollbar); checkWheelMargins(window, scrollbar, scroll);
+        const auto output = qEnvironmentVariable("DANMAKU_VIDEO_UI_ARTIFACTS");
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            settings->setValue("theme", theme); find(page, "playbackOptions")->setProperty("expanded", false);
+            scroll->setProperty("contentY", 0); QTest::qWait(100);
+            if (!output.isEmpty()) { QVERIFY(QDir().mkpath(output)); QVERIFY(window->grabWindow().save(output + "/unified-playback-" + theme + ".png")); }
+        }
+        QStringList errors; for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) errors << error.toString();
+        QVERIFY2(warnings.isEmpty(), qPrintable(errors.join('\n'))); now->endPlayback(); window->close();
+    }
     void dualWorkspaceNavigationAndRecentPlayback() {
         QTemporaryDir directory;
         AppController backend(directory.path());
@@ -271,7 +318,7 @@ private slots:
             return nullptr;
         };
         auto* player = find(window->contentItem(), "playerPage"); auto* page = find(window->contentItem(), "mediaLibraryPage"); QVERIFY(player && page);
-        QVERIFY(!find(player, "openVideoButton")); QVERIFY(find(page, "openVideoButton"));
+        QVERIFY(find(player, "openVideoButton")); QVERIFY(find(page, "openVideoButton"));
         QSignalSpy loaded(&backend, &AppController::loadCompleted);
         backend.loadFile(QStringLiteral(DANMAKU_SOURCE_DIR "/tests/fixtures/sample.xml")); QTRY_VERIFY(!loaded.isEmpty()); backend.start(true); QVERIFY(backend.running());
         const auto generation = qobject_cast<PlaybackCoordinator*>(backend.coordinator())->generation();
@@ -333,6 +380,7 @@ private slots:
         };
         auto* page = find(window->contentItem(), "playerPage"); auto* combo = find(window->contentItem(), "targetSessionChoice");
         auto* hint = find(window->contentItem(), "vlcSessionDiscoveryHint"); QVERIFY(page && combo && hint);
+        QVERIFY(QMetaObject::invokeMethod(page, "openOptions", Q_ARG(QVariant, true))); QTest::qWait(50);
         QVERIFY(hint->isVisible()); QCOMPARE(combo->property("count").toInt(), 2); QCOMPARE(combo->property("currentIndex").toInt(), 0);
         QVERIFY(QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(combo)))); QTest::qWait(100);
         combo->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4);
@@ -621,9 +669,9 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(&backend, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, before)));
         QCOMPARE(launches, 1);
         QVERIFY(!feedback->property("dragActive").toBool()); QVERIFY(!feedback->property("blurLoaded").toBool());
-        QCOMPARE(window->property("currentPageName").toString(), QString("media"));
+        QCOMPARE(window->property("currentPageName").toString(), QString("player"));
         QTest::qWait(60);
-        auto* page = window->findChild<QObject*>("mediaLibraryPage"); QVERIFY(page);
+        auto* page = window->findChild<QObject*>("playerPage"); QVERIFY(page);
         auto* cancel = page->findChild<QQuickItem*>("cancelVideoOpenButton"); QVERIFY(cancel); QVERIFY(cancel->isVisible());
         cancel->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
         QVERIFY(!video->pending());
@@ -998,10 +1046,10 @@ Window {
             return QMetaObject::invokeMethod(&backend, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
         };
         QVERIFY(inject()); QVERIFY(backend.targetSessionConnected());
-        QVERIFY(find(player, "playerConnectionBadge")->property("text").toString().contains("已连接"));
+        QVERIFY(find(player, "savedPlayerStatus")->property("text").toString().contains("已连接"));
         sample.found = false; QVERIFY(inject()); QVERIFY(!backend.targetSessionConnected());
         QCOMPARE(choice->property("currentValue").toString(), QString("Remembered.Player"));
-        auto* start = find(player, "startPlayback"); QVERIFY(start && start->isEnabled());
+        auto* start = find(window->contentItem(), "nowPlayingToggle"); QVERIFY(start && start->isEnabled());
         start->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
         QVERIFY(backend.running()); QCOMPARE(backend.playbackState(), AppController::WaitingForPlayer);
         QVERIFY(!backend.overlayVisible()); QVERIFY(!backend.toolbarPresentationAllowed());
@@ -1052,6 +1100,9 @@ Window {
         QTRY_COMPARE(window->property("selectedPage").toInt(), 1);
         QTRY_VERIFY(!online->property("visible").toBool());
         auto* forget = find(player, "forgetTargetSession"); QVERIFY(forget);
+        QVERIFY(QMetaObject::invokeMethod(player, "openOptions", Q_ARG(QVariant, true)));
+        QVERIFY(QMetaObject::invokeMethod(player, "reveal", Q_ARG(QVariant, QVariant::fromValue(forget))));
+        QTest::qWait(100);
         forget->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
         QCOMPARE(settings->values()["targetSession"].toString(), QString());
         QVERIFY(!backend.targetSessionConnected());
@@ -3435,6 +3486,143 @@ ApplicationWindow {
         QCoreApplication::processEvents();
         QVERIFY(!backdrop.effectiveMica());
     }
+    void popupSurfaceAndMotion() {
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.loadData(R"(
+import QtQuick
+import QtQuick.Controls.FluentWinUI3
+import "components"
+import "theme"
+ApplicationWindow {
+    visible: true; width: 800; height: 600
+    function motion(enabled) { Ui.systemAnimationsEnabled = enabled }
+    AppComboBox { objectName: "choice"; x: 24; y: 40; width: 240; model: ["第一项", "第二项", "第三项"] }
+    AppMenu { objectName: "menu"; x: 300; y: 80; MenuItem { text: "显示弹幕"; checkable: true; checked: true } MenuItem { text: "搜索弹幕" } }
+}
+)", QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/SurfaceProbe.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* choice = window->findChild<QObject*>("choice"); auto* menu = window->findChild<QObject*>("menu");
+        QVERIFY(choice && menu); auto* popup = choice->property("popup").value<QObject*>(); QVERIFY(popup);
+        QSignalSpy comboFrames(choice, SIGNAL(popupRevealProgressChanged()));
+        QSignalSpy menuFrames(menu, SIGNAL(revealProgressChanged()));
+        QVERIFY(QMetaObject::invokeMethod(window, "motion", Q_ARG(QVariant, true)));
+        QVERIFY(QMetaObject::invokeMethod(popup, "open")); QTRY_VERIFY(popup->property("opened").toBool());
+        QVERIFY(comboFrames.size() > 2);
+        QVERIFY(QMetaObject::invokeMethod(menu, "open")); QTRY_VERIFY(menu->property("opened").toBool());
+        QVERIFY(menuFrames.size() > 2);
+        const auto output = qEnvironmentVariable("DANMAKU_POPUP_ARTIFACTS");
+        for (const auto theme : {Qt::ColorScheme::Light, Qt::ColorScheme::Dark}) {
+            QGuiApplication::styleHints()->setColorScheme(theme); QTest::qWait(80);
+            auto* comboSurface = popup->property("background").value<QQuickItem*>();
+            auto* menuSurface = menu->property("background").value<QQuickItem*>(); QVERIFY(comboSurface && menuSurface);
+            QCOMPARE(comboSurface->property("color"), menuSurface->property("color"));
+            QCOMPARE(comboSurface->property("color").value<QColor>().alpha(), 255);
+            auto* shadowLoader = comboSurface->findChild<QObject*>("popupShadowLoader"); QVERIFY(shadowLoader);
+            if (comboSurface->property("shadowEnabled").toBool()) {
+                const auto point = comboSurface->mapToScene(QPointF(comboSurface->width() / 2, comboSurface->height() + 6));
+                const auto pixel = (point * window->devicePixelRatio()).toPoint();
+                const auto withShadow = window->grabWindow(); QVERIFY(withShadow.rect().contains(pixel));
+                const auto shaded = withShadow.pixelColor(pixel);
+                QVERIFY(comboSurface->setProperty("shadowEnabled", false)); QTest::qWait(60);
+                const auto plain = window->grabWindow().pixelColor(pixel);
+                QVERIFY2(shaded != plain, "The popup shadow must visibly extend below its surface.");
+                QVERIFY(comboSurface->setProperty("shadowEnabled", true)); QTest::qWait(60);
+            } else {
+                QVERIFY(!shadowLoader->property("active").toBool());
+            }
+            if (!output.isEmpty()) {
+                QVERIFY(QDir().mkpath(output));
+                QVERIFY(window->grabWindow().save(output + (theme == Qt::ColorScheme::Light ? "/surface-light.png" : "/surface-dark.png")));
+            }
+        }
+        QVERIFY(QMetaObject::invokeMethod(menu, "close")); QVERIFY(QMetaObject::invokeMethod(popup, "close"));
+        QTRY_VERIFY(!menu->property("visible").toBool() && !popup->property("visible").toBool());
+        comboFrames.clear(); menuFrames.clear();
+        QVERIFY(QMetaObject::invokeMethod(window, "motion", Q_ARG(QVariant, false)));
+        QVERIFY(QMetaObject::invokeMethod(popup, "open")); QTRY_VERIFY(popup->property("opened").toBool());
+        QVERIFY(QMetaObject::invokeMethod(menu, "open")); QTRY_VERIFY(menu->property("opened").toBool());
+        QCOMPARE(choice->property("popupRevealProgress").toReal(), 1.0);
+        QCOMPARE(menu->property("revealProgress").toReal(), 1.0);
+        QVERIFY(comboFrames.size() <= 1 && menuFrames.size() <= 1);
+        QVERIFY(QMetaObject::invokeMethod(window, "motion", Q_ARG(QVariant, true)));
+        QCOMPARE(warnings.size(), 0);
+        window->close();
+    }
+    void comboSelectedItemPlacement() {
+        QQmlApplicationEngine engine;
+        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.loadData(R"(
+import QtQuick
+import QtQuick.Controls.FluentWinUI3
+import "components"
+ApplicationWindow {
+    id: root; visible: true; width: 800; height: 600
+    property real anchorY: 260
+    AppComboBox { objectName: "choice"; x: 240; y: root.anchorY; width: 280; hoverEnabled: false; model: ["第一项", "第二项", "第三项"] }
+}
+)", QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/SelectedRowProbe.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        QVERIFY(QTest::qWaitForWindowExposed(window)); window->requestActivate();
+        QVERIFY(QTest::qWaitForWindowActive(window));
+        auto* choice = window->findChild<QQuickItem*>("choice"); QVERIFY(choice);
+        auto* popup = choice->property("popup").value<QObject*>(); QVERIFY(popup);
+        auto* list = choice->property("popupList").value<QQuickItem*>(); QVERIFY(list);
+        const auto output = qEnvironmentVariable("DANMAKU_POPUP_ARTIFACTS");
+        for (const auto theme : {Qt::ColorScheme::Light, Qt::ColorScheme::Dark}) {
+            QGuiApplication::styleHints()->setColorScheme(theme);
+            for (const int count : {5, 120}) {
+                QStringList rows; for (int i = 0; i < count; ++i) rows << QString::fromUtf8("选项 %1").arg(i + 1);
+                choice->setProperty("model", rows);
+                for (const int anchor : {40, 260, 520}) for (const int index : {0, count / 2, count - 1}) {
+                    window->setProperty("anchorY", anchor); choice->setProperty("currentIndex", index);
+                    QCursor::setPos(window->mapToGlobal(QPoint(1, 1))); choice->forceActiveFocus();
+                    QVERIFY(QMetaObject::invokeMethod(popup, "open")); QTRY_VERIFY(popup->property("opened").toBool());
+                    QVERIFY(choice->property("faceplateHidden").toBool());
+                    for (const auto* part : {"contentItem", "indicator", "background"}) {
+                        auto* item = choice->property(part).value<QQuickItem*>(); QVERIFY(item); QCOMPARE(item->opacity(), 0.0);
+                    }
+                    auto* selected = list->property("currentItem").value<QQuickItem*>(); QVERIFY(selected);
+                    auto* highlight = window->findChild<QQuickItem*>("comboPopupHighlight"); QVERIFY(highlight);
+                    QCOMPARE(qRound(highlight->width()), qRound(popup->property("width").toReal() - 8));
+                    auto* indicator = selected->findChild<QQuickItem*>("comboSelectionIndicator"); QVERIFY(indicator);
+                    QCOMPARE(indicator->x(), 2.0);
+                    auto* label = selected->property("contentItem").value<QQuickItem*>(); QVERIFY(label);
+                    QCOMPARE(label->x(), 12.0);
+                    const auto rowCenter = selected->mapToGlobal(QPointF(0, selected->height() / 2));
+                    const auto fieldCenter = choice->mapToGlobal(QPointF(0, choice->height() / 2));
+                    QVERIFY2(std::abs(rowCenter.y() - fieldCenter.y()) <= 1.0,
+                        qPrintable(QString("count=%1 index=%2 anchor=%3 error=%4").arg(count).arg(index).arg(anchor).arg(rowCenter.y() - fieldCenter.y())));
+                    const auto top = list->mapToGlobal(QPointF());
+                    const auto hostTop = window->mapToGlobal(QPointF());
+                    QVERIFY(top.y() >= hostTop.y() + 7);
+                    QVERIFY(top.y() + list->height() <= hostTop.y() + window->height() - 7);
+                    if (!output.isEmpty() && anchor == 260 && index == count / 2) {
+                        QVERIFY(QDir().mkpath(output));
+                        QVERIFY(window->grabWindow().save(output + QString("/aligned-%1-%2.png").arg(theme == Qt::ColorScheme::Dark ? "dark" : "light").arg(count)));
+                    }
+                    QTest::keyClick(window, Qt::Key_Escape); QTRY_VERIFY(!popup->property("visible").toBool());
+                    QVERIFY(!choice->property("faceplateHidden").toBool()); QVERIFY(choice->hasActiveFocus());
+                    QCOMPARE(choice->property("contentItem").value<QQuickItem*>()->opacity(), 1.0);
+                }
+            }
+        }
+        // Editable and unselected fields retain their editor instead of hiding it.
+        window->setProperty("anchorY", 260); choice->setProperty("editable", true);
+        choice->forceActiveFocus(); QVERIFY(QMetaObject::invokeMethod(popup, "open"));
+        QTRY_VERIFY(popup->property("opened").toBool());
+        QVERIFY(!choice->property("faceplateHidden").toBool());
+        QVERIFY(popup->property("y").toReal() >= choice->height());
+        QTest::keyClick(window, Qt::Key_Escape); QTRY_VERIFY(!popup->property("visible").toBool());
+        choice->setProperty("editable", false); choice->setProperty("currentIndex", -1);
+        QVERIFY(QMetaObject::invokeMethod(popup, "open")); QTRY_VERIFY(popup->property("opened").toBool());
+        QVERIFY(!choice->property("faceplateHidden").toBool());
+        QTest::keyClick(window, Qt::Key_Escape); QTRY_VERIFY(!popup->property("visible").toBool());
+        QCOMPARE(warnings.size(), 0); window->close();
+    }
     void popupGeometryAndInput() {
         const QString output = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/scroll-popup")
             + qEnvironmentVariable("DANMAKU_UI_CAPTURE_SUFFIX");
@@ -3896,6 +4084,11 @@ ApplicationWindow {
         auto find = [&](const char* name) { return findVisual(window->contentItem(), QString::fromLatin1(name)); };
         auto activate = [&](QQuickItem* item) {
             QVERIFY(item);
+            auto* playback = find("playerPage");
+            for (auto* ancestor = item; ancestor; ancestor = ancestor->parentItem()) if (ancestor == playback) {
+                QVERIFY(QMetaObject::invokeMethod(playback, "reveal", Q_ARG(QVariant, QVariant::fromValue(item))));
+                QTest::qWait(50); break;
+            }
             item->forceActiveFocus();
             QTest::keyClick(window, Qt::Key_Space);
             QTest::qWait(50);
@@ -3940,6 +4133,7 @@ ApplicationWindow {
         QVERIFY(find("homePage"));
         activate(find("navigation1"));
         QCOMPARE(window->property("selectedPage").toInt(), 1);
+        find("playbackOptions")->setProperty("expanded", true);
         auto* start = find("startPlayback");
         QVERIFY(start);
         auto* sourceTab = find("sourceLocalTab");
@@ -3948,7 +4142,7 @@ ApplicationWindow {
         QVERIFY(tabLabel);
         QVERIFY(tabLabel->property("color").value<QColor>().alpha() > 0);
         QVERIFY(!start->isEnabled());
-        QVERIFY(!find("unloadDanmaku")->isVisible());
+        QCOMPARE(qobject_cast<NowPlayingModel*>(backend.nowPlaying())->count(), 0);
         auto* disclosure = find("sessionDisclosure");
         QVERIFY(disclosure);
         disclosure->setProperty("expanded", true);
@@ -3968,23 +4162,29 @@ ApplicationWindow {
         QVERIFY(backend.running());
         QVERIFY(backend.manualMode());
         QVERIFY(!find("manualMode")->isEnabled());
-        activate(find("pausePlayback"));
+        activate(find("nowPlayingToggle"));
         QVERIFY(!backend.playing());
         const auto paused = backend.position();
         QTest::qWait(80);
         QCOMPARE(backend.position(), paused);
-        activate(find("pausePlayback"));
+        activate(find("nowPlayingToggle"));
         QVERIFY(backend.playing());
-        activate(find("stopPlayback"));
-        QVERIFY(!backend.running());
-        QVERIFY(backend.total() > 0);
+        activate(find("nowPlayingMore"));
+        auto* moreMenu = window->findChild<QObject*>("nowPlayingMoreMenu"); QVERIFY(moreMenu);
+        QTRY_VERIFY(moreMenu->property("opened").toBool());
+        auto* moreContent = moreMenu->property("contentItem").value<QQuickItem*>(); QVERIFY(moreContent);
+        activate(findVisual(moreContent, "stopPlayback")); QTRY_VERIFY(!backend.running());
+        QVERIFY(qobject_cast<DanmakuSession*>(backend.danmaku())->total() > 0);
         QVERIFY(backend.manualMode());
         QTRY_VERIFY(start->isEnabled());
         activate(start);
         QVERIFY(backend.running());
         backend.stop();
-        activate(find("unloadDanmaku"));
-        QCOMPARE(backend.total(), 0);
+        activate(find("nowPlayingDanmaku"));
+        auto* danmakuMenu = window->findChild<QObject*>("nowPlayingDanmakuMenu"); QVERIFY(danmakuMenu);
+        QTRY_VERIFY(danmakuMenu->property("opened").toBool());
+        auto* danmakuContent = danmakuMenu->property("contentItem").value<QQuickItem*>(); QVERIFY(danmakuContent);
+        activate(findVisual(danmakuContent, "unloadDanmaku")); QTRY_COMPARE(backend.total(), 0);
         activate(find("syncMode"));
         backend.selectSession("ui-test-session");
         loaded.clear();
@@ -3993,7 +4193,7 @@ ApplicationWindow {
         activate(start);
         QVERIFY(backend.running());
         QVERIFY(!backend.manualMode());
-        QVERIFY(!find("pausePlayback")->isVisible());
+        QVERIFY(!find("nowPlayingToggle")->isEnabled());
         loaded.clear();
         backend.loadFile(output + "/does-not-exist.xml");
         QTRY_VERIFY_WITH_TIMEOUT(!loaded.isEmpty(), 10000);

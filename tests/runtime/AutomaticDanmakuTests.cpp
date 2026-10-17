@@ -104,7 +104,10 @@ private slots:
     void selectedPlayerLossHidesAndCleansOverlay() {
         QTemporaryDir directory;
         QFile fixture(directory.filePath("comments.xml")); QVERIFY(fixture.open(QIODevice::WriteOnly));
-        fixture.write("<i><d p=\"0,1,25,16777215\">first</d><d p=\"10,1,25,16777215\">next</d></i>"); fixture.close();
+        // Reconnection recreates an asynchronous window surface. Comments at the
+        // hidden instant are intentionally suppressed; verify the next visible
+        // comment while providing fresh samples, as a real backend does.
+        fixture.write("<i><d p=\"0,1,25,16777215\">first</d><d p=\"11,1,25,16777215\">next</d></i>"); fixture.close();
         AppController controller(directory.path(), nullptr, [](const QString&) { return true; }, directory.filePath("cache"));
         auto* monitor = controller.findChild<MediaMonitor*>(); QVERIFY(monitor);
         QObject::disconnect(monitor, &MediaMonitor::sampleReceived, &controller, nullptr);
@@ -136,7 +139,11 @@ private slots:
         QCOMPARE(settings->values().value("targetSession").toString(), QString("Test.Player"));
         sample.playback = MediaSample::Playback::Playing; sample.position = 10; QVERIFY(inject());
         QVERIFY(controller.overlayVisible()); QVERIFY(controller.playing()); QCOMPARE(controller.position(), 10.0);
-        QTimer heartbeat; connect(&heartbeat, &QTimer::timeout, &controller, [&] { inject(); }); heartbeat.start(30);
+        QElapsedTimer playbackTime; playbackTime.start();
+        QTimer heartbeat; connect(&heartbeat, &QTimer::timeout, &controller, [&] {
+            if (sample.playback == MediaSample::Playback::Playing) sample.position = 10 + playbackTime.elapsed() / 1000.0;
+            inject();
+        }); heartbeat.start(30);
         QTRY_VERIFY(renderer.snapshotCount() > 0);
         // Brief session loss hides immediately but reconnect cancels delayed cleanup.
         heartbeat.stop(); sample.found = false; QVERIFY(inject()); QVERIFY(!controller.overlayVisible());

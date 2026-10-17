@@ -46,6 +46,17 @@ QtObject {
     readonly property int titleSize: Math.round(28 * textScale)
     readonly property int subtitleSize: Math.round(20 * textScale)
     readonly property int comboPopupHeight: Math.round(360 * textScale)
+    readonly property int popupOpenDuration: motionEnabled ? 250 : 0
+    readonly property color popupSurface: highContrast ? colors.window : (dark ? "#292C34" : "#F9FAFC")
+    readonly property color popupBorder: highContrast ? colors.windowText : Qt.rgba(0, 0, 0, dark ? 0.16 : 0.08)
+    readonly property color popupItemHover: highContrast ? colors.highlight : (dark ? Qt.rgba(1, 1, 1, 0.07) : Qt.rgba(0, 0, 0, 0.035))
+    readonly property color popupItemPressed: highContrast ? colors.highlight : (dark ? Qt.rgba(1, 1, 1, 0.04) : Qt.rgba(0, 0, 0, 0.055))
+    readonly property color popupShadowColor: Qt.rgba(0, 0, 0, dark ? 0.32 : 0.16)
+    readonly property int popupShadowBlur: 12
+    readonly property int popupShadowOffset: 3
+    readonly property int popupEdgeMargin: 20
+    readonly property int popupItemPadding: 8
+    readonly property int popupTextInset: 12
     readonly property int scrollGap: 8
     readonly property int wheelScrollStep: Math.round(108 * textScale)
     readonly property int scrollEdgeInset: 4

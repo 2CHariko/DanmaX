@@ -45,7 +45,7 @@ ApplicationWindow {
             root.requestActivate()
         }
         function onRequestNavigateToPage(page, tab) {
-            if (page === 1) {
+            if (page === 1 && tab >= 0) {
                 root.sourceTab = tab
                 playerPage.selectSourceTab(tab)
             }
@@ -199,6 +199,9 @@ ApplicationWindow {
                         objectName: "playerPage"
                         backend: root.backend
                         sourceTab: root.sourceTab
+                        onOpenVideo: playbackVideoPicker.open()
+                        onOpenDanmaku: { root.xmlAsContent = true; playbackXmlPicker.open() }
+                        onReplaceXml: { root.xmlAsContent = false; playbackXmlPicker.open() }
                     }
                     LogsPage {
                         backend: root.backend
@@ -220,6 +223,18 @@ ApplicationWindow {
                 }
             }
             }
+            NowPlayingBar {
+                Layout.fillWidth: true
+                Layout.preferredHeight: implicitHeight
+                backend: root.backend
+                onOpenVideo: playbackVideoPicker.open()
+                onOpenDanmaku: { root.xmlAsContent = true; playbackXmlPicker.open() }
+                onReplaceXml: { root.xmlAsContent = false; playbackXmlPicker.open() }
+                onShowSources: { root.navigate(1); playerPage.openOptions(false) }
+                onShowPlayer: { root.navigate(1); playerPage.openOptions(true) }
+                onShowSettings: root.navigate(3)
+                onShowPlaying: root.navigate(1)
+            }
         }
     }
     }
@@ -238,6 +253,7 @@ ApplicationWindow {
     MatchingRecoveryDialog {
         backend: root.backend
         workflow: root.backend.danmaku
+        onClosed: root.backend.nowPlaying.cancelEpisodeSelection()
         onOpenSettings: { root.navigate(3); Qt.callLater(settingsPage.focusOnlineSettings) }
         onManualSourceLoaded: { root.sourceTab = 0; playerPage.selectSourceTab(0); root.navigate(1) }
     }
@@ -246,7 +262,24 @@ ApplicationWindow {
         allowLocalXml: true
         backend: root.backend.media
         onOpenSettings: root.navigate(3)
-        onManualSourceLoaded: root.navigate(5)
+        onManualSourceLoaded: root.navigate(1)
+    }
+    property bool xmlAsContent: false
+    FileDialog {
+        id: playbackVideoPicker
+        title: "打开视频"
+        nameFilters: ["视频 (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.m4v *.ts *.m2ts)"]
+        onAccepted: root.backend.media.openVideo(selectedFile)
+    }
+    FileDialog {
+        id: playbackXmlPicker
+        title: root.xmlAsContent ? "独立播放弹幕 XML" : "更换当前弹幕 XML"
+        nameFilters: ["弹幕 XML (*.xml)"]
+        onAccepted: {
+            if (root.xmlAsContent) root.backend.nowPlaying.openDanmaku(selectedFile)
+            else root.backend.nowPlaying.replaceDanmaku(selectedFile)
+            root.navigate(1)
+        }
     }
     FileDialog {
         id: missingPlayerDialog

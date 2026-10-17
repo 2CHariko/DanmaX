@@ -46,7 +46,7 @@ QtObject {
         navExpanded: "导航已展开",
         navCollapsed: "导航已收起",
         home: "首页",
-        play: "弹幕",
+        play: "播放",
         logs: "日志",
         settings: "设置",
         about: "关于"
@@ -107,8 +107,8 @@ QtObject {
 
     // 播放页
     readonly property var player: ({
-        title: "弹幕",
-        description: "加载弹幕，选择独立播放或跟随播放器；打开视频请使用媒体库。",
+        title: "播放",
+        description: "当前内容、弹幕与播放控制。",
         sourceTabsAccessible: "弹幕来源",
         sourceLocalTab: "本地 XML",
         sourceCachedTab: "已缓存",

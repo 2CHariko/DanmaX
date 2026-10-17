@@ -69,11 +69,19 @@ inline void verifyMediaWorkflow(AppController& app, MediaMonitor* monitor, Video
     const auto xml = QDir(directory).filePath("selected.xml");
     QFile file(xml); QVERIFY(file.open(QIODevice::WriteOnly));
     file.write("<i><d p=\"0,1,25,16777215\">Media workflow</d><d p=\"61,1,25,16777215\">Sync</d></i>"); file.close();
+    auto* now = qobject_cast<NowPlayingModel*>(app.nowPlaying()); QVERIFY(now); QVERIFY(now->video());
+    const auto contentTitle = now->title(), contentCover = now->coverUrl();
     const auto generation = monitor->generation(); media->loadFile(xml);
     QTRY_VERIFY2_WITH_TIMEOUT(media->total() == 2, qPrintable(QString("active=%1 connected=%2; %3; %4")
         .arg(media->active()).arg(media->connected()).arg(media->status(), media->error())), 5000);
     QTRY_COMPARE(media->sourceTitle(), xml);
     QCOMPARE(monitor->generation(), generation); QVERIFY(service->active()); QVERIFY(media->connected());
+    QCOMPARE(now->title(), contentTitle); QCOMPARE(now->coverUrl(), contentCover);
+    QTRY_VERIFY(now->canPlay()); now->togglePlayback();
+    QTRY_VERIFY_WITH_TIMEOUT(!now->busy() && !now->playing(), 5000);
+    now->togglePlayback(); QTRY_VERIFY_WITH_TIMEOUT(!now->busy() && now->playing(), 5000);
+    media->unload(); QCOMPARE(now->count(), 0); QVERIFY(now->playing()); QVERIFY(now->canPlay());
+    media->loadFile(xml); QTRY_COMPARE(media->total(), 2);
     media->loadFile(QDir(directory).filePath("missing.xml"));
     auto* automatic = qobject_cast<AutomaticDanmaku*>(media->automatic()); QVERIFY(automatic);
     QTRY_VERIFY_WITH_TIMEOUT(automatic->playbackRecovery()->active() && !app.playing(), 5000);
@@ -104,7 +112,7 @@ inline void verifyMediaWorkflow(AppController& app, MediaMonitor* monitor, Video
     QSaveFile output(QDir(directory).filePath("workflow.json")); QVERIFY(output.open(QIODevice::WriteOnly));
     output.write(QJsonDocument(QJsonObject{{"seek", seekVerified}, {"continueWatching", continueVerified}, {"fromStart", fromStartVerified},
         {"xmlKeepsConnection", true}, {"matchingFailurePauseResume", true}, {"originalPausePreserved", true},
-        {"ownedCloseAndReopen", closeCycle}, {"restoredAfterClose", restoredAfterClose},
+        {"ownedCloseAndReopen", closeCycle}, {"restoredAfterClose", restoredAfterClose}, {"nowPlayingPlayPause", true},
         {"position", media->position()}, {"error", media->error()}}).toJson());
     QVERIFY(output.commit());
 }

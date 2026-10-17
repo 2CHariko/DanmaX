@@ -69,6 +69,7 @@ set(PORTABLE_MANIFEST "" CACHE FILEPATH "SHA-256 file manifest for the portable 
 option(DANMAKU_BUILD_APP "Build the Qt Quick desktop application" ON)
 option(DANMAKU_BUILD_WINUI_ISLAND_PROBE "Build the isolated Windows App SDK / Qt Quick feasibility probe" OFF)
 option(DANMAKU_BUILD_ANITOMY_PROBE "Build the isolated anime filename parsing feasibility probe" OFF)
+option(DANMAKU_BUILD_ACRYLIC_POPUP_PROBE "Build the isolated Qt popup / DWM Acrylic probe" OFF)
 if(WIN32 AND (DANMAKU_BUILD_APP OR PORTABLE_CABINET))
     enable_language(RC)
     include(cmake/AppIcon.cmake)
@@ -112,6 +113,7 @@ if(DANMAKU_BUILD_APP)
         src/application/VideoOpenService.cpp src/application/VideoOpenService.h
         src/application/PlaybackCoordinator.h src/application/DanmakuSession.cpp src/application/DanmakuSession.h
         src/application/MediaSession.cpp src/application/MediaSession.h
+        src/application/NowPlayingModel.cpp src/application/NowPlayingModel.h
         src/infrastructure/RecentVideoStore.cpp src/infrastructure/RecentVideoStore.h
         src/infrastructure/ExternalPlayer.cpp src/infrastructure/ExternalPlayer.h
         src/infrastructure/ExternalPlayerStore.cpp src/infrastructure/ExternalPlayerStore.h
@@ -311,6 +313,9 @@ if(DANMAKU_BUILD_WINUI_ISLAND_PROBE)
 endif()
 if(DANMAKU_BUILD_ANITOMY_PROBE)
     add_subdirectory(tools/anitomy-probe)
+endif()
+if(DANMAKU_BUILD_ACRYLIC_POPUP_PROBE)
+    add_subdirectory(tools/acrylic-popup-probe)
 endif()
 if(BUILD_TESTING)
     add_executable(core_tests tests/core/PlaybackClockTests.cpp)

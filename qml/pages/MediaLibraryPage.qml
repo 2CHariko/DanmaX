@@ -18,63 +18,6 @@ PageFrame {
     }
     VideoOpenPane { backend: page.backend }
     SettingsSection {
-        title: "当前视频"
-        visible: page.session.videoPath.length > 0
-        SettingsRow {
-            title: page.session.title
-            description: page.session.status
-            Button {
-                text: "重新打开"
-                Accessible.name: "重新打开当前视频"
-                onClicked: page.session.openVideo(page.session.videoPath, 1)
-            }
-        }
-        Label {
-            Layout.fillWidth: true
-            text: page.session.error
-            visible: text.length > 0
-            color: Ui.cautionText
-            wrapMode: Text.WordWrap
-            Accessible.role: Accessible.AlertMessage
-        }
-        RowLayout {
-            visible: page.session.restoreFailed
-            Layout.fillWidth: true
-            Button { objectName: "retryMediaRestore"; text: "重试恢复"; onClicked: page.session.retryRestore() }
-            Button { objectName: "continueMediaAtCurrentPosition"; text: "按当前位置继续"; onClicked: page.session.continueAtCurrentPosition() }
-        }
-        Label {
-            Layout.fillWidth: true
-            text: (page.session.targetSessionConnected ? "播放器已连接" : "播放器未连接")
-                + " · " + page.formatTime(page.session.position) + " / " + page.formatTime(page.session.duration)
-            color: Ui.secondaryText
-        }
-        ProgressBar {
-            Layout.fillWidth: true
-            from: 0; to: Math.max(1, page.session.duration); value: page.session.position
-            indeterminate: page.session.restoring
-            Accessible.name: "当前视频进度，只读"
-        }
-        SettingsRow {
-            title: "视频弹幕"
-            description: page.session.sourceTitle.length > 0 ? page.session.sourceTitle + " · " + page.session.total + " 条"
-                : "尚未载入，可自动匹配或选择来源"
-            Button { text: "选择 XML"; objectName: "chooseMediaXml"; enabled: page.session.canSelectSource; onClicked: xmlDialog.open() }
-            Button { text: "搜索"; enabled: page.session.active && page.session.canSelectSource; onClicked: page.session.searchDanmaku() }
-            Button { text: "卸载弹幕"; enabled: page.session.active; onClicked: page.session.unload() }
-        }
-        SettingsRow {
-            title: "自动匹配"
-            description: page.session.automatic.status
-            Button { text: "重新匹配"; enabled: page.session.active; onClicked: page.session.retryMatching() }
-            Button { text: "手动匹配"; enabled: page.session.active; onClicked: page.session.showAutomaticDanmakuChoice() }
-        }
-        Disclosure {
-            title: "选择已缓存弹幕"
-            CachedDanmakuPane { Layout.fillWidth: true; library: page.session.library }
-        }
-    }
-    SettingsSection {
         title: "最近播放"
         Label {
             Layout.fillWidth: true
@@ -118,11 +61,5 @@ PageFrame {
                 }
             }
         }
-    }
-    FileDialog {
-        id: xmlDialog
-        title: "为当前视频选择弹幕 XML"
-        nameFilters: ["弹幕 XML (*.xml)"]
-        onAccepted: page.session.loadFile(selectedFile)
     }
 }

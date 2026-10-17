@@ -48,6 +48,7 @@ MediaSession::MediaSession(const QString& data, const QString& cache, AppControl
     connect(&automatic_, &AutomaticDanmaku::sourceReady, this, [this] {
         if (!active_ || !ready_ || manualSource_) return;
         const auto result = automatic_.takeReadyResult(); if (!result) return;
+        if (contentMetadata_.isEmpty()) contentMetadata_ = result->metadata;
         accept(std::move(result->items), result->metadata.value("animeTitle").toString() + QStringLiteral(" · ")
             + result->metadata.value("episodeTitle").toString(), {{"kind", "online"}, {"metadata", result->metadata}});
     });
@@ -94,11 +95,13 @@ void MediaSession::beginTask(const QString& path) {
     restoring_ = restoreFailed_ = false; latest_ = {}; bound_.clear(); video_ = path;
     total_ = 0; sourceTitle_.clear(); error_.clear(); source_ = recent_.lookup(path).value("source").toMap();
     const auto record = recent_.lookup(path);
+    contentMetadata_ = record.value("content").toMap();
+    if (contentMetadata_.isEmpty() && source_.value("kind") == "online") contentMetadata_ = source_.value("metadata").toMap();
     restorePosition_ = record.value("position").toDouble();
     if (restorePosition_ < 5 || restorePosition_ >= record.value("duration").toDouble() - 10) restorePosition_ = 0;
     if (intent_ == FromStart) restorePosition_ = 0;
     status_ = QStringLiteral("正在打开视频…"); saveTimer_.start();
-    emit stateChanged(); emit app_->requestNavigateToPage(5);
+    emit stateChanged(); emit app_->requestNavigateToPage(1, -1);
 }
 void MediaSession::confirmed() {
     if (!active_) return;
@@ -167,7 +170,7 @@ void MediaSession::observe(const MediaSample& sample) {
     emit stateChanged();
 }
 void MediaSession::flush() {
-    if (writing_ && confirmed_ && latest_.found) recent_.checkpoint(video_, latest_.position, latest_.duration, source_);
+    if (writing_ && confirmed_ && latest_.found) recent_.checkpoint(video_, latest_.position, latest_.duration, source_, contentMetadata_);
 }
 void MediaSession::deactivate() {
     flush(); ++task_; saveTimer_.stop(); seekDeadline_.stop(); ++seekRequest_;

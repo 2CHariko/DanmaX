@@ -8,6 +8,7 @@
 #include "application/PlaybackCoordinator.h"
 #include "application/DanmakuSession.h"
 #include "application/MediaSession.h"
+#include "application/NowPlayingModel.h"
 #include "infrastructure/ExternalPlayerStore.h"
 #include "infrastructure/LogModel.h"
 #include "infrastructure/SettingsStore.h"
@@ -36,6 +37,7 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* danmaku READ danmaku CONSTANT)
     Q_PROPERTY(QObject* media READ media CONSTANT)
     Q_PROPERTY(QObject* coordinator READ coordinator CONSTANT)
+    Q_PROPERTY(QObject* nowPlaying READ nowPlaying CONSTANT)
     Q_PROPERTY(QObject* players READ players CONSTANT)
     Q_PROPERTY(QObject* metadata READ metadata CONSTANT)
     Q_PROPERTY(QObject* uiPreferences READ uiPreferences CONSTANT)
@@ -88,6 +90,7 @@ class AppController final : public QObject {
     QObject* danmaku() { return &danmaku_; }
     QObject* media() { return &media_; }
     QObject* coordinator() { return &coordinator_; }
+    QObject* nowPlaying() { return &nowPlaying_; }
     QObject* players() { return &players_; }
     QObject* metadata() { return &metadata_; }
     QObject* uiPreferences() { return &uiPreferences_; }
@@ -196,11 +199,12 @@ class AppController final : public QObject {
   private:
     friend class DanmakuSession;
     friend class MediaSession;
+    friend class NowPlayingModel;
     void handoff(PlaybackCoordinator::Owner owner);
     void bindMedia(const QString& id);
     void presentMedia(std::vector<danmaku::Item> items, const QString& title, MediaSample sample);
     void clearMediaItems();
-    void commitDanmakuItems(std::vector<danmaku::Item> items, const QString& title);
+    void commitDanmakuItems(std::vector<danmaku::Item> items, const QString& title, const QVariantMap& metadata = {});
     void unloadDanmaku();
     QString boundSession() const;
     void tick();
@@ -234,6 +238,7 @@ class AppController final : public QObject {
     SystemUiPreferences uiPreferences_;
     MediaMonitor monitor_;
     MediaSession media_;
+    NowPlayingModel nowPlaying_;
     bool presentingMedia_{};
     bool startup_{true};
     bool targetSessionConnected_{};

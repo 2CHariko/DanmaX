@@ -48,7 +48,7 @@ QVariantMap RecentVideoStore::lookup(const QString& input) const {
     for (const auto& value : entries_) {
         auto entry = value.toMap(); if (key(entry.value("path").toString()) != key(input)) continue;
         const QFileInfo file(normalizedPath(input));
-        if (file.exists() && !sameFile(entry, file)) { entry["position"] = 0.0; entry["duration"] = 0.0; entry["source"] = QVariantMap{}; }
+        if (file.exists() && !sameFile(entry, file)) { entry["position"] = 0.0; entry["duration"] = 0.0; entry["source"] = QVariantMap{}; entry.remove("content"); }
         return entry;
     }
     return {};
@@ -81,14 +81,16 @@ void RecentVideoStore::opened(const QString& input) {
     if (entries_.size() > 100) { beginRemoveRows({}, 100, static_cast<int>(entries_.size()) - 1); entries_ = entries_.mid(0, 100); endRemoveRows(); }
     save();
 }
-void RecentVideoStore::checkpoint(const QString& input, double position, double duration, const QVariantMap& source) {
+void RecentVideoStore::checkpoint(const QString& input, double position, double duration, const QVariantMap& source, const QVariantMap& content) {
     if (!std::isfinite(position) || !std::isfinite(duration) || duration <= 0 || duration > 366 * 86400.0 || position < 0 || position > duration) return;
     const auto path = normalizedPath(input); const QFileInfo file(path);
     for (int i = 0; i < entries_.size(); ++i) {
         auto& value = entries_[i];
         auto entry = value.toMap(); if (key(entry.value("path").toString()) != key(path)) continue;
         if (!sameFile(entry, file)) return;
-        if (entry.value("position").toDouble() == position && entry.value("duration").toDouble() == duration
+        const auto previousContent = entry.value("content");
+        if (!content.isEmpty()) entry["content"] = content;
+        if (previousContent == entry.value("content") && entry.value("position").toDouble() == position && entry.value("duration").toDouble() == duration
             && entry.value("source").toMap() == source) return;
         entry["position"] = position; entry["duration"] = duration; entry["source"] = source; value = entry;
         emit dataChanged(index(i), index(i), {Qt::UserRole}); save(); return;

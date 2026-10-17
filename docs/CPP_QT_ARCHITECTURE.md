@@ -2,6 +2,8 @@
 
 状态：0.2 实现基线。XML、SMTC、时间轴/轨道、公开场景图文字节点、设置及 Fluent 控制面板已落地，验证范围见 `FRAMEWORK_STATUS.md`。
 
+统一播放界面使用 `NowPlayingModel` 投影当前内容、独立的视频／弹幕元信息、实际时间轴状态与后端控制能力。播放页和常驻 `NowPlayingBar` 通过该入口操作；内部两种 Session 保留 IO 和匹配隔离，复用单一引擎。控制请求等待确认及新采样，不以弹幕引擎是否运行代表视频播放状态；视频元信息独立于可更换的弹幕来源持久化。见 [NOW_PLAYING.md](NOW_PLAYING.md)。
+
 双路径模型已增加：`DanmakuSession` 管理独立弹幕来源与自动匹配，`MediaSession` 管理文件打开、临时播放器连接、定位恢复、选源与最近记录；`PlaybackCoordinator` 管理唯一覆盖层所有者和代次，`AppController` 继续持有唯一引擎、渲染器和帧驱动。浏览不交接，明确启动才交接，交接不关闭或暂停旧视频。媒体连接不写全局绑定，媒体变化停止旧进度写入；定位需控制确认和位置读回，失败保护历史。存储及生命周期规则见 [双路径说明](DUAL_WORKFLOWS.md)。
 
 本方案取代 Flutter 迁移方向。旧 Python 版本和 Flutter 文档原样保存在独立 `archive` 分支的 `archive/python-qt/`、`archive/plans/`，当前分支不再包含归档目录。目标是高效的 Windows 弹幕覆盖层，同时控制依赖数量和构建复杂度。
