@@ -64,6 +64,13 @@
       "url": "https://download.qt.io/official_releases/qt/6.11/6.11.0/submodules/qt5compat-everywhere-src-6.11.0.tar.xz",
       "sha256": "e62954646b2749723aa5c7db32faab407358734075590058a01e793382d4c63e",
       "license": "Qt Core5Compat/GraphicalEffects LGPL-3.0/GPL/commercial; see source LICENSES and attribution"
+    },
+    {
+      "module": "qtsvg",
+      "name": "qtsvg-everywhere-src-6.11.0.tar.xz",
+      "url": "https://download.qt.io/official_releases/qt/6.11/6.11.0/submodules/qtsvg-everywhere-src-6.11.0.tar.xz",
+      "sha256": "dfa8d653be07087d9407ed4a4ebae847f8953e0b7abd829f089803ab652a30e6",
+      "license": "Qt SVG LGPL-3.0/GPL/commercial; see source LICENSES and attribution"
     }
   ]
 }

@@ -100,7 +100,7 @@ if(DANMAKU_BUILD_APP)
     else()
         set(danmaku_qt_directory "${CMAKE_SOURCE_DIR}/.tools/qt/6.11.0/msvc2022_64")
     endif()
-    find_package(Qt6 6.11.0 EXACT REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network
+    find_package(Qt6 6.11.0 EXACT REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network Svg
         PATHS "${danmaku_qt_directory}/lib/cmake/Qt6" NO_DEFAULT_PATH)
     get_target_property(danmaku_qt_core_type Qt6::Core TYPE)
     if(DANMAKU_STATIC_QT AND NOT danmaku_qt_core_type STREQUAL "STATIC_LIBRARY")
@@ -155,7 +155,8 @@ if(DANMAKU_BUILD_APP)
     qt_add_resources(danmaku_runtime vlc_bridge PREFIX "/vlc"
         BASE "${CMAKE_SOURCE_DIR}/resources/vlc" FILES "${CMAKE_SOURCE_DIR}/resources/vlc/status.json")
     target_include_directories(danmaku_runtime PRIVATE "${CMAKE_BINARY_DIR}/generated")
-    file(GLOB fluent_icons CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/resources/fluent/*.png")
+    target_link_libraries(danmaku_runtime PRIVATE Qt6::Svg)
+    file(GLOB fluent_icons CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/resources/fluent/*.svg")
     qt_add_resources(danmaku_runtime fluent_icons PREFIX "/fluent"
         BASE "${CMAKE_SOURCE_DIR}/resources/fluent" FILES ${fluent_icons})
     add_dependencies(danmaku_runtime danmax_icon)

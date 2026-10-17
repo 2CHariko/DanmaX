@@ -112,185 +112,169 @@
       "file": "home.svg",
       "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Home/SVG/ic_fluent_home_20_regular.svg",
       "sha256": "b810b7e896c6ef2b4cfa0b693650e0f94b4a6760b222531d60e55ee38212a861"
+    },
+    {
+      "file": "subtract.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Subtract/SVG/ic_fluent_subtract_20_regular.svg",
+      "sha256": "cdba492b0fe35494b23b8b0934a9b38af3b52058852777d4820ee8ced991c24f"
+    },
+    {
+      "file": "square.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Square/SVG/ic_fluent_square_20_regular.svg",
+      "sha256": "6c9a157db4987d07e029f2fa0271f8b504fdae2e31423647defc0a4536d0130b"
+    },
+    {
+      "file": "square-multiple.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Square%20Multiple/SVG/ic_fluent_square_multiple_20_regular.svg",
+      "sha256": "1531d8153716d09a5441adedb1b1fea4d2ee7484d407d2c368ffbf8d66b05709"
+    },
+    {
+      "file": "dismiss.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Dismiss/SVG/ic_fluent_dismiss_20_regular.svg",
+      "sha256": "e84ad771fa8afba8e3ef52c98d9ab2d8ef4fc8e23c5954766a1c4e88fc13b355"
+    },
+    {
+      "file": "open.svg",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Open/SVG/ic_fluent_open_20_regular.svg",
+      "sha256": "a6a9e0bcb65b97529e3904b3966b7d9f725d6d9c318aca98ca33827ec514b066"
     }
   ],
   "derivedAssets": [
     {
-      "sha256": "7cf5e97f511f46384c963cf9d3f91f9253374f131ca54b3db17ecb61879dcada",
-      "file": "appearance-dark.png"
+      "file": "play-dark.svg",
+      "source": "play.svg",
+      "sha256": "2cc2a33d35445c47a55d56bc809cf70eb6138b68bba69c3a56befb8f44b2ee69"
     },
     {
-      "sha256": "9d3c8ee5920d9df850b4656da2a2135e98d003da1917d6dc3f6687649e00be2b",
-      "file": "appearance.png"
+      "file": "logs-dark.svg",
+      "source": "logs.svg",
+      "sha256": "f3c2fa35d4872dd504afd39ad2c6154e6e926028b9e825aa31dd114096a891a4"
     },
     {
-      "sha256": "b0cc23322a66bcf89c1fcfdd46219866a541930b0a3dfdd4b9c3ea5f51345e41",
-      "file": "chevron-down-dark.png"
+      "file": "settings-dark.svg",
+      "source": "settings.svg",
+      "sha256": "a9e212cb9235bfe40f034132da881a5d1859b0d3f1f3ca08c1b75b2390ecd1a4"
     },
     {
-      "sha256": "620855e0f7ea588a2092e063be4f1b5a925f1abdeb0ede9d10dbb6a5c1bc6c1e",
-      "file": "chevron-down.png"
+      "file": "chevron-down-dark.svg",
+      "source": "chevron-down.svg",
+      "sha256": "1979f37aa8dcb2ecc1f00ce09557ff7e29a62ac9adcd9b283bf281a0aec05c22"
     },
     {
-      "sha256": "5bcecdceec098bdb91604a200daf2b69c67b94dd3de14914ef8f46d1cbf583af",
-      "file": "chevron-up-dark.png"
+      "file": "chevron-up-dark.svg",
+      "source": "chevron-up.svg",
+      "sha256": "16de82753a58f4e732853627f672e6425e2a69235719c08253264aab7e221c30"
     },
     {
-      "sha256": "b6b59d19fd070f23244253839e766354b10381f6fad74146a01b7354e8df65b4",
-      "file": "chevron-up.png"
+      "file": "appearance-dark.svg",
+      "source": "appearance.svg",
+      "sha256": "2674f6494ca64ef5890035e298ee6e3e7b96ba2d11e1c268d0aa420dad798284"
     },
     {
-      "sha256": "ba1c7504b74dc7f2e0fdfcb0f91b0348209ca5eb938058fe9c3b99c17cc0ad30",
-      "file": "cloud-dark.png"
+      "file": "font-dark.svg",
+      "source": "font.svg",
+      "sha256": "fb8732deb10e934532f36b4536c92e84521418b2f7c14e7073f5b8240390e773"
     },
     {
-      "sha256": "94c5a57c10e58791d44a9354b6b79c714b2e780ad5449d43e9d7c137fc33856a",
-      "file": "cloud.png"
+      "file": "window-dark.svg",
+      "source": "window.svg",
+      "sha256": "292da0dbbe1cc3835d998442afdecc55fc5e81d59121322d29901efbe51157f4"
     },
     {
-      "sha256": "c79421a63093760e8f6e3f1fe38c29b3fb6e70d4f027024d6a87f5a94cb6e5aa",
-      "file": "desktop-dark.png"
+      "file": "cloud-dark.svg",
+      "source": "cloud.svg",
+      "sha256": "03718972aa8d86f808e69d5e44663059cc253541174d75b940ff7a770ac23a88"
     },
     {
-      "sha256": "aff204814e343628a49ce9b533c56c04c5c36d6fb5f97c287766973891f4f696",
-      "file": "desktop.png"
+      "file": "info-dark.svg",
+      "source": "info.svg",
+      "sha256": "ae7a55540e10c210624cfbddca4ccb704aff2633a072b6c8d694ec69543ba53d"
     },
     {
-      "sha256": "cec98a40553cc0319af81b741f1c341474482241d67624efa031f58261e07741",
-      "file": "font-dark.png"
+      "file": "timer-dark.svg",
+      "source": "timer.svg",
+      "sha256": "703382b72f8ea0ff4ff4d7d91527738a177022f25b8780d9d118d4e8a0082eec"
     },
     {
-      "sha256": "c327f07044a6f3e23a0da06386062ecf24510990398d3447eeb1979c5a503a44",
-      "file": "font.png"
+      "file": "desktop-dark.svg",
+      "source": "desktop.svg",
+      "sha256": "2687412256160aa9440776951da07ea955422f72a63033efa48fda215fd20d02"
     },
     {
-      "sha256": "8a3e1a7e3f3b6bdcf15cafc94f5f1ef2eff1e11b67d7d96f063e37c6694302c2",
-      "file": "info-dark.png"
+      "file": "delete-dark.svg",
+      "source": "delete.svg",
+      "sha256": "52b977a8bc187ed5a7cb329101707bc9d0a14a1b3ca2ac0226bbde66187e1ac2"
     },
     {
-      "sha256": "1d1a0d52ee9ce80734f8b4bbddfc74eaa068144b0689da01dcb9accfb76c9189",
-      "file": "info.png"
+      "file": "eye-dark.svg",
+      "source": "eye.svg",
+      "sha256": "e4ac5d66bc9730100faa04efb32705f153df55667407470ce597d1e81a8897e8"
     },
     {
-      "sha256": "e6a8598400799bc1955650b10e017270447a341aa03b6e08d59c1fd0c9942ee8",
-      "file": "logs-dark.png"
+      "file": "eye-off-dark.svg",
+      "source": "eye-off.svg",
+      "sha256": "b2c88f6d24f4f226d43116b96cc55d34b7dbfa3af09bc4aa6ce437b1ba6c1235"
     },
     {
-      "sha256": "dc5bb3dc317634f85fe85c173af0c0e5990c43cced96634bf6ef97814fa59983",
-      "file": "logs.png"
+      "file": "pin-dark.svg",
+      "source": "pin.svg",
+      "sha256": "1ea538c273cf67fa015fbeee297ce0cace34231c5090650a716adbcc7e8d5a14"
     },
     {
-      "sha256": "a1af78f920c7ac42c577f9f47f0e3b103d570decef5d4b9f52251c8db4153231",
-      "file": "play-dark.png"
+      "file": "pin-off-dark.svg",
+      "source": "pin-off.svg",
+      "sha256": "c281bab89075cd0ba3f68388607d4b6827e53e2df001635f98db5e6359700492"
     },
     {
-      "sha256": "b31fe4530a024d2f3e7cd51b9764674cb230add0e99c577b84c4ea7c7e9d98ff",
-      "file": "play.png"
+      "file": "chevron-left-dark.svg",
+      "source": "chevron-left.svg",
+      "sha256": "bfc2c87f2dfcfd71e4cf6035fd4de3fd0942f4243cfa0a69b6c671af5c02082f"
     },
     {
-      "sha256": "57e1384243b1e521733d94d2f4419a3ae84c9102c24911a385db9f2f2486cc72",
-      "file": "settings-dark.png"
+      "file": "chevron-right-dark.svg",
+      "source": "chevron-right.svg",
+      "sha256": "91b9df7ca23e54df6375e0e4140b6589a6ffd0fba1acf403f8f68d67282899b4"
     },
     {
-      "sha256": "153cde039cb28493176675d426174bbeed65d01dd61033a7f2883634fa45915b",
-      "file": "settings.png"
+      "file": "pause-dark.svg",
+      "source": "pause.svg",
+      "sha256": "8b60cac6555ac61f0695d8f41770aa66c4147af4821ed60dbe1278edd5358cc8"
     },
     {
-      "sha256": "f525a6b9b4fdbf4495991a83d72d53ea011ecb815cac2069f622d7f8ff5185f1",
-      "file": "timer-dark.png"
+      "file": "stop-dark.svg",
+      "source": "stop.svg",
+      "sha256": "7d63b7fe49c7a7b2a9753d83a20cfe07ecdf7d58c5e5582690ba40bc8c017f66"
     },
     {
-      "sha256": "29be36ebd4596a568d46eddb3133345cc77e2446f4e7713d89f26f7eb7027310",
-      "file": "timer.png"
+      "file": "home-dark.svg",
+      "source": "home.svg",
+      "sha256": "12a80d68a4bb7367ce88b2220379497e10a7732e7ca62b65089d082c2ec519b7"
     },
     {
-      "sha256": "67c580dad58d9a5a1d45b189d0a92d28d436603cff7e03dde9fceb408d8f3841",
-      "file": "window-dark.png"
+      "file": "subtract-dark.svg",
+      "source": "subtract.svg",
+      "sha256": "f920a809ccd6743e9ff8cba3d40d810345835fe5d889288f6e4e11b9f1d808e3"
     },
     {
-      "sha256": "ac3ea4fd59ea8e0050504b29f854a35144f52b05e834cfcd9ff3d95de4c63bf9",
-      "file": "window.png"
+      "file": "square-dark.svg",
+      "source": "square.svg",
+      "sha256": "25f41c3989385444ac560ed12dd3277c9659db72d47260b905838a27372534b2"
     },
     {
-      "file": "delete.png",
-      "sha256": "5e18373e9b33984ea6e25c57e76070f3bae351b273c0959d61aa8f44bc275f2f"
+      "file": "square-multiple-dark.svg",
+      "source": "square-multiple.svg",
+      "sha256": "fb328c599c5a47810914269b118e2c7fe30bc4dac22b2f1c83dca5227dce0563"
     },
     {
-      "file": "delete-dark.png",
-      "sha256": "8c6ce34e7a56276d7f252aec88ae4057f257be9c6399fce3575462f59aa75ffa"
+      "file": "dismiss-dark.svg",
+      "source": "dismiss.svg",
+      "sha256": "2351d07a25ae247e2fe8d759bee4f7ed74b7553a5ee33e52f54918ed28ec08d2"
     },
     {
-      "file": "eye.png",
-      "sha256": "cdb704695f0f33a2ef1986ea79f5c76668eb371f584f7ddeefb5313192f930e5"
-    },
-    {
-      "file": "eye-dark.png",
-      "sha256": "84338d31f7594049e308c188346ffb9ef8fe5116505e750842c355174f1d6b6c"
-    },
-    {
-      "file": "eye-off.png",
-      "sha256": "dfed511a8aba293df535c3b99da208e666da8a1bd5646703f21fcbb12e4be7b9"
-    },
-    {
-      "file": "eye-off-dark.png",
-      "sha256": "0adebbb2fff9c8e7ee6ff73f0d317ab57adc23babca0c82a20fcc728d9e667c1"
-    },
-    {
-      "file": "pin.png",
-      "sha256": "1e38ec3c418e5283fe61828677555d5f622179a176da97347be00709aa5c3fc3"
-    },
-    {
-      "file": "pin-dark.png",
-      "sha256": "958804e36f283de0c83260bd4c60201642cf0c6db786bf7cd731cdf788544c35"
-    },
-    {
-      "file": "pin-off.png",
-      "sha256": "36a33ed57fda14eed7502a5b9542feeb954eafe1200d529cce278d26ec2352d9"
-    },
-    {
-      "file": "pin-off-dark.png",
-      "sha256": "60d6b041d1cf656238ec6186293239be60a80b25071830ce3f82fe1ca5bef861"
-    },
-    {
-      "file": "chevron-left.png",
-      "sha256": "160d64c32db7d075db2beac545c09ca206a52f2067480843841140019364f272"
-    },
-    {
-      "file": "chevron-left-dark.png",
-      "sha256": "eccc18b0922ad7aec2cd3e0c51693efbb56d492368737aae8847ae12cc6741a9"
-    },
-    {
-      "file": "chevron-right.png",
-      "sha256": "9f403a1309550ed0574bc831f1c6b970a6e23eab24f421e7436b3b4000ec3747"
-    },
-    {
-      "file": "chevron-right-dark.png",
-      "sha256": "7b2048ebeab2192804cb8f5cb890192fc18e66a485347e4a799379b7efe3413b"
-    },
-    {
-      "file": "pause.png",
-      "sha256": "6c9b07deb18fcc73774be4d760c619a5311b5ef11d507023511a84af64605d03"
-    },
-    {
-      "file": "pause-dark.png",
-      "sha256": "47f46cc038358bd774433fee1263e1dc7a4d13819acccd7f7c247ca6f49ff2e7"
-    },
-    {
-      "file": "stop.png",
-      "sha256": "86dd432e93605410ead9ad8783c1a762a85455ce5e6b54a04d0ffa699f4cd8d1"
-    },
-    {
-      "file": "stop-dark.png",
-      "sha256": "47a5745710bf066b3180a9f26d7fb6ea9366a206ed2e4532244368fa0c4b7bee"
-    },
-    {
-      "file": "home.png",
-      "sha256": "0af85cf7e46860a730cc4f9632314140441782782b2f6d7152e50c8faa85d77f"
-    },
-    {
-      "file": "home-dark.png",
-      "sha256": "ec7faa96d50919aab5192ae8c6368fcd731651750e50bc9c44836db1c6608c9f"
+      "file": "open-dark.svg",
+      "source": "open.svg",
+      "sha256": "3eb2aee55d055b85e1b8ec1ed21dc52e85135e888d875e416e4a32fcbf7a3582"
     }
   ],
-  "rendering": "sharp 0.35.5; 60x60 PNG; dark=negate RGB preserving alpha"
+  "rendering": "Official SVG paths preserved; dark SVGs replace #212121 with #DEDEDE. Regenerate offline with scripts/prepare-fluent-assets.ps1 -Offline."
 }

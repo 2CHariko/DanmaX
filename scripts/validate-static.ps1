@@ -18,7 +18,7 @@ Invoke-ProjectEnvironment {
             if ($file.Extension -in @('.dll','.exe','.qml','.rcc','.cab','.qsb')) {
                 throw "Static executable released a runtime file: $relative"
             }
-            if ($relative -notmatch '^(settings\.ini(\.backup-\d+)?|app\.log(\.1)?|cache\\.+)$') {
+            if ($relative -notmatch '^(settings\.ini(\.backup-\d+)?|player-presets\.json|app\.log(\.1)?|cache\\.+)$') {
                 throw "Unexpected file beside static executable: $relative"
             }
         }

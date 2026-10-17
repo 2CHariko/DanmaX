@@ -14,7 +14,7 @@ DanmaX 是一款 Windows 平台下的原生高性能外挂弹幕工具，基于 
 
 | 组件名称 | 版本 / Commit | 许可证 | 官方仓库 / 主页 | 引入方式 / 作用 | 分发形态 |
 |---|---|---|---|---|---|
-| **Qt 6 (Base, Declarative, Shader Tools)** | 6.11.0 | LGPL-3.0-only / GPL-3.0 | https://code.qt.io/cgit/qt/ | 核心 GUI、场景图硬件加速渲染、QML 引擎、流式 XML 解析与异步网络通信 | 静态编译内置于单 EXE，或动态 DLL 依赖 |
+| **Qt 6 (Base, Declarative, Shader Tools, SVG)** | 6.11.0 | LGPL-3.0-only / GPL-3.0 | https://code.qt.io/cgit/qt/ | 核心 GUI、场景图硬件加速渲染、QML 引擎、流式 XML 解析、异步网络通信与 SVG 图标解码 | 静态编译内置于单 EXE，或动态 DLL 依赖 |
 | **QWindowKit** | 1.5.0 (`267a002`) | Apache-2.0 | https://github.com/stdware/qwindowkit | Windows 11 沉浸式自绘标题栏、Snap Layouts 贴靠布局、系统阴影与 Mica 背景集成 | 静态编译内置于单 EXE |
 | **Anitomy** | `a538eff670cb4666f8395cf66a9c29a535f2c383` | MPL-2.0 | https://github.com/erengy/anitomy | 文件名解析适配器；未修改上游源码，版本和 SHA-256 见 `toolchain/anitomy.lock.json` | 静态链接；所有打包格式配套 `anitomy/` 目录，含许可证、锁定清单及匹配源码归档 |
 
@@ -22,7 +22,7 @@ DanmaX 是一款 Windows 平台下的原生高性能外挂弹幕工具，基于 
 
 | 资产名称 | 锁定 Commit | 许可证 | 官方仓库 / 主页 | 作用说明 | 分发形态 |
 |---|---|---|---|---|---|
-| **Fluent System Icons** | `cd332ec` | MIT License | https://github.com/microsoft/fluentui-system-icons | 控制面板导航、设置项及吸顶快捷悬浮工具栏所使用的标准矢量图标 | 离线转换为高质量 PNG 资产并打包入二进制，随包提供原稿与许可证副本 |
+| **Fluent System Icons** | `cd332ec` | MIT License | https://github.com/microsoft/fluentui-system-icons | 控制面板导航、设置项及吸顶快捷悬浮工具栏所使用的标准矢量图标 | 原始 SVG 与仅改色的深色 SVG 打包入二进制，来源及哈希集中锁定，随包提供许可证副本 |
 
 ### 1.3 网络服务、开放协议与弹幕生态
 
@@ -95,9 +95,9 @@ DanmaX 的默认发布格式为 **静态单 EXE**（`static-exe`），主程序�
 
 ### 5.1 Fluent System Icons（2026-10-08）
 项目采用来自微软官方开源库 Microsoft Fluent System Icons 的矢量图标，协议为 MIT License。
-- 锁定提交、原始 SVG 下载地址及 SVG/PNG SHA-256 位于 `resources/fluent/manifest.json`，完整版权与许可见 `resources/fluent/LICENSE`。
+- 锁定提交、原始 SVG 下载地址及 原始／派生 SVG SHA-256 位于 `resources/fluent/manifest.json`，完整版权与许可见 `resources/fluent/LICENSE`。
 - 发布材料中完整包含 `Fluent-System-Icons-LICENSE.txt`。
-- 为避免引入庞大的运行时 SVG 解析库（QtSvg），所有图标在构建前由离线脚本光栅化为 3× 高清 PNG（含浅深色差分），并在 QML 中统一使用官方 FluentWinUI3 语义着色。
+- 2026-10-17 按用户要求从预渲染 PNG 迁移至 SVG；保留官方路径，深色稿只将 #212121 改为 #DEDEDE，可通过 prepare-fluent-assets.ps1 -Offline 重建。运行时使用锁定 QtSvg：动态清单已包含该模块，静态源码清单新增 qtsvg；动态部署包含 SVG 图片／图标插件，静态显式导入相同插件。标准控件保留 FluentWinUI3 语义着色，装饰图按实际 DPR 解码。
 
 ### 5.2 历史 QML FluentUI 试用与清理
 2026-10-08 项目经过评估，全面迁回编译期锁定的 Qt 官方 `QtQuick.Controls.FluentWinUI3` 样式。第三方 FluentUI 库已从正式构建、运行初始化和发布依赖中彻底移除；相关调研脚本与 lock 文件仅作为历史复现参考保留在 tools 归档中，不再参与任何产品构建。

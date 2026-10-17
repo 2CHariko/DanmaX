@@ -29,7 +29,7 @@ function Invoke-QtDeployment([string] $Directory, [hashtable] $Tools, [switch] $
     $deployArguments = @($mode, '--no-compiler-runtime', '--verbose', '0', '--json',
         '--qtpaths', (Join-Path $Tools.Qt 'bin/qtpaths.exe'),
         '--skip-plugin-types', 'qmltooling,generic,networkinformation',
-        '--exclude-plugins', 'qdirect2d,qminimal,qopensslbackend', '--include-plugins', 'qoffscreen,qschannelbackend',
+        '--exclude-plugins', 'qdirect2d,qminimal,qopensslbackend', '--include-plugins', 'qoffscreen,qschannelbackend,qsvg,qsvgicon',
         '--qmldir', (Get-ProjectPath 'qml'), (Join-Path $Directory 'DanmaX.exe'))
     $json = & (Join-Path $Tools.Qt 'bin/windeployqt.exe') @deployArguments
     if ($LASTEXITCODE -ne 0) { throw "Qt deployment failed with exit code $LASTEXITCODE" }

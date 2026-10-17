@@ -2,7 +2,7 @@
 
 ## 当前播放布局
 
-按用户要求，侧栏第二项统一为“播放”：中间展示封面／Fluent 占位图标、标题、分集、来源和状态，主内容区底部常驻原生控件组成的播放条。播放条位于页面滚动容器外，不被页面滚动条或留白滚轮覆盖；暂停控制真实时间轴，弹幕显示开关单独管理。来源与跟随模式初版复用可展开设置。媒体库不再重复展示当前任务控制面板。已有卡片规范继续用于设置、来源和最近列表；播放信息区采用轻量布局。详见 NOW_PLAYING.md。
+按用户要求，侧栏第二项统一为“播放”：中间展示封面／Fluent 占位图标、标题、分集、来源和状态，整窗底部常驻 Qt 官方控件组成的全宽播放条，横跨侧栏与内容区。播放条位于页面滚动容器外，不被页面滚动条或留白滚轮覆盖；暂停控制真实时间轴，弹幕显示开关单独管理。来源与跟随模式初版复用可展开设置。媒体库不再重复展示当前任务控制面板。已有卡片规范继续用于设置、来源和最近列表；播放信息区采用轻量布局。详见 NOW_PLAYING.md。
 
 2026-10-08：用户授权返回 Qt 官方 FluentWinUI3，并以官方默认控件和简单布局替代第三方 FluentUI 与仿 Windows 设置卡片。本决定取代此前第三方库迁移方案。
 
@@ -11,16 +11,17 @@
 - 页面编译期导入 `QtQuick.Controls.FluentWinUI3`，不显式导入 Basic/Fusion 或第三方 FluentUI。Qt 官方模块内部的 Fusion 回退保留，尤其 ScrollBar；不宣称原生 WinUI 或像素级一致。
 - 按钮、开关、输入框、下拉主体、标准选项、滑块、标签页、对话框、滚动条保持官方默认背景、内容实现、字体、圆角和交互状态。不访问 Qt 私有样式 API。
 - Qt 6.11 的纯文字 TabButton 通过 icon.color 取得标签颜色，而默认值透明；允许将公开 icon.color 绑定 palette.buttonText，保留默认内容与背景。
-- 导航侧边栏采用标准 ItemDelegate 并在所有窗口宽度下常驻显示（窄屏收缩为纯图标模式），通过 1 像素垂直分隔线与主内容区清晰隔离；选中的导航项呈现醒目的左侧主题色胶囊指示条（Pill Indicator）。
+- 主窗上部采用侧栏与内容并排布局，下部由全宽播放条独占；侧栏、主内容背景和垂直分隔线止于播放条顶部。
+- 导航侧边栏采用标准 ItemDelegate 并在所有窗口宽度下常驻显示（窄屏收缩为纯图标模式），通过 1 像素垂直分隔线与主内容区清晰隔离；选中的导航项呈现醒目的左侧主题色胶囊指示条（Pill Indicator）。上部为首页／播放／媒体库，底部为日志／关于／设置；复用同一导航项实现。图标基准 20，图文间距 12，展开左右内边距 16／12；图标与行高响应文字缩放，窄栏随图标所需尺寸扩展，保留键盘焦点、可访问名称与窄栏提示。
 - 内容分组与设置面板统一以 WinUI 3 原生卡片体系为基准：SettingsRow 升级为独立设置条目卡片（SettingsCard），ActionCard、SettingsRow 统一对接 Ui.cardMinHeight（70px）与 Ui.cardPaddingX/Y（16px 内衬），拥有独立的圆角、半透明背景与微细描边，卡片间以 4px 微间距（Ui.cardGap）垂直排列；SettingsSection 作为轻量分组容器，提供外置分组标题与说明（card 为 false 时无外层大底板，仅在复合控制面板上显式设为 true 提供整体卡片底板）。
 - 文字缓存、诊断和关于默认展示；仅手动应用 ID、运行详情等可选内容使用标准 checkable Button 控制显隐。Disclosure 不模拟 Expander 外观，收起内部焦点返回按钮，隐藏内容不接受操作。
  - SettingsRow/ActionCard 共同构成全站规范的 Fluent 卡片项；SettingsSection 统一负责分组标题、说明与卡片流编排；PageFrame 负责页面标题、自适应可用宽度与统一滚动机制。保留公共布局组件避免页面重复代码，不以文件数量衡量自定义程度。
- - **图标库统一约束**：严禁在 QML 中自绘 Canvas、手绘 SVG 或以基础几何图形拼接图标。所有图标必须统一来自于微软官方 Fluent System Icons 库（通过 `resources/fluent/` 清单集中管理、离线预渲染 60×60 PNG 且通过 `scripts/verify-fluent-assets.ps1` 校验哈希），通过 `Ui.icon(name)` 规范调用，确保在深浅模式与各种 DPI 缩放下的绝对清晰与设计一致性。
+ - **图标库统一约束**：严禁在 QML 中自绘 Canvas、手绘 SVG 或以基础几何图形拼接图标。应用功能图标统一采用微软官方 Fluent System Icons SVG，通过 `resources/fluent/manifest.json` 锁定来源提交、原稿与深色改色稿哈希，并由 `scripts/verify-fluent-assets.ps1` 离线校验；`scripts/prepare-fluent-assets.ps1 -Offline` 按原路径仅替换颜色重建深色稿，不手改几何。通过 `Ui.icon(name)` 调用；标准控件使用官方 icon 着色，装饰图使用 `FluentIcon` 按逻辑尺寸×DPR 请求 SVG 解码尺寸，跨屏重新请求尺寸。高对比度隐藏非必要装饰图，保留文字与标准控件语义着色，实际高对比度仍须单独验收。标题栏最小化／最大化／还原／关闭及外链标识也使用官方 SVG；标题栏使用可键盘访问的 ToolButton 并保留 QWindowKit 挂接，关闭状态颜色集中于 Ui。品牌 Logo、封面及 Qt 官方控件内部图形不属于本条 SVG 迁移范围。QtSvg 动态部署须包含 qsvg／qsvgicon，静态 Qt 锁须包含 qtsvg 与对应插件。
 
 ## 主题、材质和布局
 
 - 系统/浅色/深色由 Qt styleHints 与官方 palette 管理；不维护第二套控件颜色或覆盖控件字体。Ui 只集中应用标题字阶、页面间距、图标路径和 Mica 窗口背景等语义。
-- Mica 和沉浸式标题栏通过 QWindowKit 与 WindowBackdropController 协同管理，仅作用于主窗。主窗口布局遵循 WinUI 3 经典的分层材质对比：整窗作为单层 Mica 底板，左侧导航栏保持完全透明直接透出原生 Mica 并自顶部（y=0）一通到底，右侧主内容区叠加半透明基底色（Ui.contentAreaSurface）自顶部（y=0）一通到底，中间以 1px 细微描边分割，形成左轻右实、两边皆具 Mica 质感的分层视觉。通过 QWindowKit 原生挂接 Windows 11 Snap Layouts 贴靠菜单与窗口移动/最大化动画。全站卡片容器采用统一的 Ui.cardBackground（深色模式透光率 5%，浅色模式 70%）与 1px Ui.cardBorder，既保持与底层 Mica 或纯色底板的良好分层呼吸感，又确保高对比度模式下无障碍可读性。
+- Mica 和沉浸式标题栏通过 QWindowKit 与 WindowBackdropController 协同管理，仅作用于主窗。主窗口布局遵循 WinUI 3 经典的分层材质对比：整窗作为单层 Mica 底板，左侧导航栏保持完全透明直接透出原生 Mica，右侧主内容区叠加半透明基底色（Ui.contentAreaSurface），两者均自顶部（y=0）延伸至全宽播放条上沿，中间以 1px 细微描边分割，形成左轻右实、两边皆具 Mica 质感的分层视觉。通过 QWindowKit 原生挂接 Windows 11 Snap Layouts 贴靠菜单与窗口移动/最大化动画。全站卡片容器采用统一的 Ui.cardBackground（深色模式透光率 5%，浅色模式 70%）与 1px Ui.cardBorder，既保持与底层 Mica 或纯色底板的良好分层呼吸感，又确保高对比度模式下无障碍可读性。
 - 页面最大宽度 1040、组间距 24、宽窗边距 32、窄窗 16。设置编辑器按宽度移至说明下方；长文本可换行。标准控件自身尺寸由官方风格决定。
 - 所有设置继续即时生效与保存，编辑完成校验提交，保留错误、重试与恢复默认。弹幕覆盖层、时间轴和轨道逻辑不参与界面迁移。
 

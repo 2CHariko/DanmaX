@@ -45,10 +45,10 @@ PageFrame {
                 remoteSource: page.player.coverUrl
                 fillMode: Image.PreserveAspectFit
             }
-            Image {
+            FluentIcon {
                 anchors.centerIn: parent
                 width: 72; height: 72
-                visible: page.player.coverUrl.length === 0
+                visible: page.player.coverUrl.length === 0 && !Ui.highContrast
                 source: Ui.icon(page.player.video ? "window" : "play")
                 fillMode: Image.PreserveAspectFit
             }

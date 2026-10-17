@@ -34,7 +34,15 @@ QtObject {
     readonly property color contentSurface: contentAreaSurface
     readonly property bool dark: Application.styleHints.colorScheme === Qt.Dark
     readonly property int sectionGap: 24
-    function icon(name) { return "qrc:/fluent/" + name + (dark ? "-dark" : "") + ".png" }
+    function icon(name) { return "qrc:/fluent/" + name + (dark ? "-dark" : "") + ".svg" }
+    readonly property int navigationIconSize: Math.round(20 * textScale)
+    readonly property int navigationIconGap: 12
+    readonly property int navigationExpandedWidth: 200
+    readonly property int navigationCompactWidth: Math.max(48, Math.ceil((navigationIconSize + 24) / 4) * 4)
+    readonly property int navigationItemHeight: Math.max(40, Math.ceil((28 * textScale + 12) / 4) * 4)
+    readonly property color captionCloseHover: highContrast ? colors.highlight : "#C42B1C"
+    readonly property color captionClosePressed: highContrast ? colors.highlight : "#B32014"
+    readonly property color captionCloseText: highContrast ? colors.highlightedText : "#FFFFFF"
     readonly property color textColor: highContrast ? colors.windowText : (dark ? "#FFFFFF" : "#1A1A1A")
     readonly property bool highContrast: Application.styleHints.accessibility.contrastPreference === Qt.HighContrast
     readonly property color secondaryText: highContrast ? colors.text : (dark ? "#9D9D9D" : "#5D5D5D")

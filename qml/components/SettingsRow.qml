@@ -36,9 +36,9 @@ Control {
             Layout.alignment: Qt.AlignVCenter
             spacing: 12
 
-            Image {
+            FluentIcon {
                 id: iconItem
-                visible: row.iconSource.length > 0
+                visible: row.iconSource.length > 0 && !Ui.highContrast
                 source: row.iconSource
                 Layout.preferredWidth: 20
                 Layout.preferredHeight: 20

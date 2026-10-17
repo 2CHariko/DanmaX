@@ -1,6 +1,7 @@
 #include "../fixtures/PlayerExecutableFixture.h"
 
 #include <QGuiApplication>
+#include <QImageReader>
 #include "infrastructure/ExternalPlayerDraft.h"
 #include <QClipboard>
 #include <QScreen>
@@ -249,6 +250,78 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void mainShellLayoutAndVectorIcons() {
+        QTemporaryDir directory; AppController backend(directory.path());
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
+            if (parent->objectName() == name) return parent;
+            for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
+            return nullptr;
+        };
+        auto item = [&](const QString& name) { return find(window->contentItem(), name); };
+        auto* bar = item("nowPlayingBar"); auto* workspace = item("mainWorkspace");
+        auto* nav = item("mainNavigation"); auto* logs = item("navigation2");
+        auto* about = item("navigation4"); auto* settingsItem = item("navigation3");
+        auto* media = item("navigation5"); QVERIFY(bar && workspace && nav && logs && about && settingsItem && media);
+        window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
+        const auto output = qEnvironmentVariable("DANMAKU_VIDEO_UI_ARTIFACTS");
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            QVERIFY(settings->setValue("theme", theme));
+            for (const auto& size : {QSize(1080, 760), QSize(800, 600)}) {
+                window->resize(size); QTest::qWait(100);
+                QCOMPARE(bar->mapToScene(QPointF()).x(), 0.0);
+                QCOMPARE(bar->width(), qreal(window->width()));
+                QVERIFY(qAbs(bar->mapToScene(QPointF(0, bar->height())).y() - window->height()) < 1);
+                QVERIFY(qAbs(workspace->height() - bar->y()) < 1);
+                QVERIFY(nav->mapToScene(QPointF(0, nav->height())).y() <= bar->y() + 1);
+                const auto top = [](QQuickItem* value) { return value->mapToScene(QPointF()).y(); };
+                QVERIFY(top(media) + media->height() + 16 < top(logs));
+                QVERIFY(top(logs) + logs->height() <= top(about));
+                QVERIFY(top(about) + about->height() <= top(settingsItem));
+                QVERIFY(top(settingsItem) + settingsItem->height() <= bar->y());
+                for (const auto page : {0, 1, 5, 2, 4, 3}) {
+                    auto* target = item("navigation" + QString::number(page)); QVERIFY(target);
+                    QVERIFY(target->isVisible() && target->height() >= target->implicitHeight());
+                    QVERIFY(target->property("spacing").toReal() >= 12);
+                    target->forceActiveFocus(Qt::TabFocusReason); QTest::keyClick(window, Qt::Key_Space);
+                    QTRY_COMPARE(window->property("selectedPage").toInt(), page);
+                    QVERIFY(target->property("highlighted").toBool());
+                }
+                logs->forceActiveFocus(Qt::TabFocusReason); QTest::keyClick(window, Qt::Key_Tab);
+                QTRY_VERIFY(about->hasActiveFocus());
+                QTest::keyClick(window, Qt::Key_Tab); QTRY_VERIFY(settingsItem->hasActiveFocus());
+                QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 0)));
+                if (!output.isEmpty()) {
+                    QVERIFY(QDir().mkpath(output)); QTest::qWait(100);
+                    QVERIFY(window->grabWindow().save(output + "/shell-" + theme + "-" + QString::number(size.width()) + ".png"));
+                }
+            }
+        }
+        // Decode the embedded SVGs at several physical sizes; missing deployment
+        // plugins or stale resource globs must fail instead of silently losing icons.
+        const QDir icons(":/fluent"); const auto files = icons.entryList({"*.svg"}, QDir::Files);
+        QVERIFY(files.size() >= 54); QVERIFY(icons.entryList({"*.png"}, QDir::Files).isEmpty());
+        for (const auto& file : files) {
+            for (const int size : {20, 30, 60, 120}) {
+                QImageReader reader(icons.filePath(file)); reader.setScaledSize(QSize(size, size));
+                const auto image = reader.read(); QVERIFY2(!image.isNull(), qPrintable(file + ": " + reader.errorString()));
+                QCOMPARE(image.size(), QSize(size, size));
+                bool visible = false;
+                for (int y = 0; y < size && !visible; ++y) for (int x = 0; x < size; ++x)
+                    if (qAlpha(image.pixel(x, y)) > 0) { visible = true; break; }
+                QVERIFY2(visible, qPrintable(file));
+            }
+        }
+        window->close(); backend.stop();
+        QStringList errors; for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) errors << error.toString();
+        QVERIFY2(warnings.isEmpty(), qPrintable(errors.join('\n')));
+    }
     void unifiedPlaybackPageAndPersistentControls() {
         QTemporaryDir directory; AppController backend(directory.path());
         auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});

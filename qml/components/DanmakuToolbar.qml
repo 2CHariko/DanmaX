@@ -508,8 +508,9 @@ Item {
             anchors.margins: 10
             spacing: 8
 
-            Image {
+            FluentIcon {
                 source: Ui.icon("appearance")
+                visible: !Ui.highContrast
                 Layout.preferredWidth: 18
                 Layout.preferredHeight: 18
                 fillMode: Image.PreserveAspectFit

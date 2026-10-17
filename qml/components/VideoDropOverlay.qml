@@ -82,8 +82,9 @@ Item {
         visible: feedback.dragActive
         opacity: feedback.dragActive ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: Ui.motionEnabled ? Ui.dragFeedbackDuration : 0 } }
-        Image {
+        FluentIcon {
             source: Ui.icon("play")
+            visible: !Ui.highContrast
             Layout.alignment: Qt.AlignHCenter
             Layout.preferredWidth: 48
             Layout.preferredHeight: 48

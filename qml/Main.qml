@@ -64,17 +64,23 @@ ApplicationWindow {
         objectName: "mainScene"
         anchors.fill: parent
         Rectangle {
-            anchors.fill: parent
-            anchors.leftMargin: (root.compact ? 48 : 200) + 1
+            anchors.fill: workspace
+            anchors.leftMargin: (root.compact ? Ui.navigationCompactWidth : Ui.navigationExpandedWidth) + 1
             color: Ui.contentAreaSurface
         }
     RowLayout {
-        anchors.fill: parent
+        id: workspace
+        objectName: "mainWorkspace"
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: nowPlayingBar.top
         spacing: 0
 
         // 1. 常驻侧边栏：宽屏展开，窄屏自动缩小为图标模式（最小宽度下始终显示图标）
         Item {
-            Layout.preferredWidth: root.compact ? 48 : 200
+            objectName: "mainNavigation"
+            Layout.preferredWidth: root.compact ? Ui.navigationCompactWidth : Ui.navigationExpandedWidth
             Layout.minimumWidth: Layout.preferredWidth
             Layout.maximumWidth: Layout.preferredWidth
             Layout.fillHeight: true
@@ -223,20 +229,22 @@ ApplicationWindow {
                 }
             }
             }
-            NowPlayingBar {
-                Layout.fillWidth: true
-                Layout.preferredHeight: implicitHeight
-                backend: root.backend
-                onOpenVideo: playbackVideoPicker.open()
-                onOpenDanmaku: { root.xmlAsContent = true; playbackXmlPicker.open() }
-                onReplaceXml: { root.xmlAsContent = false; playbackXmlPicker.open() }
-                onShowSources: { root.navigate(1); playerPage.openOptions(false) }
-                onShowPlayer: { root.navigate(1); playerPage.openOptions(true) }
-                onShowSettings: root.navigate(3)
-                onShowPlaying: root.navigate(1)
-            }
         }
     }
+        NowPlayingBar {
+            id: nowPlayingBar
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            backend: root.backend
+            onOpenVideo: playbackVideoPicker.open()
+            onOpenDanmaku: { root.xmlAsContent = true; playbackXmlPicker.open() }
+            onReplaceXml: { root.xmlAsContent = false; playbackXmlPicker.open() }
+            onShowSources: { root.navigate(1); playerPage.openOptions(false) }
+            onShowPlayer: { root.navigate(1); playerPage.openOptions(true) }
+            onShowSettings: root.navigate(3)
+            onShowPlaying: root.navigate(1)
+        }
     }
 
     VideoDropOverlay {

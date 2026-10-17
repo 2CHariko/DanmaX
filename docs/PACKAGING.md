@@ -106,3 +106,7 @@ pwsh -NoProfile -File scripts/release.ps1
 2. **静态单 EXE 便携版**：编译并校验依赖白名单（`dumpbin /DEPENDENTS` 拒绝外部 Qt/VC++ 运行库），输出 `out/release/v<version>/DanmaX-v<version>-windows-x64-portable.exe`。
 3. **动态依赖绿色压缩包**：编译 Release 构件、调用 `windeployqt` 收集必要运行时、剔除未使用控件样式并压制为 `out/release/v<version>/DanmaX-v<version>-windows-x64.zip`。
 4. **发布校验清单**：自动计算各二进制制品 SHA-256 哈希并生成 `out/release/v<version>/checksums.txt`。
+
+### SVG 功能图标（2026-10-17）
+
+功能图标直接嵌入官方 Fluent SVG 与深色改色稿；构建仅收集 SVG，不联网、不转图。动态部署显式包含 qsvg／qsvgicon 和锁定 Qt6Svg，必须在隔离 PATH 的部署目录启动验证。静态锁新增 qtsvg 6.11.0 原始源码与 SHA-256，需先显式运行 prepare-qt-static.ps1，再离线 build-qt-static.ps1 -Reconfigure；应用导入 QSvgPlugin 与 QSvgIconPlugin，静态分发材料须包含匹配的 qtsvg 源码和许可证。原有静态 SDK／旧发布包不自动获得本次图标支持，须重新构建及验收。

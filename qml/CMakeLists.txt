@@ -4,7 +4,7 @@ danmax_attach_icon(danmaku_app)
 target_include_directories(danmaku_app PRIVATE "${CMAKE_BINARY_DIR}/generated")
 if(DANMAKU_STATIC_QT)
     target_compile_definitions(danmaku_app PRIVATE DANMAKU_STATIC_PORTABLE)
-    qt_import_plugins(danmaku_app INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin Qt6::QSchannelBackendPlugin)
+    qt_import_plugins(danmaku_app INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin Qt6::QSchannelBackendPlugin Qt6::QSvgPlugin Qt6::QSvgIconPlugin)
     qt_import_plugins(danmaku_app EXCLUDE_BY_TYPE generic networkinformation)
     target_link_options(danmaku_app PRIVATE "/MAP:${CMAKE_CURRENT_BINARY_DIR}/danmaku_app.map")
 endif()
@@ -12,7 +12,7 @@ set_source_files_properties(theme/Ui.qml i18n/I18n.qml PROPERTIES QT_QML_SINGLET
 qt_add_qml_module(danmaku_app URI DanmaX VERSION 1.0
     QML_FILES Main.qml OverlayWindow.qml ToolbarWindow.qml theme/Ui.qml i18n/I18n.qml
     components/PageFrame.qml components/Disclosure.qml components/AppScrollBar.qml components/VideoOpenPane.qml components/VideoDropOverlay.qml components/ExternalPlayerPane.qml
-    components/NowPlayingBar.qml components/PlaybackSetupPane.qml
+    components/NowPlayingBar.qml components/PlaybackSetupPane.qml components/FluentIcon.qml
     components/LoadingPlaceholder.qml components/ContentReveal.qml components/CoverPlaceholder.qml
     components/AppComboBox.qml components/AppMenu.qml components/PopupSurface.qml components/AnimeSearchPane.qml components/AnimeSearchField.qml
     components/SettingsSection.qml components/SettingsRow.qml components/NavigationPane.qml components/FontSelector.qml

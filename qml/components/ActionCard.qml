@@ -36,9 +36,9 @@ ItemDelegate {
         id: contentLayout
         spacing: 14
 
-        Image {
+        FluentIcon {
             id: iconItem
-            visible: card.iconSource.length > 0
+            visible: card.iconSource.length > 0 && !Ui.highContrast
             source: card.iconSource
             Layout.preferredWidth: 20
             Layout.preferredHeight: 20
@@ -70,49 +70,15 @@ ItemDelegate {
             }
         }
 
-        Item {
-            visible: card.isExternal
+        FluentIcon {
+            visible: card.isExternal && !Ui.highContrast
             Layout.preferredWidth: 14
             Layout.preferredHeight: 14
             Layout.alignment: Qt.AlignVCenter
-
-            Canvas {
-                id: extIcon
-                anchors.fill: parent
-                onPaint: {
-                    var ctx = getContext("2d")
-                    ctx.clearRect(0, 0, width, height)
-                    ctx.strokeStyle = Ui.secondaryText
-                    ctx.fillStyle = Ui.secondaryText
-                    ctx.lineWidth = 1.3
-                    ctx.lineCap = "round"
-                    ctx.lineJoin = "round"
-
-                    ctx.beginPath()
-                    ctx.moveTo(width - 5, 5)
-                    ctx.lineTo(width - 5, height - 2)
-                    ctx.lineTo(2, height - 2)
-                    ctx.lineTo(2, 5)
-                    ctx.lineTo(5, 5)
-                    ctx.stroke()
-
-                    ctx.beginPath()
-                    ctx.moveTo(5, height - 5)
-                    ctx.lineTo(width - 2, 2)
-                    ctx.stroke()
-
-                    ctx.beginPath()
-                    ctx.moveTo(width - 6, 2)
-                    ctx.lineTo(width - 2, 2)
-                    ctx.lineTo(width - 2, 6)
-                    ctx.stroke()
-                }
-                Connections {
-                    target: Ui
-                    function onDarkChanged() { extIcon.requestPaint() }
-                    function onHighContrastChanged() { extIcon.requestPaint() }
-                }
-            }
+            source: Ui.icon("open")
+            fillMode: Image.PreserveAspectFit
+            opacity: 0.7
+            Accessible.ignored: true
         }
     }
 
