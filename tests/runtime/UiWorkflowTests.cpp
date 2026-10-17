@@ -60,11 +60,10 @@ private:
     void keepPausedPlayer(AppController& backend, QTimer& heartbeat) {
         auto* monitor = backend.findChild<MediaMonitor*>(); QVERIFY(monitor);
         QObject::disconnect(monitor, &MediaMonitor::sampleReceived, &backend, nullptr);
-        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
-        if (settings->values()["targetSession"].toString().isEmpty()) backend.selectSession("Ui.Toolbar.Player");
-        const auto send = [&backend, monitor, settings] {
+        backend.setRenderTestSession("Ui.Toolbar.Player");
+        const auto send = [&backend, monitor] {
             MediaSample sample;
-            sample.id = settings->values()["targetSession"].toString(); sample.title = sample.identity = "Fixture player";
+            sample.id = "Ui.Toolbar.Player"; sample.title = sample.identity = "Fixture player";
             sample.found = true; sample.duration = 120; sample.position = 12;
             sample.playback = MediaSample::Playback::Paused;
             sample.generation = monitor->generation(); sample.observedAt = MediaMonitor::monotonicSeconds();
@@ -158,7 +157,7 @@ private:
         QVERIFY(renderer);
         backend.beginDemo(50);
         backend.stop();
-        backend.selectSession(session);
+        backend.setRenderTestSession(session);
         backend.start(false);
         auto sample = [&](bool found) {
             MediaSample value;
@@ -250,6 +249,99 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void standaloneMenusControlsAndTaskDialogs() {
+        QTemporaryDir directory;
+        const auto xml = directory.filePath("standalone.xml");
+        { QFile file(xml); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("<i><d p=\"0,1,25,16777215\">first</d><d p=\"50,1,25,16777215\">later</d></i>"); }
+        const auto video = directory.filePath("video.avi"), executable = directory.filePath("PotPlayerMini64.exe");
+        { QFile file(video); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("fixture"); }
+        { QFile file(executable); QVERIFY(file.open(QIODevice::WriteOnly)); file.write(playerExecutableFixture()); }
+        auto cached = parseOnlineDanmaku(R"({"comments":[{"p":"0,1,16777215,u","m":"cached"}]})");
+        for (int i = 0; i < 24; ++i) {
+            cached.metadata = {{"server", "https://offline.test"}, {"animeId", "42"}, {"episodeId", QString::number(i + 1)},
+                {"animeTitle", QString("独立缓存 %1").arg(i)}, {"episodeTitle", "第1话"}, {"downloadedAt", "2026-10-17T00:00:00.000Z"}};
+            QVERIFY(saveCachedDanmaku(directory.filePath("cache/danmaku"), cached).isEmpty());
+        }
+        VideoOpenService::Hooks hooks{[=] { return executable; }, [](const QString&) { return QString(); },
+            [](const QString&, const QStringList&) { return QString(); }};
+        AppController backend(directory.filePath("data"), nullptr, {}, directory.filePath("cache"), {}, {}, {}, hooks);
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({}); settings->setValue("micaEnabled", false);
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}, {"selectedPage", 1}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty()); auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
+        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
+            if (parent->objectName() == name) return parent;
+            for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
+            return nullptr;
+        };
+        const auto key = [&](QQuickItem* item) { QVERIFY(item); item->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space); };
+        auto* bar = find(window->contentItem(), "nowPlayingBar"); QVERIFY(bar);
+        key(find(bar, "nowPlayingMore"));
+        auto* more = bar->findChild<QObject*>("nowPlayingMoreMenu"); QVERIFY(more); QTRY_VERIFY(more->property("opened").toBool());
+        auto* entry = more->findChild<QQuickItem*>("openStandaloneDanmaku"); QVERIFY(entry);
+        key(entry);
+        auto* picker = window->findChild<QObject*>("standaloneXmlPicker"); QVERIFY(picker); QTRY_VERIFY(picker->property("visible").toBool());
+        QVERIFY(QMetaObject::invokeMethod(picker, "reject")); QTRY_VERIFY(!picker->property("visible").toBool());
+        auto* now = qobject_cast<NowPlayingModel*>(backend.nowPlaying()); QVERIFY(!now->active());
+        QVERIFY(picker->setProperty("selectedFile", QUrl::fromLocalFile(xml)));
+        QVERIFY(QMetaObject::invokeMethod(picker, "accepted")); QTRY_VERIFY(now->standalone()); QTRY_COMPARE(now->count(), 2);
+        QCOMPARE(now->title(), QString("standalone.xml")); QVERIFY(now->subtitle().contains("独立"));
+        auto* toggle = find(bar, "nowPlayingToggle"); QVERIFY(toggle->isEnabled()); key(toggle); QVERIFY(!now->playing());
+        now->seek(4); QCOMPARE(now->position(), 4.0);
+        const auto currentContext = now->contextId();
+        QVERIFY(QMetaObject::invokeMethod(picker, "accepted")); QTest::qWait(60);
+        QCOMPARE(now->contextId(), currentContext); QCOMPARE(now->position(), 4.0); QVERIFY(!now->openingStandalone());
+        auto* seek = find(bar, "nowPlayingSeek"); QVERIFY(seek && seek->isEnabled()); QTRY_COMPARE(seek->property("value").toDouble(), 4.0);
+        for (int page : {0, 5, 1}) { QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, page))); QVERIFY(now->standalone()); QCOMPARE(now->position(), 4.0); }
+        key(find(bar, "nowPlayingDanmaku"));
+        auto* menu = bar->findChild<QObject*>("nowPlayingDanmakuMenu"); QVERIFY(menu); QTRY_VERIFY(menu->property("opened").toBool());
+        key(menu->findChild<QQuickItem*>("selectCachedDanmaku"));
+        auto* cacheDialog = window->findChild<QObject*>("cachedDanmakuDialog"); QVERIFY(cacheDialog); QTRY_VERIFY(cacheDialog->property("opened").toBool());
+        QCOMPARE(cacheDialog->property("media").value<QObject*>(), backend.standalone());
+        auto* content = cacheDialog->property("contentItem").value<QQuickItem*>(); QVERIFY(content);
+        auto* list = find(content, "cachedDanmakuList"); auto* scrollbar = find(content, "cacheVerticalScrollBar"); QVERIFY(list && scrollbar);
+        QTRY_COMPARE(list->property("count").toInt(), 24);
+        auto* outer = content->property("contentItem").value<QObject*>(); QVERIFY(outer); checkWheelMargins(window, scrollbar, list, outer);
+        list->setProperty("contentY", 0); QTest::qWait(40); key(find(content, "loadCachedDanmaku"));
+        QTRY_COMPARE(now->count(), 1); QTRY_VERIFY(!cacheDialog->property("visible").toBool());
+        QVERIFY(now->standalone()); QVERIFY(!now->playing()); QCOMPARE(now->position(), 4.0);
+        now->searchDanmaku(); auto* search = window->findChild<QObject*>("standaloneDanmakuSearchDialog"); QVERIFY(search);
+        QTRY_VERIFY(search->property("opened").toBool());
+        auto* searchContent = search->property("contentItem").value<QQuickItem*>(); QVERIFY(searchContent);
+        auto* searchBar = find(window->contentItem(), "standaloneSearchVerticalScrollBar"); QVERIFY(searchBar);
+        auto* searchFlick = searchContent->property("contentItem").value<QObject*>(); QVERIFY(searchFlick);
+        const auto searchHeight = search->property("height");
+        const auto shortViewport = std::max(24.0, std::min(80.0, searchFlick->property("contentHeight").toDouble() / 2));
+        search->setProperty("height", searchHeight.toDouble() - searchContent->height() + shortViewport); QTest::qWait(60);
+        checkWheelMargins(window, searchBar, searchFlick);
+        search->setProperty("height", searchHeight); QTest::qWait(60);
+        const auto output = qEnvironmentVariable("DANMAKU_STANDALONE_ARTIFACTS");
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            settings->setValue("theme", theme); QTest::qWait(80);
+            if (!output.isEmpty()) { QDir().mkpath(output); QVERIFY(window->grabWindow().save(output + "/search-" + theme + ".png")); }
+        }
+        auto* cancelSearch = search->findChild<QQuickItem*>("cancelStandaloneSearch"); QVERIFY(cancelSearch); cancelSearch->forceActiveFocus();
+        QTest::keyClick(window, Qt::Key_Escape); QTRY_VERIFY(!search->property("visible").toBool()); QVERIFY(now->standalone());
+        now->searchDanmaku(); QTRY_VERIFY(search->property("opened").toBool()); now->endPlayback(); QTRY_VERIFY(!search->property("visible").toBool());
+        QVERIFY(!now->active());
+        now->openStandalone(xml); QTRY_VERIFY(now->standalone());
+        QVERIFY(QMetaObject::invokeMethod(cacheDialog, "choose")); QTRY_VERIFY(cacheDialog->property("opened").toBool());
+        qobject_cast<MediaSession*>(backend.media())->openVideo(video);
+        QTRY_VERIFY(!cacheDialog->property("visible").toBool()); QVERIFY(now->video()); QVERIFY(!now->standalone());
+        now->endPlayback(); now->openStandalone(xml); QTRY_VERIFY(now->standalone()); now->togglePlayback();
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            settings->setValue("theme", theme); QTest::qWait(80);
+            if (!output.isEmpty()) QVERIFY(window->grabWindow().save(output + "/playback-" + theme + ".png"));
+        }
+        key(find(bar, "nowPlayingMore")); QTRY_VERIFY(more->property("opened").toBool());
+        auto* stop = more->findChild<QQuickItem*>("stopPlayback"); QVERIFY(stop); QCOMPARE(stop->property("text").toString(), QString("结束独立弹幕播放"));
+        key(stop); QVERIFY(!now->active()); QVERIFY(!backend.running());
+        QStringList errors; for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) errors << error.toString();
+        QVERIFY2(warnings.isEmpty(), qPrintable(errors.join('\n'))); window->close();
+    }
     void mainShellLayoutAndVectorIcons() {
         QTemporaryDir directory; AppController backend(directory.path());
         auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});
@@ -322,52 +414,105 @@ private slots:
         QStringList errors; for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) errors << error.toString();
         QVERIFY2(warnings.isEmpty(), qPrintable(errors.join('\n')));
     }
-    void unifiedPlaybackPageAndPersistentControls() {
-        QTemporaryDir directory; AppController backend(directory.path());
-        auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});
+    void videoTaskMenusAndSourceLifetime() {
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        const auto executable = directory.filePath("PotPlayerMini64.exe"), video = directory.filePath("video.avi");
+        { QFile file(executable); QVERIFY(file.open(QIODevice::WriteOnly)); file.write(playerExecutableFixture()); }
+        { QFile file(video); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("fixture"); }
+        const auto xml = directory.filePath("comments.xml");
+        { QFile file(xml); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("<i><d p=\"0,1,25,16777215\">test</d></i>"); }
+        auto cached = parseOnlineDanmaku(R"({"comments":[{"p":"0,1,16777215,u","m":"cached"},{"p":"10,1,16777215,u","m":"later"}]})");
+        for (int i = 0; i < 24; ++i) {
+            cached.metadata = {{"server", "https://offline.test"}, {"animeId", "42"}, {"episodeId", QString::number(i + 1)},
+                {"animeTitle", QString("缓存 %1").arg(i, 2, 10, QChar('0'))}, {"episodeTitle", "第1话"},
+                {"downloadedAt", "2026-10-17T00:00:00.000Z"}};
+            QVERIFY(saveCachedDanmaku(directory.filePath("cache/danmaku"), cached).isEmpty());
+        }
+        VideoOpenService::Hooks hooks{[=] { return executable; }, [](const QString&) { return QString(); },
+            [](const QString&, const QStringList&) { return QString(); }};
+        AppController backend(directory.filePath("data"), nullptr, {}, directory.filePath("cache"), {}, {}, {}, hooks);
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({}); settings->setValue("micaEnabled", false);
         qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        auto* monitor = backend.findChild<MediaMonitor*>(); QVERIFY(monitor);
+        disconnect(monitor, &MediaMonitor::sampleReceived, &backend, nullptr);
         QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
         engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}, {"selectedPage", 1}});
         engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
         QVERIFY(!engine.rootObjects().isEmpty()); auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
         window->resize(900, 700); window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* page = window->findChild<QQuickItem*>("playerPage"); QVERIFY(page);
+        auto* media = qobject_cast<MediaSession*>(backend.media());
+        auto* service = qobject_cast<VideoOpenService*>(backend.videoOpen()); media->openVideo(video);
+        MediaSample sample; sample.id = service->sessionId(); sample.found = sample.playing = true;
+        sample.playback = MediaSample::Playback::Playing; sample.duration = 120; sample.sessionToken = 1;
+        sample.canPlay = sample.canPause = sample.canSeek = true;
+        const auto inject = [&] {
+            QTest::qWait(2); sample.generation = monitor->generation(); sample.observedAt = MediaMonitor::monotonicSeconds();
+            QMetaObject::invokeMethod(&backend, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
+        };
+        sample.title = "video.avi"; sample.mediaUri = QUrl::fromLocalFile(video).toString(QUrl::FullyEncoded); inject();
+        QTimer heartbeat; connect(&heartbeat, &QTimer::timeout, &backend, inject); heartbeat.start(30);
+        QVERIFY(media->active()); QVERIFY(qobject_cast<NowPlayingModel*>(backend.nowPlaying())->video());
+        QVERIFY(!page->findChild<QObject*>("legacyPlaybackSetup"));
+        QVERIFY(!page->findChild<QObject*>("videoDanmakuSources"));
+        QVERIFY(!page->findChild<QObject*>("followPlayerAdvancedButton"));
+        QVERIFY(!page->findChild<QObject*>("danmakuSourceTabs"));
+        QVERIFY(!page->findChild<QObject*>("playbackOptions"));
+        QVERIFY(media->canSelectSource());
+        auto* now = qobject_cast<NowPlayingModel*>(backend.nowPlaying());
+        now->replaceDanmaku(xml); QTRY_COMPARE(now->count(), 1);
+        auto* bar = window->findChild<QQuickItem*>("nowPlayingBar"); QVERIFY(bar);
+        auto* menu = bar->findChild<QObject*>("nowPlayingDanmakuMenu"); QVERIFY(menu);
+        QVERIFY(QMetaObject::invokeMethod(menu, "open")); QTRY_VERIFY(menu->property("opened").toBool());
+        auto* cacheAction = menu->findChild<QObject*>("selectCachedDanmaku"); QVERIFY(cacheAction);
+        auto* cacheItem = qobject_cast<QQuickItem*>(cacheAction); QVERIFY(cacheItem);
+        cacheItem->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        auto* cacheDialog = window->findChild<QObject*>("cachedDanmakuDialog"); QVERIFY(cacheDialog);
+        QTRY_VERIFY(cacheDialog->property("opened").toBool());
+        auto* content = cacheDialog->property("contentItem").value<QQuickItem*>(); QVERIFY(content);
         std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
             if (parent->objectName() == name) return parent;
             for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
             return nullptr;
         };
-        auto* page = find(window->contentItem(), "playerPage"); auto* bar = find(window->contentItem(), "nowPlayingBar");
-        auto* toggle = find(window->contentItem(), "nowPlayingToggle"); QVERIFY(page && bar && toggle);
-        QCOMPARE(page->property("title").toString(), QString("播放")); QVERIFY(bar->isVisible());
-        auto* now = qobject_cast<NowPlayingModel*>(backend.nowPlaying()); QVERIFY(now);
-        now->openDanmaku(QStringLiteral(DANMAKU_SOURCE_DIR "/tests/fixtures/sample.xml")); QTRY_VERIFY(backend.running());
-        QTRY_VERIFY(toggle->isEnabled()); toggle->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space); QVERIFY(!now->playing());
-        const double paused = now->position();
-        for (int index = 0; index < 6; ++index) {
-            QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, index))); QTest::qWait(30);
-            QVERIFY(bar->isVisible()); QCOMPARE(now->position(), paused);
-            QVERIFY(bar->mapToScene(QPointF(0, bar->height())).y() <= window->height() + 1);
-        }
-        QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 1)));
-        toggle->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space); QVERIFY(now->playing());
-        auto* button = find(window->contentItem(), "nowPlayingDanmaku"); QVERIFY(button);
-        button->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
-        auto* menu = bar->findChild<QObject*>("nowPlayingDanmakuMenu"); QVERIFY(menu); QTRY_VERIFY(menu->property("opened").toBool());
-        auto* menuContent = menu->property("contentItem").value<QQuickItem*>(); QVERIFY(menuContent);
-        auto* visibilityItem = find(menuContent, "nowPlayingVisibility"); QVERIFY(visibilityItem);
-        visibilityItem->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
-        QTRY_VERIFY(!backend.danmakuVisible()); QVERIFY(now->playing()); backend.setDanmakuVisible(true);
-        QVERIFY(QMetaObject::invokeMethod(page, "openOptions", Q_ARG(QVariant, true))); QTest::qWait(100);
-        auto* scroll = page->property("contentItem").value<QObject*>(); auto* scrollbar = page->findChild<QQuickItem*>("pageVerticalScrollBar");
-        QVERIFY(scroll && scrollbar); checkWheelMargins(window, scrollbar, scroll);
+        auto* list = find(content, "cachedDanmakuList"); auto* cacheBar = find(content, "cacheVerticalScrollBar");
+        auto* outer = content->property("contentItem").value<QObject*>(); QVERIFY(list && cacheBar && outer);
+        auto* filter = find(content, "cachedDanmakuFilter"); QVERIFY(filter);
+        QTRY_COMPARE(list->property("count").toInt(), 24);
         const auto output = qEnvironmentVariable("DANMAKU_VIDEO_UI_ARTIFACTS");
-        for (const auto& theme : {QString("light"), QString("dark")}) {
-            settings->setValue("theme", theme); find(page, "playbackOptions")->setProperty("expanded", false);
-            scroll->setProperty("contentY", 0); QTest::qWait(100);
-            if (!output.isEmpty()) { QVERIFY(QDir().mkpath(output)); QVERIFY(window->grabWindow().save(output + "/unified-playback-" + theme + ".png")); }
+        for (const auto& theme : {QString("light"), QString("dark")}) for (int width : {800, 1080}) {
+            settings->setValue("theme", theme); window->resize(width, width == 800 ? 600 : 760); QTest::qWait(80);
+            checkWheelMargins(window, cacheBar, list, outer);
+            list->setProperty("contentY", 0); cacheBar->setProperty("active", true); QTest::qWait(20);
+            const auto thumb = cacheBar->mapToScene(QPointF(cacheBar->width() / 2,
+                cacheBar->height() * cacheBar->property("size").toDouble() / 2)).toPoint();
+            QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, thumb);
+            QTest::mouseMove(window, thumb + QPoint(0, 60), 30);
+            QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, thumb + QPoint(0, 60));
+            QVERIFY(list->property("contentY").toDouble() > 0);
+            auto* footer = cacheDialog->property("footer").value<QQuickItem*>(); QVERIFY(footer);
+            const auto point = footer->mapToScene(QPointF(4, footer->height()/2));
+            const auto before = outer->property("contentY"); const auto listBefore = list->property("contentY");
+            QWheelEvent event(point, window->mapToGlobal(point.toPoint()), QPoint(0, -17), {}, Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(window, &event); QCOMPARE(outer->property("contentY"), before); QCOMPARE(list->property("contentY"), listBefore);
+            if (!output.isEmpty()) { QDir().mkpath(output); QVERIFY(window->grabWindow().save(output + QString("/cache-popup-%1-%2.png").arg(theme).arg(width))); }
         }
-        QStringList errors; for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) errors << error.toString();
-        QVERIFY2(warnings.isEmpty(), qPrintable(errors.join('\n'))); now->endPlayback(); window->close();
+        const auto listWidth = list->width(); filter->setProperty("text", "缓存 00"); QTRY_COMPARE(list->property("count").toInt(), 1);
+        QTRY_VERIFY(cacheBar->property("size").toDouble() >= 1); QCOMPARE(list->width(), listWidth);
+        QTest::keyClick(window, Qt::Key_Escape); QTRY_VERIFY(!cacheDialog->property("visible").toBool()); QVERIFY(media->active());
+        QVERIFY(QMetaObject::invokeMethod(cacheDialog, "choose")); QTRY_VERIFY(cacheDialog->property("opened").toBool());
+        auto* load = find(content, "loadCachedDanmaku"); QVERIFY(load); load->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
+        QTRY_COMPARE(now->count(), 2); QTRY_VERIFY(!cacheDialog->property("visible").toBool()); QVERIFY(media->active());
+        QVERIFY(QMetaObject::invokeMethod(cacheDialog, "choose")); QTRY_VERIFY(cacheDialog->property("opened").toBool());
+        const auto task = media->taskId(); now->endPlayback(); QTRY_VERIFY(!cacheDialog->property("visible").toBool());
+        QVERIFY(media->taskId() != task); QVERIFY(!media->canSelectSource());
+        QVERIFY(!now->canPlay()); QVERIFY(!now->canSeek()); QCOMPARE(now->count(), 0);
+        QVERIFY(!window->findChild<QObject*>("matchingRecoveryDialog"));
+        for (const auto& theme : {QString("light"), QString("dark")}) {
+            settings->setValue("theme", theme); QTest::qWait(100);
+            if (!output.isEmpty()) { QDir().mkpath(output); QVERIFY(window->grabWindow().save(output + "/video-sources-" + theme + ".png")); }
+        }
+        QVERIFY(warnings.empty()); qobject_cast<NowPlayingModel*>(backend.nowPlaying())->endPlayback(); window->close();
     }
     void dualWorkspaceNavigationAndRecentPlayback() {
         QTemporaryDir directory;
@@ -430,49 +575,6 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 1))); QVERIFY(backend.running());
         QStringList errors; for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) errors << error.toString();
         QVERIFY2(warnings.isEmpty(), qPrintable(errors.join('\n'))); backend.stop(); window->close();
-    }
-    void vlcSessionDiscoveryChoices() {
-        QTemporaryDir directory; AppController backend(directory.path());
-        auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});
-        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
-        auto* monitor = backend.findChild<MediaMonitor*>(); QVERIFY(monitor);
-        const QString available = "danmax-vlc:123:456", unavailable = "danmax-vlc:789:987";
-        monitor->sessionsChanged({QVariantMap{{"id", available}, {"label", "VLC（DanmaX 连接）"}, {"connectable", true}},
-            QVariantMap{{"id", unavailable}, {"label", "VLC · PID 789 · 未建立同步连接"}, {"connectable", false}}});
-        QObject::disconnect(monitor, nullptr, &backend, nullptr);
-        backend.selectSession(available);
-        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
-        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}, {"selectedPage", 1}});
-        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
-        QVERIFY(!engine.rootObjects().isEmpty()); auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
-        window->resize(900, 700); window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
-        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
-            if (parent->objectName() == name) return parent;
-            for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
-            return nullptr;
-        };
-        auto* page = find(window->contentItem(), "playerPage"); auto* combo = find(window->contentItem(), "targetSessionChoice");
-        auto* hint = find(window->contentItem(), "vlcSessionDiscoveryHint"); QVERIFY(page && combo && hint);
-        QVERIFY(QMetaObject::invokeMethod(page, "openOptions", Q_ARG(QVariant, true))); QTest::qWait(50);
-        QVERIFY(hint->isVisible()); QCOMPARE(combo->property("count").toInt(), 2); QCOMPARE(combo->property("currentIndex").toInt(), 0);
-        QVERIFY(QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(combo)))); QTest::qWait(100);
-        combo->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4);
-        auto* popup = combo->property("popup").value<QObject*>(); QVERIFY(popup); QTRY_VERIFY(popup->property("opened").toBool());
-        QTest::keyClick(window, Qt::Key_End); QTest::keyClick(window, Qt::Key_Return);
-        QCOMPARE(settings->values().value("targetSession").toString(), available);
-        QCOMPARE(combo->property("currentIndex").toInt(), 0);
-        if (popup->property("visible").toBool()) QTest::keyClick(window, Qt::Key_Escape);
-        QTRY_VERIFY(!popup->property("visible").toBool());
-        for (const auto& theme : {QString("light"), QString("dark")}) {
-            settings->setValue("theme", theme); QTest::qWait(80);
-            combo->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4); QTRY_VERIFY(popup->property("opened").toBool());
-            const auto output = qEnvironmentVariable("DANMAKU_VIDEO_UI_ARTIFACTS");
-            if (!output.isEmpty()) { QVERIFY(QDir().mkpath(output)); QVERIFY(window->grabWindow().save(output + "/vlc-sessions-" + theme + ".png")); }
-            QTest::keyClick(window, Qt::Key_Escape); QTRY_VERIFY(!popup->property("visible").toBool());
-        }
-        QStringList loadErrors;
-        for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) loadErrors << error.toString();
-        QVERIFY2(warnings.isEmpty(), qPrintable(loadErrors.join('\n'))); window->close();
     }
     void externalPlayerConfigurationWorkflow() {
         QTemporaryDir directory;
@@ -640,7 +742,7 @@ private slots:
         int launches = 0;
         VideoOpenService::Hooks hooks{[&] { return exe; }, [](const QString&) { return QString(); },
             [&](const QString&, const QStringList& args) {
-                if (args != QStringList{QFileInfo(videoFile).canonicalFilePath(), "/current"}) return QString("bad arguments");
+                if (args != QStringList{QFileInfo(videoFile).canonicalFilePath(), "/new"}) return QString("bad arguments");
                 ++launches; return QString();
             }};
         AppController backend(directory.path(), nullptr, {}, directory.filePath("cache"), {}, {}, {}, hooks);
@@ -736,7 +838,7 @@ private slots:
         QVERIFY(!feedback->property("dragActive").toBool());
         dropAt({QUrl::fromLocalFile(videoFile), QUrl::fromLocalFile(videoFile)}); QCOMPARE(launches, 0);
         QVERIFY(!feedback->property("dragActive").toBool());
-        dropAt({QUrl::fromLocalFile(videoFile)}); QCOMPARE(launches, 0); QVERIFY(video->pending());
+        dropAt({QUrl::fromLocalFile(videoFile)}); QCOMPARE(launches, 1); QVERIFY(video->pending());
         MediaSample before; before.id = "PotPlayerMini64.exe"; before.generation = monitor->generation();
         before.observedAt = MediaMonitor::monotonicSeconds();
         QVERIFY(QMetaObject::invokeMethod(&backend, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, before)));
@@ -749,7 +851,7 @@ private slots:
         cancel->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
         QVERIFY(!video->pending());
         // The actual window overlay must suppress drops into an open popup.
-        auto* recovery = window->findChild<QObject*>("matchingRecoveryDialog"); QVERIFY(recovery);
+        auto* recovery = window->findChild<QObject*>("mediaMatchingRecoveryDialog"); QVERIFY(recovery);
         QVERIFY(QMetaObject::invokeMethod(recovery, "open")); QTest::qWait(80);
         QVERIFY(!drop->isEnabled()); dropAt({QUrl::fromLocalFile(videoFile)}); QCOMPARE(launches, 1);
         QVERIFY(QMetaObject::invokeMethod(recovery, "close")); QTRY_VERIFY_WITH_TIMEOUT(drop->isEnabled(), 1500);
@@ -1023,316 +1125,6 @@ Window {
         QCOMPARE(ready.count(), 2);
         QVERIFY(QMetaObject::invokeMethod(window, "motion", Q_ARG(bool, true)));
         QCOMPARE(warnings.count(), 0);
-    }
-    void homeOnlineAndSavedPlayerWorkflow() {
-        QTemporaryDir directory;
-        const auto data = directory.filePath("data");
-        QVERIFY(QDir().mkpath(data));
-        {
-            SettingsStore saved(data);
-            QVERIFY(saved.setValue("targetSession", "Remembered.Player"));
-            saved.flushPending();
-        }
-        bool ambiguous = true;
-        QTcpServer server; QVERIFY(server.listen(QHostAddress::LocalHost));
-        connect(&server, &QTcpServer::newConnection, &server, [&] {
-            while (server.hasPendingConnections()) {
-                auto* socket = server.nextPendingConnection();
-                auto request = std::make_shared<QByteArray>();
-                connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
-                connect(socket, &QTcpSocket::readyRead, &server, [&, socket, request] {
-                    request->append(socket->readAll());
-                    if (!request->contains("\r\n\r\n")) return;
-                    disconnect(socket, &QTcpSocket::readyRead, &server, nullptr);
-                    const auto target = request->split(' ').value(1);
-                    QByteArray body = "[]";
-                    if (target.contains("search/anime")) {
-                        QJsonArray animes{QJsonObject{{"animeId", 42}, {"animeTitle", "测试动画"}}};
-                        if (ambiguous) animes.append(QJsonObject{{"animeId", 43}, {"animeTitle", "测试动画"}});
-                        body = QJsonDocument(QJsonObject{{"animes", animes}}).toJson();
-                    } else if (target.contains("/bangumi/")) {
-                        body = R"({"episodes":[{"episodeId":42009,"episodeTitle":"第9话 冒险"}]})";
-                    } else if (target.contains("/comment/")) {
-                        body = R"({"comments":[{"p":"1,1,16777215,user","m":"hello"}]})";
-                    }
-                    socket->write("HTTP/1.1 200 OK\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
-                    socket->disconnectFromHost();
-                });
-            }
-        });
-        AppController backend(data, nullptr, {}, directory.filePath("cache"));
-        auto* monitor = backend.findChild<MediaMonitor*>(); QVERIFY(monitor);
-        QObject::disconnect(monitor, nullptr, &backend, nullptr);
-        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
-        QCOMPARE(settings->values()["targetSession"].toString(), QString("Remembered.Player"));
-        const auto base = QString("http://127.0.0.1:%1").arg(server.serverPort());
-        settings->setValue("danmakuServers", QStringList{base});
-        settings->setValue("micaEnabled", false);
-        auto* metadata = qobject_cast<AnimeMetadataService*>(backend.metadata());
-        metadata->setBaseUrl(base);
-        auto* library = qobject_cast<DanmakuLibrary*>(backend.library());
-        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
-        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
-        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
-        QVERIFY(!engine.rootObjects().isEmpty());
-        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
-        window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
-        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
-            if (parent->objectName() == name) return parent;
-            for (auto* child : parent->childItems()) if (auto* item = find(child, name)) return item;
-            return nullptr;
-        };
-        auto* home = find(window->contentItem(), "homePage"); QVERIFY(home);
-        auto* player = find(window->contentItem(), "playerPage"); QVERIFY(player);
-        QVERIFY(!find(player, "animeKeyword"));
-        QCOMPARE(find(player, "danmakuSourceTabs")->property("count").toInt(), 2);
-        auto* choice = find(player, "targetSessionChoice"); QVERIFY(choice);
-        QCOMPARE(choice->property("currentValue").toString(), QString("Remembered.Player"));
-        QVERIFY(choice->property("displayText").toString().contains("等待"));
-        QVERIFY(!backend.targetSessionConnected());
-        backend.showOnlineDanmakuForAnime(QStringLiteral("测试动画"), QStringLiteral("冒险"), 9);
-        QCOMPARE(window->property("selectedPage").toInt(), 0);
-        QVERIFY(!find(home, "homeOnlineSearch"));
-        QVERIFY(!find(home, "homeAutomaticSearch"));
-        auto* online = window->findChild<QObject*>("matchingRecoveryDialog"); QVERIFY(online);
-        QTRY_VERIFY(online->property("opened").toBool()); QVERIFY(online->property("manualSearch").toBool());
-        auto* onlineContent = qobject_cast<QQuickItem*>(online->property("contentItem").value<QObject*>()); QVERIFY(onlineContent);
-        QCOMPARE(online->property("title").toString(), QStringLiteral("搜索弹幕"));
-        QTRY_COMPARE(find(onlineContent, "animeKeyword")->property("text").toString(), QStringLiteral("测试动画"));
-        QVERIFY(!find(onlineContent, "recoveryFileName")->isVisible());
-        QTRY_VERIFY(!library->busy()); QCOMPARE(library->animes().size(), 2);
-        QCOMPARE(backend.total(), 0); QVERIFY(library->selectedAnime().isEmpty());
-        auto* anime = find(onlineContent, "animeChoice"); QVERIFY(anime);
-        anime->forceActiveFocus(); QTest::keyClick(window, Qt::Key_F4);
-        auto* popup = anime->property("popup").value<QObject*>(); QVERIFY(popup);
-        QTRY_VERIFY(popup->property("opened").toBool());
-        QTest::keyClick(window, Qt::Key_Down); QTest::keyClick(window, Qt::Key_Return);
-        QTRY_COMPARE(backend.total(), 1);
-        QTRY_COMPARE(window->property("selectedPage").toInt(), 1);
-        QVERIFY(!backend.running()); QCOMPARE(backend.playbackState(), AppController::Ready);
-        MediaSample sample;
-        sample.id = "Remembered.Player"; sample.title = "Episode 9"; sample.identity = "episode9";
-        sample.duration = 100; sample.position = 12; sample.found = true;
-        sample.playback = MediaSample::Playback::Paused;
-        auto inject = [&] {
-            sample.generation = monitor->generation(); sample.observedAt = MediaMonitor::monotonicSeconds();
-            return QMetaObject::invokeMethod(&backend, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
-        };
-        QVERIFY(inject()); QVERIFY(backend.targetSessionConnected());
-        QVERIFY(find(player, "savedPlayerStatus")->property("text").toString().contains("已连接"));
-        sample.found = false; QVERIFY(inject()); QVERIFY(!backend.targetSessionConnected());
-        QCOMPARE(choice->property("currentValue").toString(), QString("Remembered.Player"));
-        auto* start = find(window->contentItem(), "nowPlayingToggle"); QVERIFY(start && start->isEnabled());
-        start->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
-        QVERIFY(backend.running()); QCOMPARE(backend.playbackState(), AppController::WaitingForPlayer);
-        QVERIFY(!backend.overlayVisible()); QVERIFY(!backend.toolbarPresentationAllowed());
-        sample.found = true; sample.playback = MediaSample::Playback::Playing; QVERIFY(inject());
-        QVERIFY(backend.targetSessionConnected()); QVERIFY(backend.playing());
-        QVERIFY(backend.overlayVisible()); QVERIFY(backend.toolbarPresentationAllowed());
-        QCOMPARE(backend.position(), 12.0);
-        sample.playback = MediaSample::Playback::Closed; QVERIFY(inject());
-        QVERIFY(!backend.targetSessionConnected()); QCOMPARE(backend.playbackState(), AppController::WaitingForPlayer);
-        QVERIFY(!backend.overlayVisible()); QVERIFY(!backend.toolbarPresentationAllowed());
-        sample.playback = MediaSample::Playback::Paused; sample.position = 18; QVERIFY(inject());
-        QVERIFY(backend.targetSessionConnected()); QVERIFY(!backend.playing()); QCOMPARE(backend.position(), 18.0);
-        QVERIFY(backend.overlayVisible());
-        sample.id = "Other.Player"; sample.position = 66; sample.found = false;
-        QVERIFY(inject()); QVERIFY(backend.targetSessionConnected());
-        QCOMPARE(backend.position(), 18.0);
-        sample.id = "Remembered.Player"; sample.position = 18; sample.found = true;
-        backend.showOnlineDanmakuForAnime(QStringLiteral("测试动画"));
-        QTRY_VERIFY(online->property("opened").toBool());
-        QVERIFY(online->property("manualBoundToPlayer").toBool());
-        QTRY_VERIFY_WITH_TIMEOUT(!backend.targetSessionConnected(), 5000);
-        QTRY_VERIFY(!online->property("visible").toBool());
-        QVERIFY(!library->busy());
-        QVERIFY(inject()); QVERIFY(backend.targetSessionConnected());
-        backend.stop();
-        const auto evidence = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/home-online-player");
-        QDir().mkpath(evidence);
-        for (const auto& theme : {"light", "dark"}) {
-            settings->setValue("theme", theme);
-            window->resize(800, 600);
-            QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 1)));
-            QCOMPARE(window->property("selectedPage").toInt(), 1);
-            sample.found = false; QVERIFY(inject());
-            QTest::qWait(80);
-            QVERIFY(window->grabWindow().save(evidence + "/player-" + theme + ".png"));
-            ambiguous = false;
-            backend.showOnlineDanmakuForAnime(QStringLiteral("测试动画"));
-            QTRY_VERIFY(!library->busy());
-            QTest::qWait(80);
-            QVERIFY(window->grabWindow().save(evidence + "/home-" + theme + ".png"));
-            QVERIFY(QMetaObject::invokeMethod(online, "reject"));
-            QTRY_VERIFY(!online->property("visible").toBool());
-            QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 0)));
-            QTest::qWait(100);
-            QVERIFY(window->grabWindow().save(evidence + "/home-clean-" + theme + ".png"));
-        }
-        backend.showOnlineDanmakuForAnime(QStringLiteral("测试动画"), QStringLiteral("冒险"), 9);
-        QTRY_COMPARE(window->property("selectedPage").toInt(), 1);
-        QTRY_VERIFY(!online->property("visible").toBool());
-        auto* forget = find(player, "forgetTargetSession"); QVERIFY(forget);
-        QVERIFY(QMetaObject::invokeMethod(player, "openOptions", Q_ARG(QVariant, true)));
-        QVERIFY(QMetaObject::invokeMethod(player, "reveal", Q_ARG(QVariant, QVariant::fromValue(forget))));
-        QTest::qWait(100);
-        forget->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
-        QCOMPARE(settings->values()["targetSession"].toString(), QString());
-        QVERIFY(!backend.targetSessionConnected());
-        QVERIFY(!start->isEnabled());
-        settings->flushPending();
-        SettingsStore restored(data);
-        QVERIFY(restored.values()["targetSession"].toString().isEmpty());
-        QCOMPARE(warnings.count(), 0);
-    }
-    void automaticPlaybackWorkflow() {
-        QTemporaryDir directory;
-        QTcpServer server; QVERIFY(server.listen(QHostAddress::LocalHost));
-        connect(&server, &QTcpServer::newConnection, &server, [&] {
-            while (server.hasPendingConnections()) {
-                auto* socket = server.nextPendingConnection();
-                auto bytes = std::make_shared<QByteArray>();
-                connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
-                connect(socket, &QTcpSocket::readyRead, &server, [&, socket, bytes] {
-                    bytes->append(socket->readAll());
-                    if (!bytes->contains("\r\n\r\n")) return;
-                    disconnect(socket, &QTcpSocket::readyRead, &server, nullptr);
-                    const auto target = bytes->split(' ').value(1);
-                    QByteArray body;
-                    if (target.contains("/calendar")) {
-                        QJsonArray calendar;
-                        for (int day = 1; day <= 7; ++day) calendar.append(QJsonObject{{"weekday", QJsonObject{{"id", day}}}, {"items", QJsonArray{}}});
-                        body = QJsonDocument(calendar).toJson();
-                    } else if (target.contains("search/anime")) {
-                        QJsonArray animes;
-                        for (int i = 1; i <= 50; ++i) animes.append(QJsonObject{{"animeId", 100 + i}, {"animeTitle", QString("Other series %1").arg(i)}});
-                        animes.append(QJsonObject{{"animeId", 42}, {"animeTitle", "Test"}});
-                        animes.append(QJsonObject{{"animeId", 43}, {"animeTitle", "Test"}});
-                        body = QJsonDocument(QJsonObject{{"animes", animes}}).toJson();
-                    } else if (target.contains("/bangumi/")) {
-                        QJsonArray episodes;
-                        for (int n = 1; n <= 120; ++n) episodes.append(QJsonObject{{"episodeId", 43000 + n}, {"episodeTitle", QString("第%1话").arg(n)}, {"episodeNumber", n}});
-                        body = QJsonDocument(QJsonObject{{"episodes", episodes}}).toJson();
-                    } else body = R"({"comments":[{"p":"0,1,16777215,u","m":"zero"},{"p":"90,1,16777215,u","m":"ninety"}]})";
-                    socket->write("HTTP/1.1 200 OK\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
-                    socket->disconnectFromHost();
-                });
-            }
-        });
-        AppController backend(directory.filePath("data"), nullptr, {}, directory.filePath("cache"));
-        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
-        auto* automatic = qobject_cast<AutomaticDanmaku*>(backend.automatic()); QVERIFY(automatic);
-        auto* monitor = backend.findChild<MediaMonitor*>(); QVERIFY(monitor);
-        QObject::disconnect(monitor, nullptr, &backend, nullptr);
-        const auto base = QString("http://127.0.0.1:%1").arg(server.serverPort());
-        settings->setValue("danmakuServers", QStringList{base}); settings->setValue("micaEnabled", false);
-        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl(base);
-        backend.selectSession("Ui.Auto.Player");
-        QVERIFY(!settings->values()["automaticDanmaku"].toBool());
-        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
-        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}, {"selectedPage", 1}});
-        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
-        QVERIFY(!engine.rootObjects().isEmpty());
-        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
-        window->show(); QVERIFY(QTest::qWaitForWindowExposed(window));
-        std::function<QQuickItem*(QQuickItem*, const QString&)> find = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
-            if (parent->objectName() == name) return parent;
-            for (auto* child : parent->childItems()) if (auto* result = find(child, name)) return result;
-            return nullptr;
-        };
-        auto* player = find(window->contentItem(), "playerPage"); QVERIFY(player);
-        auto* home = find(window->contentItem(), "homePage"); QVERIFY(home);
-        auto reveal = [&](QQuickItem* page, QQuickItem* item) {
-            return QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(item)));
-        };
-        auto* automaticSwitch = find(player, "automaticDanmakuSwitch"); QVERIFY(automaticSwitch);
-        QVERIFY(reveal(player, automaticSwitch)); automaticSwitch->forceActiveFocus();
-        QTest::keyClick(window, Qt::Key_Space); QVERIFY(automatic->enabled());
-        MediaSample sample; sample.id = "Ui.Auto.Player"; sample.title = "Test - 01"; sample.identity = "first";
-        sample.found = true; sample.position = 12; sample.duration = 100; sample.playback = MediaSample::Playback::Paused;
-        const auto inject = [&] {
-            sample.observedAt = MediaMonitor::monotonicSeconds(); sample.generation = monitor->generation();
-            return QMetaObject::invokeMethod(&backend, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
-        };
-        QTimer heartbeat; connect(&heartbeat, &QTimer::timeout, &backend, [&] { inject(); }); heartbeat.start(30);
-        QSignalSpy loaded(&backend, &AppController::loadCompleted);
-        QVERIFY(inject()); QTRY_VERIFY(automatic->needsChoice()); QVERIFY(!backend.running());
-        auto* dialog = window->findChild<QObject*>("matchingRecoveryDialog"); QVERIFY(dialog);
-        QTRY_VERIFY(dialog->property("opened").toBool());
-        auto* panel = qobject_cast<QQuickItem*>(dialog->property("contentItem").value<QObject*>()); QVERIFY(panel);
-        auto* filename = find(panel, "recoveryFileName"); QVERIFY(filename);
-        QCOMPARE(filename->property("text").toString(), sample.title);
-        auto* copy = find(panel, "copyRecoveryFileName"); QVERIFY(copy);
-        copy->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
-        QCOMPARE(QGuiApplication::clipboard()->text(), sample.title);
-        const auto recoveryOutput = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/recovery/") +
-            (qEnvironmentVariable("QT_QUICK_BACKEND") == "software" ? "software" : "native") +
-            (qEnvironmentVariableIsSet("DANMAKU_UI_LARGE_TEXT") ? "-scaled" : "");
-        QDir().mkpath(recoveryOutput);
-        for (const auto& theme : {"light", "dark"}) {
-            settings->setValue("theme", theme);
-            for (int width : {800, 1080}) {
-                window->resize(width, 760); QTest::qWait(100);
-                QVERIFY(window->grabWindow().save(recoveryOutput + QString("/dialog-%1-%2.png").arg(theme).arg(width)));
-            }
-        }
-        auto* recoveryBar = find(window->contentItem(), "recoveryVerticalScrollBar"); QVERIFY(recoveryBar);
-        auto* recoveryFlick = panel->property("contentItem").value<QObject*>(); QVERIFY(recoveryFlick);
-        window->resize(800, 600);
-        QTRY_VERIFY(recoveryFlick->property("contentHeight").toReal() > recoveryFlick->property("height").toReal());
-        checkWheelMargins(window, recoveryBar, recoveryFlick);
-        recoveryBar->setProperty("position", 0.0);
-        window->resize(1080, 760); QTest::qWait(100);
-        auto* combo = find(panel, "animeChoice"); QVERIFY(combo);
-        combo->forceActiveFocus(); QTest::qWait(80); QTest::keyClick(window, Qt::Key_F4);
-        auto* popup = combo->property("popup").value<QObject*>(); QVERIFY(popup);
-        QTRY_VERIFY(popup->property("opened").toBool());
-        auto* list = qobject_cast<QQuickItem*>(popup->property("contentItem").value<QObject*>()); QVERIFY(list);
-        auto* bar = combo->property("listScrollBar").value<QQuickItem*>(); QVERIFY(bar);
-        auto* outer = panel->property("contentItem").value<QObject*>(); QVERIFY(outer);
-        checkWheelMargins(window, bar, list, outer);
-        QCursor::setPos(window->mapToGlobal(QPoint(1, 1))); QTest::mouseMove(window, QPoint(1, 1));
-        QTest::keyClick(window, Qt::Key_End); QTest::keyClick(window, Qt::Key_Return);
-        QTRY_COMPARE(loaded.count(), 1); QTRY_COMPARE(window->property("selectedPage").toInt(), 1);
-        QTRY_VERIFY(!dialog->property("visible").toBool());
-        QVERIFY(backend.running()); QVERIFY(!backend.playing()); QCOMPARE(backend.position(), 12.0);
-        QCOMPARE(qobject_cast<DanmakuLibrary*>(automatic->library())->selectedAnime(), QString("43"));
-        QVERIFY(find(player, "targetSessionChoice")->property("displayText").toString().contains(QStringLiteral("已连接")));
-        sample.title = "Test - 02"; sample.identity = "second"; sample.position = 42; QVERIFY(inject());
-        QCOMPARE(backend.total(), 0);
-        QTRY_COMPARE(loaded.count(), 2); QCOMPARE(backend.position(), 42.0); QVERIFY(!backend.playing());
-        const auto output = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/automatic/") +
-            (qEnvironmentVariable("QT_QUICK_BACKEND") == "software" ? "software" : "native") +
-            (qEnvironmentVariableIsSet("DANMAKU_UI_LARGE_TEXT") ? "-scaled" : "");
-        QDir().mkpath(output);
-        for (const auto& theme : {"light", "dark"}) {
-            settings->setValue("theme", theme);
-            for (int width : {800, 1080}) {
-                window->resize(width, 760);
-                QVERIFY(QMetaObject::invokeMethod(player, "focusHeading")); QTest::qWait(80);
-                QVERIFY(window->grabWindow().save(output + QString("/player-%1-%2.png").arg(theme).arg(width)));
-                QVERIFY(reveal(player, automaticSwitch)); QTest::qWait(80);
-                QVERIFY(window->grabWindow().save(output + QString("/settings-%1-%2.png").arg(theme).arg(width)));
-            }
-        }
-        backend.stop(); QVERIFY(automatic->suspended());
-        auto* retry = find(player, "retryAutomaticDanmaku"); QVERIFY(retry);
-        QVERIFY(reveal(player, retry)); retry->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
-        QTRY_COMPARE(loaded.count(), 3); QVERIFY(backend.running()); QVERIFY(!automatic->suspended());
-        QVERIFY(reveal(player, automaticSwitch)); automaticSwitch->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space);
-        QVERIFY(!automatic->enabled());
-        sample.title = "Test - 03"; QVERIFY(inject()); QTest::qWait(750); QCOMPARE(loaded.count(), 3);
-        settings->setValue("automaticDanmaku", true);
-        sample.title = "unrecognized-file.mkv"; QVERIFY(inject());
-        QTRY_VERIFY(dialog->property("opened").toBool());
-        QTest::keyClick(window, Qt::Key_Escape);
-        QTRY_VERIFY(!dialog->property("visible").toBool());
-        QVERIFY(!automatic->playbackRecovery()->active());
-        QTest::qWait(700); QVERIFY(!dialog->property("visible").toBool());
-        sample.title = "next-unrecognized-file.mkv"; QVERIFY(inject());
-        QTRY_VERIFY(dialog->property("opened").toBool());
-        automatic->cancelRecovery(); QTRY_VERIFY(!dialog->property("visible").toBool());
-        QCOMPARE(warnings.count(), 0); backend.stop(); heartbeat.stop();
     }
     void onlineLoadingWorkflow() {
         QTemporaryDir directory;
@@ -1827,11 +1619,6 @@ ApplicationWindow {
         QVERIFY2(warnings.isEmpty(), qPrintable(loadErrors.join('\n')));
     }
     void opacityDragDuringMediaLossAndRecovery() { opacityDrag(false); }
-    void realMediaSessionOpacityDrag() {
-        if (qEnvironmentVariable("DANMAKU_TEST_MEDIA_SESSION").isEmpty())
-            QSKIP("Opt in with DANMAKU_TEST_MEDIA_SESSION; never creates or controls a player session.");
-        opacityDrag(true);
-    }
     void homePageWorkflow() {
         QTemporaryDir directory;
         const auto cache = directory.filePath("cache");
@@ -1965,11 +1752,10 @@ ApplicationWindow {
         QTest::keyClick(window, Qt::Key_Space);
         QCOMPARE(home->property("activeWeekday").toInt(), 7);
         QVERIFY(QMetaObject::invokeMethod(cachedCard, "clicked"));
-        QTRY_COMPARE(backend.total(), 1);
+        QVERIFY(!backend.running()); QVERIFY(!qobject_cast<MediaSession*>(backend.media())->active());
+        QVERIFY(!qobject_cast<MediaSession*>(backend.media())->error().isEmpty());
         QCOMPARE(window->property("currentPageName").toString(), QString("player"));
-        auto* tabs = find(window->contentItem(), "danmakuSourceTabs");
-        QVERIFY(tabs);
-        QCOMPARE(tabs->property("currentIndex").toInt(), 1);
+        QVERIFY(!find(window->contentItem(), "danmakuSourceTabs"));
         QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 0)));
         metadata->fetchDetail(123);
         QTRY_VERIFY(!metadata->loadingDetail());
@@ -2148,15 +1934,13 @@ ApplicationWindow {
         QCOMPARE(selected.count(), 1);
         QCOMPARE(selected.first().at(1).toString(), QStringLiteral("第9话 冒险"));
         QCOMPARE(selected.first().at(2).toDouble(), 9.0);
-        QCOMPARE(window->property("selectedPage").toInt(), 0);
+        QCOMPARE(window->property("selectedPage").toInt(), 1);
         QVERIFY(!find(home, "homeOnlineSearch"));
-        auto* onlineSearch = window->findChild<QObject*>("matchingRecoveryDialog"); QVERIFY(onlineSearch);
-        QTRY_VERIFY(onlineSearch->property("opened").toBool());
-        QVERIFY(onlineSearch->property("manualSearch").toBool());
-        QVERIFY(QMetaObject::invokeMethod(onlineSearch, "reject"));
+        QVERIFY(!qobject_cast<MediaSession*>(backend.media())->active());
+        QVERIFY(!qobject_cast<MediaSession*>(backend.media())->error().isEmpty());
+        QVERIFY(!backend.running());
         backend.showOnlineDanmakuForAnime(QStringLiteral("回归番剧"));
-        QCOMPARE(window->property("selectedPage").toInt(), 0);
-        QTRY_VERIFY(onlineSearch->property("opened").toBool());
+        QCOMPARE(window->property("selectedPage").toInt(), 1);
         QCOMPARE(warnings.count(), 0);
     }
     void railScrollingAndEpisodeRanges() {
@@ -2487,8 +2271,8 @@ ApplicationWindow {
                 QTRY_VERIFY(!tip->property("visible").toBool());
             }
         }
-        backend.stop(); backend.start(false);
-        QTimer mediaHeartbeat; keepPausedPlayer(backend, mediaHeartbeat);
+        backend.stop();
+        QTimer mediaHeartbeat; keepPausedPlayer(backend, mediaHeartbeat); backend.start(false);
         QTRY_COMPARE(toolbar->property("phase").toString(), QString("shown"));
         auto* time = toolbar->findChild<QQuickItem*>("toolbarTimeButton");
         auto* offsetTip = time->findChild<QObject*>("toolbarTip");
@@ -3231,7 +3015,7 @@ ApplicationWindow {
         QVERIFY(backend.total() > 0);
         QTRY_VERIFY(!toolbar->isVisible());
         QVERIFY(!seekPopup->isVisible());
-        backend.selectSession("fixture");
+        backend.setRenderTestSession("fixture");
         backend.start(false);
         QTimer mediaHeartbeat; keepPausedPlayer(backend, mediaHeartbeat);
         QTRY_COMPARE(toolbar->property("phase").toString(), QString("shown"));
@@ -4057,36 +3841,6 @@ ApplicationWindow {
                         checkWheelMargins(window, bar, pageFlick); wheelOnBar(bar, pageFlick);
                     }
                 }
-                window->setProperty("selectedPage", 1);
-                auto* page = findWindow("playerPage"); QVERIFY(page);
-                auto* tabs = findWindow("danmakuSourceTabs"); QVERIFY(tabs); tabs->setProperty("currentIndex", 1);
-                auto* cacheList = findWindow("cachedDanmakuList"); QVERIFY(cacheList);
-                QTRY_COMPARE(cacheList->property("count").toInt(), 24);
-                QTest::qWait(80); // Let the source tab's new content height reach PageFrame.
-                QVERIFY(QMetaObject::invokeMethod(page, "reveal", Q_ARG(QVariant, QVariant::fromValue(cacheList))));
-                auto* cacheBar = findWindow("cacheVerticalScrollBar"); QVERIFY(cacheBar);
-                QTest::qWait(80); checkBar(cacheBar);
-                auto* titleBar = findWindow("mainTitleBar"); QVERIFY(titleBar);
-                QVERIFY2(titleBar->height() >= 44, qPrintable(QString("title bar height: %1").arg(titleBar->height())));
-                QVERIFY2(cacheBar->mapToScene(QPointF()).y() >= titleBar->height(),
-                    qPrintable(QString("cache top: %1; title bar height: %2")
-                        .arg(cacheBar->mapToScene(QPointF()).y()).arg(titleBar->height())));
-                auto* outerFlick = page->property("contentItem").value<QObject*>(); QVERIFY(outerFlick);
-                checkWheelMargins(window, cacheBar, cacheList, outerFlick);
-                wheelOnBar(cacheBar, cacheList, outerFlick); drag(cacheBar, cacheList);
-                QVERIFY(window->grabWindow().save(output + QString("/cache-%1-%2.png").arg(theme).arg(width)));
-                const auto listWidth = cacheList->width();
-                auto* filter = findWindow("cachedDanmakuFilter"); QVERIFY(filter);
-                filter->setProperty("text", "缓存番剧 00");
-                QTRY_COMPARE(cacheList->property("count").toInt(), 1);
-                QTRY_VERIFY(cacheBar->property("size").toReal() >= 1);
-                QCOMPARE(cacheList->width(), listWidth);
-                wheelOnBar(cacheBar, cacheList, outerFlick, false);
-                cacheList->setProperty("topMargin", 12.0); cacheList->setProperty("bottomMargin", 20.0);
-                QTest::qWait(40); wheelOnBar(cacheBar, cacheList, outerFlick);
-                cacheList->setProperty("topMargin", 0.0); cacheList->setProperty("bottomMargin", 0.0);
-                filter->setProperty("text", ""); QTRY_COMPARE(cacheList->property("count").toInt(), 24);
-
                 window->setProperty("selectedPage", 2);
                 logs->clear();
                 for (int i = 0; i < 80; ++i) logs->append("INFO", QString("日志 %1：用于验证长文字换行和完整滚动条交互区域。").arg(i));
@@ -4126,328 +3880,6 @@ ApplicationWindow {
                 QTRY_VERIFY(!serverDialog->property("visible").toBool());
             }
         }
-        QCOMPARE(warnings.count(), 0);
-        backend.stop();
-    }
-    void workflow() {
-        const QString output = QStringLiteral(DANMAKU_SOURCE_DIR "/out/validation/ui-refresh")
-            + qEnvironmentVariable("DANMAKU_UI_CAPTURE_SUFFIX");
-        QDir().mkpath(output);
-        QTemporaryDir temporary(output + "/session-XXXXXX");
-        QVERIFY(temporary.isValid());
-        AppController backend(temporary.path() + "/data", nullptr, {}, temporary.path() + "/cache");
-        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
-        auto* logs = qobject_cast<LogModel*>(backend.logs());
-        settings->setValue("theme", "dark");
-        QQmlApplicationEngine engine;
-        QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
-        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
-        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
-        QVERIFY(!engine.rootObjects().isEmpty());
-        auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
-        QVERIFY(window);
-        window->show();
-        QVERIFY(QTest::qWaitForWindowExposed(window));
-        // Repeater delegates belong to the visual tree, not necessarily the QObject tree.
-        std::function<QQuickItem*(QQuickItem*, const QString&)> findVisual = [&](QQuickItem* parent, const QString& name) -> QQuickItem* {
-            if (parent->objectName() == name) return parent;
-            for (auto* child : parent->childItems()) if (auto* match = findVisual(child, name)) return match;
-            return nullptr;
-        };
-        auto find = [&](const char* name) { return findVisual(window->contentItem(), QString::fromLatin1(name)); };
-        auto activate = [&](QQuickItem* item) {
-            QVERIFY(item);
-            auto* playback = find("playerPage");
-            for (auto* ancestor = item; ancestor; ancestor = ancestor->parentItem()) if (ancestor == playback) {
-                QVERIFY(QMetaObject::invokeMethod(playback, "reveal", Q_ARG(QVariant, QVariant::fromValue(item))));
-                QTest::qWait(50); break;
-            }
-            item->forceActiveFocus();
-            QTest::keyClick(window, Qt::Key_Space);
-            QTest::qWait(50);
-        };
-        activate(find("navigation3"));
-        QCOMPARE(window->property("selectedPage").toInt(), 3);
-        auto* onTop = find("onTopChoice");
-        QVERIFY(onTop);
-        QCOMPARE(onTop->property("count").toInt(), 2);
-        QCOMPARE(onTop->property("currentIndex").toInt(), 1);
-        auto* settingsPage = find("settingsPage");
-        auto* onTopPopup = onTop->property("popup").value<QObject*>();
-        QVERIFY(settingsPage && onTopPopup);
-        for (const auto& theme : {QString("light"), QString("dark")}) {
-            QVERIFY(settings->setValue("theme", theme));
-            QVERIFY(QMetaObject::invokeMethod(settingsPage, "reveal", Q_ARG(QVariant, QVariant::fromValue(onTop))));
-            onTop->forceActiveFocus();
-            QTest::keyClick(window, Qt::Key_F4);
-            QTRY_VERIFY(onTopPopup->property("opened").toBool());
-            QVERIFY(window->grabWindow().save(output + "/on-top-popup-" + theme + ".png"));
-            QTest::keyClick(window, Qt::Key_Home);
-            QTest::keyClick(window, Qt::Key_Return);
-            QTRY_COMPARE(settings->values()["onTop"].toInt(), 0);
-            QTest::keyClick(window, Qt::Key_F4);
-            QTRY_VERIFY(onTopPopup->property("opened").toBool());
-            QTest::keyClick(window, Qt::Key_End);
-            QTest::keyClick(window, Qt::Key_Return);
-            QTRY_COMPARE(settings->values()["onTop"].toInt(), 1);
-        }
-        QVERIFY(QMetaObject::invokeMethod(settingsPage, "focusHeading"));
-        activate(find("micaSwitch"));
-        QVERIFY(!settings->values().value("micaEnabled").toBool());
-        activate(find("micaSwitch"));
-        QVERIFY(settings->values().value("micaEnabled").toBool());
-        activate(find("navigation4"));
-        QCOMPARE(window->property("selectedPage").toInt(), 4);
-        QVERIFY(find("reportBugCard"));
-        activate(find("navigation2"));
-        QCOMPARE(window->property("selectedPage").toInt(), 2);
-        activate(find("navigation0"));
-        QCOMPARE(window->property("selectedPage").toInt(), 0);
-        QVERIFY(find("homePage"));
-        activate(find("navigation1"));
-        QCOMPARE(window->property("selectedPage").toInt(), 1);
-        find("playbackOptions")->setProperty("expanded", true);
-        auto* start = find("startPlayback");
-        QVERIFY(start);
-        auto* sourceTab = find("sourceLocalTab");
-        QVERIFY(sourceTab);
-        auto* tabLabel = sourceTab->property("contentItem").value<QObject*>();
-        QVERIFY(tabLabel);
-        QVERIFY(tabLabel->property("color").value<QColor>().alpha() > 0);
-        QVERIFY(!start->isEnabled());
-        QCOMPARE(qobject_cast<NowPlayingModel*>(backend.nowPlaying())->count(), 0);
-        auto* disclosure = find("sessionDisclosure");
-        QVERIFY(disclosure);
-        disclosure->setProperty("expanded", true);
-        find("sessionIdInput")->forceActiveFocus();
-        disclosure->setProperty("expanded", false);
-        auto* disclosureButton = qobject_cast<QQuickItem*>(disclosure->property("toggleButton").value<QObject*>());
-        QVERIFY(disclosureButton && disclosureButton->hasActiveFocus());
-        QTest::qWait(100);
-        QVERIFY(window->grabWindow().save(output + "/empty-dark.png"));
-        activate(find("manualMode"));
-        QSignalSpy loaded(&backend, &AppController::loadCompleted);
-        backend.loadFile(QStringLiteral(DANMAKU_SOURCE_DIR "/tests/fixtures/sample.xml"));
-        QTRY_VERIFY_WITH_TIMEOUT(!loaded.isEmpty(), 10000);
-        QVERIFY(backend.total() > 0);
-        QTRY_VERIFY(start->isEnabled());
-        activate(start);
-        QVERIFY(backend.running());
-        QVERIFY(backend.manualMode());
-        QVERIFY(!find("manualMode")->isEnabled());
-        activate(find("nowPlayingToggle"));
-        QVERIFY(!backend.playing());
-        const auto paused = backend.position();
-        QTest::qWait(80);
-        QCOMPARE(backend.position(), paused);
-        activate(find("nowPlayingToggle"));
-        QVERIFY(backend.playing());
-        activate(find("nowPlayingMore"));
-        auto* moreMenu = window->findChild<QObject*>("nowPlayingMoreMenu"); QVERIFY(moreMenu);
-        QTRY_VERIFY(moreMenu->property("opened").toBool());
-        auto* moreContent = moreMenu->property("contentItem").value<QQuickItem*>(); QVERIFY(moreContent);
-        activate(findVisual(moreContent, "stopPlayback")); QTRY_VERIFY(!backend.running());
-        QVERIFY(qobject_cast<DanmakuSession*>(backend.danmaku())->total() > 0);
-        QVERIFY(backend.manualMode());
-        QTRY_VERIFY(start->isEnabled());
-        activate(start);
-        QVERIFY(backend.running());
-        backend.stop();
-        activate(find("nowPlayingDanmaku"));
-        auto* danmakuMenu = window->findChild<QObject*>("nowPlayingDanmakuMenu"); QVERIFY(danmakuMenu);
-        QTRY_VERIFY(danmakuMenu->property("opened").toBool());
-        auto* danmakuContent = danmakuMenu->property("contentItem").value<QQuickItem*>(); QVERIFY(danmakuContent);
-        activate(findVisual(danmakuContent, "unloadDanmaku")); QTRY_COMPARE(backend.total(), 0);
-        activate(find("syncMode"));
-        backend.selectSession("ui-test-session");
-        loaded.clear();
-        backend.loadFile(QStringLiteral(DANMAKU_SOURCE_DIR "/tests/fixtures/sample.xml"));
-        QTRY_VERIFY_WITH_TIMEOUT(!loaded.isEmpty(), 10000);
-        activate(start);
-        QVERIFY(backend.running());
-        QVERIFY(!backend.manualMode());
-        QVERIFY(!find("nowPlayingToggle")->isEnabled());
-        loaded.clear();
-        backend.loadFile(output + "/does-not-exist.xml");
-        QTRY_VERIFY_WITH_TIMEOUT(!loaded.isEmpty(), 10000);
-        // Local XML loading intentionally unloads before preparation; preserve that contract.
-        QCOMPARE(backend.total(), 0);
-        QVERIFY(!backend.running());
-        QVERIFY(!backend.error().isEmpty());
-        backend.clearError();
-        backend.stop();
-        QFile emptyFile(temporary.filePath("empty.xml"));
-        QVERIFY(emptyFile.open(QIODevice::WriteOnly));
-        emptyFile.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?><i></i>");
-        emptyFile.close();
-        loaded.clear();
-        backend.loadFile(emptyFile.fileName());
-        QTRY_VERIFY_WITH_TIMEOUT(!loaded.isEmpty(), 10000);
-        QCOMPARE(backend.total(), 0);
-        QVERIFY(!backend.error().isEmpty());
-        QVERIFY(!start->isEnabled());
-        backend.clearError();
-        auto* tabs = find("danmakuSourceTabs");
-        QCOMPARE(tabs->property("count").toInt(), 2);
-        tabs->setProperty("currentIndex", 1);
-        window->setProperty("selectedPage", 3);
-        QTest::qWait(50);
-        window->setProperty("selectedPage", 1);
-        QCOMPARE(tabs->property("currentIndex").toInt(), 1);
-        auto* home = find("homePage"); QVERIFY(home);
-        auto* matchingDialog = window->findChild<QObject*>("matchingRecoveryDialog"); QVERIFY(matchingDialog);
-        QVERIFY(QMetaObject::invokeMethod(matchingDialog, "openSettings"));
-        QTRY_COMPARE(window->property("selectedPage").toInt(), 3);
-        QTRY_VERIFY(find("danmakuServerInput"));
-        QTRY_VERIFY(find("danmakuServerInput")->hasActiveFocus());
-        const auto serverPosition = find("danmakuServerInput")->mapToScene(QPointF());
-        QVERIFY(serverPosition.y() >= 0 && serverPosition.y() < window->height());
-        QTest::keyClick(window, Qt::Key_Tab);
-        QVERIFY(!find("danmakuServerInput")->hasActiveFocus());
-        const auto defaults = settings->values()["danmakuServers"].toStringList();
-        activate(find("addDanmakuServer"));
-        QTRY_VERIFY(find("danmakuServerInput1"));
-        QCOMPARE(settings->values()["danmakuServers"].toStringList(), defaults);
-        auto editServer = [&](const char* name, const QString& value) {
-            auto* input = find(name); QVERIFY(input);
-            input->setProperty("text", value);
-            QVERIFY(QMetaObject::invokeMethod(input, "editingFinished"));
-        };
-        editServer("danmakuServerInput1", "bad address");
-        QCOMPARE(find("danmakuServerInput1")->property("text").toString(), QString("bad address"));
-        QCOMPARE(settings->values()["danmakuServers"].toStringList(), defaults);
-        editServer("danmakuServerInput1", defaults.first());
-        QCOMPARE(settings->values()["danmakuServers"].toStringList(), defaults);
-        editServer("danmakuServerInput1", "https://backup.test");
-        activate(find("saveServersBtn"));
-        QCOMPARE(settings->values()["danmakuServers"].toStringList().size(), 2);
-        auto* onlineFrame = find("settingsPage");
-        QVERIFY(onlineFrame);
-        QVERIFY(QMetaObject::invokeMethod(onlineFrame, "focusOnlineSettings"));
-        for (const auto& theme : {QString("light"), QString("dark")}) {
-            settings->setValue("theme", theme);
-            window->resize(520, 640);
-            QVERIFY(QMetaObject::invokeMethod(onlineFrame, "reveal", Q_ARG(QVariant, QVariant::fromValue(find("danmakuServerInput")))));
-            QTest::qWait(100);
-            QVERIFY(window->grabWindow().save(output + "/online-servers-" + theme + ".png"));
-        }
-        activate(find("serverUp1"));
-        activate(find("saveServersBtn"));
-        QCOMPARE(settings->values()["danmakuServers"].toStringList().first(), QString("https://backup.test"));
-        QVERIFY(QMetaObject::invokeMethod(onlineFrame, "focusOnlineSettings"));
-        activate(find("serverDown0"));
-        activate(find("saveServersBtn"));
-        QCOMPARE(settings->values()["danmakuServers"].toStringList().first(), defaults.first());
-        QVERIFY(QMetaObject::invokeMethod(onlineFrame, "focusOnlineSettings"));
-        activate(find("serverRemove1"));
-        activate(find("serverRemove0"));
-        activate(find("saveServersBtn"));
-        QVERIFY(settings->values()["danmakuServers"].toStringList().isEmpty());
-        QVERIFY(QMetaObject::invokeMethod(onlineFrame, "focusOnlineSettings"));
-        QVERIFY(find("addDanmakuServer")->hasActiveFocus());
-        QVERIFY(settings->setDanmakuServers(defaults));
-        QVERIFY(QMetaObject::invokeMethod(onlineFrame, "focusOnlineSettings"));
-        QTRY_VERIFY(find("danmakuServerInput"));
-        activate(find("cancelServersBtn"));
-        window->setProperty("selectedPage", 2);
-        logs->clear();
-        QTRY_COMPARE(find("logEmptyState")->property("text").toString(), QString::fromUtf8("暂无日志"));
-        logs->append("INFO", QString::fromUtf8("测试消息：这是一条用于检查换行和筛选状态的中文日志。"));
-        find("logFilter")->setProperty("currentIndex", 2);
-        QTRY_VERIFY(find("logEmptyState")->isVisible());
-        QCOMPARE(find("logEmptyState")->property("text").toString(), QString::fromUtf8("当前筛选无结果"));
-        logs->append("ERROR", "test error");
-        QTRY_VERIFY(!find("logEmptyState")->isVisible());
-        QCOMPARE(logs->countForLevel("ERROR"), 1);
-        find("logFilter")->setProperty("currentIndex", 0);
-        for (const auto& theme : {QString("light"), QString("dark")}) {
-            settings->setValue("theme", theme);
-            for (int width : {520, 800, 1080}) {
-                window->resize(width, width == 520 ? 480 : 760);
-                for (int page = 0; page < 4; ++page) {
-                    QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, page)));
-                    QTest::qWait(80);
-                    QVERIFY(window->grabWindow().save(output + QString("/page-%1-%2-%3.png").arg(page).arg(theme).arg(width)));
-                }
-                auto* font = find("fontFamilyCombo");
-                auto* frame = font->parentItem();
-                while (frame && !frame->property("bodyItem").isValid()) frame = frame->parentItem();
-                QVERIFY(frame);
-                auto* body = qobject_cast<QQuickItem*>(frame->property("bodyItem").value<QObject*>());
-                auto* bar = qobject_cast<QQuickItem*>(frame->property("verticalBar").value<QObject*>());
-                auto* flick = frame->property("contentItem").value<QObject*>();
-                QVERIFY(body && bar && flick);
-                const auto bodyRight = body->mapToScene(QPointF(body->width(), 0)).x();
-                const auto barLeft = bar->mapToScene(QPointF()).x();
-                QVERIFY(bodyRight + 7 <= barLeft);
-                QCOMPARE(qRound(frame->width() - bar->x() - bar->width()), 4);
-                const auto bodyWidth = body->width();
-                for (qreal position : {0.0, 0.4, 1.0}) {
-                    bar->setProperty("position", std::min(position, 1 - bar->property("size").toReal()));
-                    QTest::qWait(50);
-                    QCOMPARE(body->width(), bodyWidth);
-                    QVERIFY(flick->property("contentWidth").toReal() <= frame->width());
-                    QVERIFY(window->grabWindow().save(output + QString("/scroll-%1-%2-%3.png").arg(theme).arg(width).arg(position)));
-                }
-                QVERIFY(flick->property("atYEnd").toBool());
-                bar->setProperty("position", 0.0);
-                QTest::qWait(50);
-                const QPoint dragStart = bar->mapToScene(QPointF(bar->width() / 2, bar->property("topPadding").toReal() + 3)).toPoint();
-                const QPoint dragEnd = bar->mapToScene(QPointF(bar->width() / 2, bar->height() - bar->property("bottomPadding").toReal() - 2)).toPoint();
-                QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, dragStart);
-                QTest::mouseMove(window, dragEnd, 80);
-                QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, dragEnd);
-                QTRY_VERIFY(flick->property("atYEnd").toBool());
-                QVERIFY(QMetaObject::invokeMethod(frame, "reveal", Q_ARG(QVariant, QVariant::fromValue(font))));
-                font->forceActiveFocus();
-                QTest::qWait(80);
-                QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
-                    font->mapToScene(QPointF(font->width() - 16, font->height() / 2)).toPoint());
-                auto* popup = font->property("popup").value<QObject*>();
-                QTRY_VERIFY(popup->property("opened").toBool());
-                QVERIFY(window->grabWindow().save(output + QString("/font-popup-%1-%2.png").arg(theme).arg(width)));
-                QTest::keyClick(window, Qt::Key_Escape);
-                QTRY_VERIFY(!popup->property("visible").toBool());
-                font->forceActiveFocus();
-                QTest::keyClick(window, Qt::Key_F4);
-                QTRY_VERIFY(popup->property("opened").toBool());
-                QTest::keyClick(window, Qt::Key_Escape);
-                QTRY_VERIFY(!popup->property("visible").toBool());
-                // Lower settings groups must be scrolled into view, beyond
-                // initial page snapshots. Exercise the standard switch.
-                for (const char* name : {"cacheGroup", "diagnosticsGroup"}) {
-                    auto* group = find(name);
-                    QVERIFY(group);
-                    QTest::qWait(50);
-                    QVERIFY(QMetaObject::invokeMethod(frame, "reveal", Q_ARG(QVariant, QVariant::fromValue(group))));
-                    QTest::qWait(80);
-                    group->setFocus(false);
-                    QVERIFY(window->grabWindow().save(output + QString("/group-%1-%2-%3.png").arg(name).arg(theme).arg(width)));
-                    if (QString::fromLatin1(name) == "diagnosticsGroup") {
-                        const bool before = settings->values().value("debug").toBool();
-                        activate(find("diagnosticsDebugSwitch"));
-                        QCOMPARE(settings->values().value("debug").toBool(), !before);
-
-                        settings->setValue("debug", before);
-                    }
-                }
-                QVERIFY(QMetaObject::invokeMethod(frame, "reveal", Q_ARG(QVariant, QVariant::fromValue(font))));
-            }
-        }
-        auto* font = find("fontFamilyCombo");
-        auto* input = qobject_cast<QQuickItem*>(font->property("contentItem").value<QObject*>());
-        QVERIFY(input);
-        input->forceActiveFocus();
-        const auto previousFamily = settings->values().value("fontFamily").toString();
-        QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
-        for (const auto ch : QString("Segoe UI")) QTest::keyClick(window, ch.toLatin1());
-        QCOMPARE(settings->values().value("fontFamily").toString(), previousFamily);
-        QTest::keyClick(window, Qt::Key_Return);
-        QTRY_COMPARE(settings->values().value("fontFamily").toString(), QString("Segoe UI"));
-        QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
-        QTest::keyClick(window, Qt::Key_Backspace);
-        QTest::keyClick(window, Qt::Key_Tab);
-        QTRY_COMPARE(font->property("editText").toString(), QString("Segoe UI"));
         QCOMPARE(warnings.count(), 0);
         backend.stop();
     }

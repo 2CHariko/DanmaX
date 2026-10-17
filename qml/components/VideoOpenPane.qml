@@ -11,19 +11,12 @@ SettingsRow {
     description: backend.videoOpen.pending ? backend.videoOpen.status
         : backend.videoOpen.active ? backend.media.status
         : backend.videoOpen.status.length > 0 ? backend.videoOpen.status
-        : (backend.videoOpen.synchronizes ? "拖入本地视频，打开播放器并匹配弹幕。" : "当前配置仅打开视频，不启用弹幕同步。")
+        : "拖入本地视频，打开播放器并匹配弹幕。"
     Button {
         objectName: "openVideoButton"
         text: "打开视频"
         Accessible.name: "选择视频并使用 " + pane.backend.videoOpen.playerName + " 播放"
         onClicked: videoDialog.open()
-    }
-    Button {
-        objectName: "confirmCurrentVideoButton"
-        visible: pane.backend.videoOpen.needsConfirmation
-        text: "使用当前视频"
-        Accessible.description: "确认播放器当前播放的就是所选视频"
-        onClicked: pane.backend.videoOpen.confirmCurrent()
     }
     Button {
         objectName: "cancelVideoOpenButton"

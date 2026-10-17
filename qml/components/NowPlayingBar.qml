@@ -9,10 +9,9 @@ Control {
     required property QtObject backend
     readonly property QtObject player: backend.nowPlaying
     signal openVideo()
-    signal openDanmaku()
+    signal openStandalone()
     signal replaceXml()
     signal showSources()
-    signal showPlayer()
     signal showSettings()
     signal showPlaying()
     function time(value) {
@@ -67,15 +66,8 @@ Control {
                 Accessible.name: "当前播放 " + text
                 MouseArea { anchors.fill: parent; onClicked: bar.showPlaying(); cursorShape: Qt.PointingHandCursor }
             }
-            ToolButton {
-                text: "选集"
-                enabled: bar.player.canSelectEpisode
-                onClicked: bar.player.selectEpisode()
-                ToolTip.visible: hovered
-                ToolTip.text: bar.player.video ? "尚无本地视频选集列表" : "选择弹幕分集"
-            }
-            ToolButton { objectName: "nowPlayingDanmaku"; text: "弹幕"; onClicked: danmakuMenu.popup() }
-            ToolButton { text: "播放器"; onClicked: bar.player.video ? playerMenu.popup() : bar.showPlayer() }
+            ToolButton { objectName: "nowPlayingDanmaku"; text: "弹幕"; enabled: bar.player.canSelectSource; onClicked: danmakuMenu.popup() }
+            ToolButton { text: "播放器"; visible: !bar.player.standalone; onClicked: playerMenu.popup() }
             ToolButton { objectName: "nowPlayingMore"; text: "更多"; onClicked: moreMenu.popup() }
         }
     }
@@ -85,9 +77,10 @@ Control {
         focus: true
         onOpened: currentIndex = 0
         MenuItem { objectName: "nowPlayingVisibility"; text: "显示弹幕"; checkable: true; checked: bar.backend.danmakuVisible; onTriggered: bar.backend.danmakuVisible = checked }
-        MenuItem { text: "更换弹幕 XML"; onTriggered: bar.replaceXml() }
+        MenuItem { objectName: "loadCurrentXml"; text: bar.player.count > 0 ? "更换弹幕 XML" : "加载弹幕 XML"; enabled: bar.player.canSelectSource; onTriggered: bar.replaceXml() }
         MenuItem { text: "搜索弹幕"; onTriggered: bar.player.searchDanmaku() }
-        MenuItem { text: "选择缓存与来源"; onTriggered: bar.showSources() }
+        MenuItem { objectName: "selectCachedDanmaku"; text: "选择缓存弹幕"; onTriggered: bar.showSources() }
+        MenuItem { text: "重新匹配弹幕"; visible: bar.player.video; height: visible ? implicitHeight : 0; onTriggered: bar.backend.media.retryMatching() }
         MenuSeparator {}
         MenuItem { objectName: "unloadDanmaku"; text: "卸载弹幕"; enabled: bar.player.count > 0; onTriggered: bar.player.unloadDanmaku() }
     }
@@ -97,7 +90,6 @@ Control {
         onOpened: currentIndex = 1
         MenuItem { text: "当前播放器 · " + bar.backend.videoOpen.playerName; enabled: false }
         MenuItem { text: "外部播放器设置"; onTriggered: bar.showSettings() }
-        MenuItem { text: "跟随其他播放器播放弹幕"; onTriggered: bar.showPlayer() }
     }
     AppMenu {
         id: moreMenu
@@ -105,8 +97,8 @@ Control {
         focus: true
         onOpened: currentIndex = 0
         MenuItem { text: "打开视频"; onTriggered: bar.openVideo() }
-        MenuItem { text: "独立播放弹幕 XML"; onTriggered: bar.openDanmaku() }
+        MenuItem { objectName: "openStandaloneDanmaku"; text: "独立播放弹幕 XML"; onTriggered: bar.openStandalone() }
         MenuSeparator {}
-        MenuItem { objectName: "stopPlayback"; text: "结束本次播放"; enabled: bar.player.active; onTriggered: bar.player.endPlayback() }
+        MenuItem { objectName: "stopPlayback"; text: bar.player.ownsPlayer ? "结束播放并关闭播放器" : bar.player.standalone ? "结束独立弹幕播放" : "结束本次播放"; enabled: bar.player.active || bar.player.openingStandalone; onTriggered: bar.player.endPlayback() }
     }
 }

@@ -9,12 +9,17 @@ class AppController;
 class NowPlayingModel final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool video READ video NOTIFY changed)
+    Q_PROPERTY(bool standalone READ standalone NOTIFY changed)
+    Q_PROPERTY(bool openingStandalone READ openingStandalone NOTIFY changed)
+    Q_PROPERTY(bool canSelectSource READ canSelectSource NOTIFY changed)
+    Q_PROPERTY(QObject* sourceSession READ sourceSession NOTIFY changed)
+    Q_PROPERTY(quint64 contextId READ contextId NOTIFY changed)
+    Q_PROPERTY(bool ownsPlayer READ ownsPlayer NOTIFY changed)
     Q_PROPERTY(bool active READ active NOTIFY changed)
     Q_PROPERTY(bool playing READ playing NOTIFY changed)
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
     Q_PROPERTY(bool canPlay READ canPlay NOTIFY changed)
     Q_PROPERTY(bool canSeek READ canSeek NOTIFY changed)
-    Q_PROPERTY(bool canSelectEpisode READ canSelectEpisode NOTIFY changed)
     Q_PROPERTY(QString title READ title NOTIFY changed)
     Q_PROPERTY(QString subtitle READ subtitle NOTIFY changed)
     Q_PROPERTY(QString coverUrl READ coverUrl NOTIFY changed)
@@ -28,12 +33,17 @@ class NowPlayingModel final : public QObject {
   public:
     explicit NowPlayingModel(AppController* app);
     bool video() const;
+    bool standalone() const;
+    bool openingStandalone() const;
+    bool canSelectSource() const;
+    QObject* sourceSession() const;
+    quint64 contextId() const;
+    bool ownsPlayer() const;
     bool active() const;
     bool playing() const;
     bool busy() const;
     bool canPlay() const;
     bool canSeek() const;
-    bool canSelectEpisode() const;
     QString title() const;
     QString subtitle() const;
     QString coverUrl() const;
@@ -47,12 +57,11 @@ class NowPlayingModel final : public QObject {
     Q_INVOKABLE void togglePlayback();
     Q_INVOKABLE void seek(double seconds);
     Q_INVOKABLE void endPlayback();
-    Q_INVOKABLE void openDanmaku(const QString& path);
+    Q_INVOKABLE void openStandalone(const QString& path);
+    Q_INVOKABLE void cancelStandaloneOpen();
     Q_INVOKABLE void replaceDanmaku(const QString& path);
     Q_INVOKABLE void unloadDanmaku();
     Q_INVOKABLE void searchDanmaku();
-    Q_INVOKABLE void selectEpisode();
-    Q_INVOKABLE void cancelEpisodeSelection() { pendingEpisode_ = false; }
     void observe(const MediaSample& sample);
   signals:
     void changed();
@@ -70,8 +79,7 @@ class NowPlayingModel final : public QObject {
     MediaSample sample_, expected_;
     QTimer deadline_;
     QString error_;
-    quint64 request_{}, ownerGeneration_{}, pendingLoad_{}, displayGeneration_{};
-    bool pending_{}, accepted_{}, observed_{}, desiredPlay_{}, pendingEpisode_{};
-    bool pendingManual_{true}, pendingPaused_{}, startPending_{};
+    quint64 request_{}, ownerGeneration_{}, displayGeneration_{};
+    bool pending_{}, accepted_{}, observed_{}, desiredPlay_{};
     double desiredPosition_{-1}, requestedAt_{};
 };

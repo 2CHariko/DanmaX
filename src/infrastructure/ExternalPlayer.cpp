@@ -8,15 +8,17 @@ class PotPlayerAdapter final : public IExternalPlayerAdapter {
   public:
     QString id() const override { return "potplayer"; }
     QString displayName() const override { return "PotPlayer"; }
+    bool managedPlayback() const override { return true; }
+    QString synchronizationLabel() const override { return QStringLiteral("独立实例同步"); }
     QStringList discoverCandidates() const override { return PotPlayerLauncher::discoverCandidates(); }
     QString executableFilter() const override { return QStringLiteral("PotPlayer (PotPlayerMini64.exe)"); }
     bool canDiscover() const override { return true; }
     QString discover() const override { return PotPlayerLauncher::discover(); }
     QString validate(const QString& path) const override { return PotPlayerLauncher::validate(path); }
     QString preflight(const ExternalPlayerProfile& profile) const override {
-        return PotPlayerLauncher::preflight(profile.executable);
+        return validate(profile.executable);
     }
-    QStringList arguments(const ExternalPlayerProfile&, const QString& file) const override { return {file, "/current"}; }
+    QStringList arguments(const ExternalPlayerProfile&, const QString& file) const override { return {file, "/new"}; }
     QString sessionId(const ExternalPlayerProfile&) const override { return "PotPlayerMini64.exe"; }
 };
 class VlcAdapter final : public IExternalPlayerAdapter {

@@ -1,5 +1,5 @@
 #requires -Version 7.0
-param([Parameter(Mandatory)][string] $Executable, [string] $SessionId = '')
+param([Parameter(Mandatory)][string] $Executable)
 . "$PSScriptRoot/common.ps1"
 Invoke-ProjectEnvironment {
     $source = Get-ProjectPath $Executable
@@ -111,7 +111,6 @@ Invoke-ProjectEnvironment {
     Invoke-StaticCheck 'native-light' -Native -Extra @('--theme','light','--page','settings','--capture',(Join-Path $root 'light.png'))
     Invoke-StaticCheck 'image-backend' -ImageBackend
     Invoke-StaticCheck 'native-module-audit' -Native -Benchmark -Extra @('--report',(Join-Path $root 'native-metrics.json'))
-    if ($SessionId) { Invoke-StaticCheck 'real-smtc' -Native -Extra @('--media-session',$SessionId) }
     $inventory = Get-ChildItem -LiteralPath $directory -Recurse -File | ForEach-Object {
         [ordered]@{path=[IO.Path]::GetRelativePath($directory,$_.FullName);bytes=$_.Length}
     }

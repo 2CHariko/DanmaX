@@ -22,9 +22,7 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
       logs_(dataDirectory),
       coordinator_(this),
       danmaku_(dataDirectory, cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
-      library_(danmaku_.library_),
       metadata_(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory, this),
-      automatic_(danmaku_.automatic_),
       videoOpen_(this, std::move(videoHooks)),
       players_(dataDirectory, this),
       monitor_(this, QDir(cacheDirectory.isEmpty() ? QDir(dataDirectory).filePath("cache") : cacheDirectory).filePath("players/vlc")),
@@ -44,8 +42,6 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
             [this](const QString& message) { logs_.append("WARN", message); });
     file_ = settings_.values()["lastFile"].toString();
     danmaku_.file_ = file_;
-    if (settings_.values()["targetSession"].toString().startsWith("danmax-vlc:")) settings_.setValue("targetSession", "");
-    library_.setServers(settings_.values()["danmakuServers"].toStringList());
     connect(&videoOpen_, &VideoOpenService::playerPathSelected, this, [this](const QString& path) {
         if (!players_.setExecutable(path)) {
             videoOpen_.configureProfile(players_.current()); videoOpen_.cancel(); fail(players_.error());
@@ -61,52 +57,21 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
         else videoOpen_.backendPrepared(result.sessionId);
     });
     connect(&videoOpen_, &VideoOpenService::managedOpenCancelled, &monitor_, &MediaMonitor::cancelManagedOpen);
+    connect(&monitor_, &MediaMonitor::ownedPlayerCloseFailed, this, [this](const QString& error) { logs_.append("WARNING", error); });
+    connect(&monitor_, &MediaMonitor::ownedPlayerExited, this, [this](const QString& id) {
+        if (media_.boundSession() != id) return;
+        if (!media_.active()) {
+            media_.status_ = QStringLiteral("本次播放器已退出，观看进度已保留"); emit media_.stateChanged(); return;
+        }
+        if (coordinator_.owner() != PlaybackCoordinator::Media) return;
+        const bool opening = videoOpen_.pending();
+        nowPlaying_.endPlayback();
+        media_.status_ = QStringLiteral("播放器已退出，观看进度已保留");
+        if (opening) media_.error_ = QStringLiteral("播放器在视频就绪前退出，请重新打开视频");
+        emit media_.stateChanged();
+    });
     connect(this, &AppController::stateChanged, &danmaku_, &DanmakuSession::changed);
     connect(this, &AppController::metricsChanged, &danmaku_, &DanmakuSession::changed);
-    connect(&library_, &DanmakuLibrary::operationStarted, this, [this] {
-        automatic_.suspend(); automaticSource_ = false;
-    });
-    connect(&automatic_, &AutomaticDanmaku::contentInvalidated, this, [this] {
-        if (coordinator_.owner() != PlaybackCoordinator::Danmaku) return;
-        discardLoad(); library_.cancel(); automaticSource_ = true; resetPlayback(true);
-    });
-    connect(automatic_.playbackRecovery(), &PlaybackRecovery::controlRequested, &monitor_, &MediaMonitor::requestPlayback);
-    connect(&monitor_, &MediaMonitor::playbackControlFinished, automatic_.playbackRecovery(), &PlaybackRecovery::controlFinished);
-    connect(automatic_.playbackRecovery(), &PlaybackRecovery::showRequested, this, &AppController::showMainWindow);
-    connect(&automatic_, &AutomaticDanmaku::changed, this, [this] {
-        if (automatic_.suspended()) automaticSource_ = false;
-    });
-    connect(&automatic_, &AutomaticDanmaku::sourceReady, this, [this] {
-        auto result = automatic_.takeReadyResult();
-        auto sample = automatic_.latestSample();
-        const double age = MediaMonitor::monotonicSeconds() - sample.observedAt;
-        if (!result || !automatic_.enabled() || automatic_.suspended() || manual_ ||
-            coordinator_.owner() != PlaybackCoordinator::Danmaku ||
-            sample.id != boundSession() || age < 0 || age > 2.5) return;
-        QScopedValueRollback guard(automaticCommit_, true);
-        discardLoad(); library_.cancel();
-        commitDanmakuItems(std::move(result->items), result->metadata.value("animeTitle").toString() + QStringLiteral(" · ") +
-                    result->metadata.value("episodeTitle").toString(), result->metadata);
-        automaticSource_ = true;
-        start(false);
-        sample.generation = mediaGeneration_;
-        onSample(sample);
-        library_.refreshCache();
-        emit loadCompleted(true);
-    });
-    connect(&library_, &DanmakuLibrary::sourceLoadStarted, this, [this] {
-        discardLoad();
-        onlineLoadGeneration_ = loadGeneration_;
-        emit stateChanged();
-    });
-    connect(&library_, &DanmakuLibrary::sourceReady, this, [this] {
-        auto result = library_.takeReadyResult();
-        if (!result || onlineLoadGeneration_ != loadGeneration_) return;
-        const auto title = result->metadata.value("animeTitle").toString() + QStringLiteral(" · ") +
-                           result->metadata.value("episodeTitle").toString();
-        commitDanmakuItems(std::move(result->items), title, result->metadata);
-        emit loadCompleted(true);
-    });
     connect(&settings_, &SettingsStore::changed, this, &AppController::configure);
     connect(&settings_, &SettingsStore::errorChanged, this, [this] {
         if (!settings_.error().isEmpty())
@@ -159,9 +124,9 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
         if (targetSessionConnected_ && MediaMonitor::monotonicSeconds() - connectionObservedAt_ > 2.5) {
             targetSessionConnected_ = false;
             disconnectedContentCleared_ = false;
-            auto missing = coordinator_.owner() == PlaybackCoordinator::Media ? media_.latest_ : automatic_.latestSample();
+            auto missing = media_.latest_;
             missing.found = false; missing.observedAt = MediaMonitor::monotonicSeconds(); missing.generation = mediaGeneration_;
-            if (coordinator_.owner() == PlaybackCoordinator::Media) media_.observe(missing); else automatic_.observe(missing);
+            if (coordinator_.owner() == PlaybackCoordinator::Media) media_.observe(missing);
             updatePresentationVisibility(true, false);
             if (running_ && !manual_ && !disconnectCleanup_.isActive()) disconnectCleanup_.start();
             emit stateChanged();
@@ -175,11 +140,11 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
     logs_.append("INFO", QStringLiteral("C++ / Qt FluentWinUI3 已启动"));
 }
 AppController::~AppController() {
+    danmaku_.deactivate();
     media_.deactivate();
     windowLayers_.attach(nullptr, nullptr, nullptr);
     settings_.flushPending();
     discardLoad();
-    library_.cancel();
     LogModel::uninstall();
 }
 QString AppController::localPath(const QString& path) {
@@ -283,34 +248,9 @@ void AppController::clearError() {
 void AppController::configure() {
     const auto s = settings_.values();
     media_.configure(s["danmakuServers"].toStringList());
-    library_.setServers(s["danmakuServers"].toStringList());
+    danmaku_.configure(s["danmakuServers"].toStringList());
     metadata_.setShowChineseAnime(s["homeShowChineseAnime"].toBool());
-    automatic_.configure(!startup_ && coordinator_.owner() == PlaybackCoordinator::Danmaku && s["automaticDanmaku"].toBool(),
-                         s["danmakuServers"].toStringList());
-    if (!automatic_.enabled()) automaticSource_ = false;
     logs_.configure(s["logToFile"].toBool(), s["logLevel"].toString());
-    if (coordinator_.owner() != PlaybackCoordinator::Media && lastSettings_.value("targetSession") != s["targetSession"]) {
-        automatic_.reset();
-        if (automaticSource_) { resetPlayback(true); automaticSource_ = false; }
-        mediaGeneration_ = monitor_.select(s["targetSession"].toString(), true);
-        targetSessionConnected_ = false;
-        connectionObservedAt_ = 0;
-        if (!manual_) {
-            mediaIdentity_.clear();
-            syncConnected_ = false;
-            lastSampleObservedAt_ = 0;
-            mediaClock_ = {};
-            sampleTime_.invalidate();
-            if (running_) {
-                playing_ = false;
-                position_ = 0;
-                duration_ = 0;
-                mediaTitle_.clear();
-                resetDanmakuTimeline();
-                setPlaybackState(WaitingForPlayer);
-            }
-        }
-    }
     if (running_ && !manual_ && lastSettings_.value("timeOffset") != s["timeOffset"]) {
         if (syncConnected_) {
             mediaClock_.advance(monotonicTime_.nsecsElapsed() * 1e-9);
@@ -492,9 +432,8 @@ void AppController::loadFile(const QString& input) {
     });
 }
 void AppController::cancelLoad() {
-    automatic_.suspend(); automaticSource_ = false;
+    automaticSource_ = false;
     discardLoad();
-    library_.cancel();
     status_ = QStringLiteral("已取消载入");
     emit stateChanged();
 }
@@ -510,19 +449,12 @@ void AppController::discardLoad() {
 }
 void AppController::start(bool manual) {
     if (!presentingMedia_) danmaku_.manual_ = manual;
-    if (!presentingMedia_ && coordinator_.owner() != PlaybackCoordinator::Danmaku) {
-        if (loading_ || (danmaku_.items_.empty() && (manual || !settings_.values()["automaticDanmaku"].toBool()))) {
-            fail(QStringLiteral("请先载入弹幕，或开启自动匹配后开始跟随"), true); return;
-        }
-        const bool replacingMedia = coordinator_.owner() == PlaybackCoordinator::Media;
-        if (replacingMedia) handoff(PlaybackCoordinator::Danmaku);
-        else { automatic_.reset(); library_.cancel(); discardLoad(); coordinator_.acquire(PlaybackCoordinator::Danmaku); }
-        startup_ = false; manual_ = manual; danmaku_.manual_ = manual;
-        // With no previous owner, the prepared engine is already loaded. Keeping
-        // its surface avoids losing exposure and suppressing time-zero comments.
-        if ((replacingMedia || engine_.items().empty()) && !danmaku_.items_.empty()) commitItems(danmaku_.items_, danmaku_.title_);
-        configure();
-        if (danmaku_.items_.empty()) { status_ = QStringLiteral("正在等待播放器并自动匹配弹幕"); emit stateChanged(); return; }
+    if (!presentingMedia_) {
+        if ((!manual && renderTestSession_.isEmpty()) || loading_ || danmaku_.items_.empty()) { fail(QStringLiteral("请通过打开视频开始播放")); return; }
+        if (coordinator_.owner() == PlaybackCoordinator::Media) handoff(PlaybackCoordinator::Danmaku);
+        else coordinator_.acquire(PlaybackCoordinator::Danmaku);
+        manual_ = danmaku_.manual_ = manual;
+        if (engine_.items().empty()) commitItems(danmaku_.items_, danmaku_.title_);
     }
     if (running_) return;
     if (rendererSettingsPending_) applyRendererSettings();
@@ -530,7 +462,7 @@ void AppController::start(bool manual) {
         fail(QStringLiteral("请先载入有效弹幕文件"), true);
         return;
     }
-    if (!automaticCommit_) { automatic_.suspend(); automaticSource_ = false; }
+    if (!automaticCommit_) automaticSource_ = false;
     manual_ = manual;
     position_ = 0;
     duration_ = manual ? loadedDuration_ : 0;
@@ -559,20 +491,23 @@ void AppController::start(bool manual) {
     emit metricsChanged();
 }
 void AppController::stop() {
-    if (coordinator_.owner() == PlaybackCoordinator::Media) { media_.stopDanmaku(); return; }
+    if (coordinator_.owner() == PlaybackCoordinator::Media || danmaku_.active()) {
+        nowPlaying_.endPlayback();
+        return;
+    }
+    danmaku_.cancelPreparation();
     videoOpen_.cancel();
-    automatic_.suspend(); automaticSource_ = false;
-    library_.cancel();
+    automaticSource_ = false;
     discardLoad();
     resetPlayback(false);
 }
 void AppController::unload() {
     if (coordinator_.owner() == PlaybackCoordinator::Media) { media_.unload(); return; }
+    if (danmaku_.active()) { danmaku_.unload(); return; }
     unloadDanmaku();
 }
 void AppController::unloadDanmaku() {
-    automatic_.suspend(); automaticSource_ = false;
-    library_.cancel();
+    automaticSource_ = false;
     discardLoad();
     danmaku_.items_.clear(); danmaku_.title_.clear(); danmaku_.status_ = QStringLiteral("请选择弹幕来源");
     danmaku_.metadata_.clear();
@@ -584,7 +519,7 @@ void AppController::setManualMode(bool manual) {
     if (coordinator_.owner() == PlaybackCoordinator::Media) { danmaku_.manual_ = manual; emit danmaku_.changed(); return; }
     if (running_ || manual_ == manual) return;
     danmaku_.manual_ = manual;
-    if (manual) { videoOpen_.cancel(); automatic_.suspend(); automaticSource_ = false; }
+    if (manual) { videoOpen_.cancel(); automaticSource_ = false; }
     manual_ = manual;
     emit stateChanged();
 }
@@ -616,11 +551,12 @@ void AppController::commitDanmakuItems(std::vector<danmaku::Item> items, const Q
     emit danmaku_.changed();
 }
 QString AppController::boundSession() const {
-    return coordinator_.owner() == PlaybackCoordinator::Media ? media_.boundSession() : settings_.values()["targetSession"].toString();
+    return coordinator_.owner() == PlaybackCoordinator::Media ? media_.boundSession() : renderTestSession_;
 }
 void AppController::handoff(PlaybackCoordinator::Owner owner) {
+    danmaku_.deactivate();
     if (coordinator_.owner() == PlaybackCoordinator::Media) media_.deactivate();
-    automatic_.reset(); library_.cancel(); discardLoad();
+    discardLoad();
     automaticSource_ = false; resetPlayback(true); coordinator_.acquire(owner);
     if (owner == PlaybackCoordinator::Danmaku) videoOpen_.cancel();
 }
@@ -726,24 +662,18 @@ void AppController::seek(double position) {
     }
     emit metricsChanged();
 }
-void AppController::selectSession(const QString& id) {
-    const auto target = id.trimmed();
-    for (const auto& entry : sessions_) {
-        const auto session = entry.toMap();
-        if (session.value("id").toString() == target && session.contains("connectable") && !session.value("connectable").toBool()) {
-            error_ = session.value("reason").toString(); emit stateChanged(); return;
+void AppController::setRenderTestSession(const QString& id) {
+    if (coordinator_.owner() == PlaybackCoordinator::Media) return;
+    renderTestSession_ = id; mediaGeneration_ = monitor_.select(id, true);
+    targetSessionConnected_ = false; connectionObservedAt_ = 0;
+    if (!manual_) {
+        syncConnected_ = false; mediaClock_ = {}; lastSampleObservedAt_ = 0;
+        position_ = samplePosition_ = 0; duration_ = 0; mediaIdentity_.clear(); sampleTime_.invalidate();
+        if (running_) {
+            playing_ = false; resetDanmakuTimeline(); setPlaybackState(WaitingForPlayer);
+            updatePresentationVisibility(true, false); emit stateChanged(); emit metricsChanged();
         }
     }
-    settings_.setValue("targetSession", target);
-}
-void AppController::setAutomaticDanmaku(bool enabled) {
-    if (enabled && coordinator_.owner() != PlaybackCoordinator::Media) {
-        if (coordinator_.owner() == PlaybackCoordinator::None) handoff(PlaybackCoordinator::Danmaku);
-        startup_ = false;
-    }
-    settings_.setValue("automaticDanmaku", enabled);
-    configure();
-    if (enabled) automatic_.retry();
 }
 void AppController::setPlaybackState(PlaybackState state) {
     playbackState_ = state;
@@ -797,7 +727,7 @@ void AppController::onSample(const MediaSample& s) {
         else if (running_ && !manual_ && !disconnectedContentCleared_ && !disconnectCleanup_.isActive()) disconnectCleanup_.start();
         if (coordinator_.owner() == PlaybackCoordinator::Media) {
             if (!presentingMedia_) media_.observe(s);
-        } else if (!manual_ && !startup_ && coordinator_.owner() == PlaybackCoordinator::Danmaku) automatic_.observe(s);
+        }
         nowPlaying_.observe(s);
     }
     if (!running_ || manual_ || s.generation != mediaGeneration_ ||
@@ -832,7 +762,7 @@ void AppController::onSample(const MediaSample& s) {
     double actual = std::max(0.0, s.position);
     if (s.duration > 0) actual = std::min(actual, s.duration);
     const bool stopped = s.playback == MediaSample::Playback::Stopped;
-    const auto identity = automaticSource_ && coordinator_.owner() != PlaybackCoordinator::Media ? automatic_.contentIdentity() : s.identity;
+    const auto identity = s.identity;
     const bool changed = !syncConnected_ || mediaIdentity_ != identity ||
                          (stopped && playbackState_ != PlayerStopped);
     const bool reset = mediaClock_.synchronize(actual, rate, samplePlaying,
@@ -1076,15 +1006,9 @@ void AppController::showMainWindow() {
     // activation change. Reapply the toolbar order after the QML raise.
     windowLayers_.invalidate();
 }
-void AppController::showOnlineDanmakuForAnime(const QString& animeTitle, const QString& episodeTitle, double episodeNumber) {
-    automatic_.suspend();
-    showMainWindow();
-    emit requestOnlineDanmakuSearch();
-    if (!animeTitle.trimmed().isEmpty()) {
-        if (episodeNumber > 0 || !episodeTitle.trimmed().isEmpty())
-            library_.searchAnimeForEpisode(animeTitle.trimmed(), episodeTitle, episodeNumber);
-        else library_.searchAnime(animeTitle.trimmed());
-    }
+void AppController::showOnlineDanmakuForAnime(const QString& title, const QString& episodeTitle, double episodeNumber) {
+    if (danmaku_.active()) danmaku_.searchForAnime(title, episodeTitle, episodeNumber);
+    else { danmaku_.cancelPreparation(); media_.searchForAnime(title, episodeTitle, episodeNumber); }
 }
 void AppController::clearDisconnectedContent() {
     if (!running_ || manual_ || targetSessionConnected_) return;
@@ -1098,13 +1022,9 @@ void AppController::clearDisconnectedContent() {
     emit metricsChanged();
 }
 void AppController::loadCachedDanmaku(const QString& key) {
-    if (key.isEmpty()) return;
-    library_.loadCached(key);
-    emit requestNavigateToPage(1, 1);
+    if (danmaku_.active()) danmaku_.loadCached(key); else { danmaku_.cancelPreparation(); media_.loadCached(key); }
 }
-void AppController::showAutomaticDanmakuChoice() {
-    automatic_.openRecovery();
-}
+void AppController::showAutomaticDanmakuChoice() { media_.showAutomaticDanmakuChoice(); }
 void AppController::copyRecoveryTitle() {
-    if (auto* clipboard = QGuiApplication::clipboard()) clipboard->setText(automatic_.playbackRecovery()->title());
+    if (auto* clipboard = QGuiApplication::clipboard()) clipboard->setText(qobject_cast<AutomaticDanmaku*>(media_.automatic())->playbackRecovery()->title());
 }

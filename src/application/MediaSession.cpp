@@ -6,7 +6,6 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
-#include <QScopedValueRollback>
 #include <atomic>
 #include <cmath>
 namespace {
@@ -53,21 +52,16 @@ MediaSession::MediaSession(const QString& data, const QString& cache, AppControl
             + result->metadata.value("episodeTitle").toString(), {{"kind", "online"}, {"metadata", result->metadata}});
     });
     connect(&library_, &DanmakuLibrary::sourceReady, this, [this] {
-        const auto result = library_.takeReadyResult(); if (!result || video_.isEmpty()) return;
+        const auto result = library_.takeReadyResult(); if (!result || !active_ || !ready_) return;
         const auto title = result->metadata.value("animeTitle").toString() + QStringLiteral(" · ")
             + result->metadata.value("episodeTitle").toString();
         const QVariantMap source{{"kind", "online"}, {"metadata", result->metadata}};
-        if (!active_) {
-            source_ = source; sourceTitle_ = title; total_ = static_cast<int>(result->items.size());
-            recent_.checkpoint(video_, latest_.position, latest_.duration, source_);
-            status_ = QStringLiteral("已为下次播放选择缓存弹幕"); emit stateChanged(); return;
-        }
-        if (!ready_) return;
+        if (contentMetadata_.isEmpty()) contentMetadata_ = result->metadata;
         automatic_.suspend(false); manualSource_ = true;
         accept(std::move(result->items), title, source);
     });
     connect(&library_, &DanmakuLibrary::operationStarted, this, [this] {
-        if (active_) { automatic_.suspend(false); manualSource_ = true; }
+        if (active_) { cancelLoader(); automatic_.suspend(false); manualSource_ = true; }
     });
     connect(&library_, &DanmakuLibrary::changed, this, [this] {
         if (active_ && ready_ && !library_.busy() && !library_.error().isEmpty()) {
@@ -174,27 +168,20 @@ void MediaSession::flush() {
 }
 void MediaSession::deactivate() {
     flush(); ++task_; saveTimer_.stop(); seekDeadline_.stop(); ++seekRequest_;
+    monitor_->closeOwnedPlayer(bound_);
     cancelLoader(); automatic_.reset(); library_.cancel();
     active_ = confirmed_ = ready_ = writing_ = restoring_ = restoreFailed_ = false;
-    status_ = video_.isEmpty() ? QString() : QStringLiteral("弹幕任务已交接，播放器保持原状态"); emit stateChanged();
+    total_ = 0; sourceTitle_.clear();
+    status_ = video_.isEmpty() ? QString() : bound_.startsWith("danmax-potplayer:")
+        ? QStringLiteral("已结束本次播放，正在关闭播放器") : QStringLiteral("弹幕任务已交接，播放器保持原状态"); emit stateChanged();
 }
 void MediaSession::cancelLoader() {
     ++loadGeneration_; loader_.request_stop(); if (loader_.joinable()) loader_.join(); loading_ = false;
 }
 void MediaSession::loadFile(const QString& input) {
-    if (!active_) {
-        const auto path = RecentVideoStore::normalizedPath(input);
-        if (!video_.isEmpty() && QFileInfo(path).isFile()) {
-            source_ = {{"kind", "xml"}, {"path", path}}; sourceTitle_ = path;
-            recent_.checkpoint(video_, latest_.position, latest_.duration, source_);
-            status_ = QStringLiteral("已为下次播放选择 XML"); emit stateChanged();
-        }
-        return;
-    }
-    if (!ready_) return;
-    const auto path = RecentVideoStore::normalizedPath(input); cancelLoader(); automatic_.suspend(false); manualSource_ = true;
+    if (!requireSource()) return;
+    const auto path = RecentVideoStore::normalizedPath(input); cancelLoader(); library_.cancel(); automatic_.suspend(false); manualSource_ = true;
     if (path.isEmpty() || !QFileInfo(path).isFile()) {
-        source_ = {{"kind", "xml"}, {"path", input}};
         error_ = QStringLiteral("指定的 XML 不存在，请重新选择");
         automatic_.playbackRecovery()->begin(latest_, error_); emit stateChanged(); return;
     }
@@ -222,7 +209,7 @@ void MediaSession::accept(std::vector<danmaku::Item> items, const QString& title
     total_ = static_cast<int>(items.size()); sourceTitle_ = title; source_ = source;
     app_->presentMedia(std::move(items), title, latest_);
     latest_.generation = app_->mediaGeneration_;
-    automatic_.playbackRecovery()->finish(true); status_ = QStringLiteral("弹幕已载入，正在跟随视频"); error_.clear(); flush(); emit stateChanged();
+    automatic_.playbackRecovery()->finish(true); status_ = QStringLiteral("弹幕已载入，正在跟随视频"); error_.clear(); flush(); emit stateChanged(); emit sourceCommitted();
 }
 void MediaSession::unload() {
     if (!active_) return;
@@ -231,17 +218,23 @@ void MediaSession::unload() {
     total_ = 0; sourceTitle_.clear(); source_ = {{"kind", "disabled"}};
     app_->clearMediaItems(); status_ = QStringLiteral("弹幕已卸载，播放器连接保留"); flush(); emit stateChanged();
 }
-void MediaSession::stopDanmaku() {
-    if (!active_) return;
-    cancelLoader(); automatic_.suspend(); manualSource_ = true;
-    automatic_.playbackRecovery()->finish(true);
-    QScopedValueRollback source(app_->automaticSource_, true);
-    app_->resetPlayback(false); status_ = QStringLiteral("弹幕已停止，播放器连接保留"); flush(); emit stateChanged();
-}
 void MediaSession::retryMatching() {
     if (!active_ || !ready_) return;
     source_.clear(); manualSource_ = false; automatic_.configure(true, servers_); automatic_.retry(); automatic_.observe(latest_);
 }
 void MediaSession::showAutomaticDanmakuChoice() { automatic_.openRecovery(); }
-void MediaSession::searchDanmaku() { if (active_ && ready_) emit requestOnlineDanmakuSearch(); }
+bool MediaSession::requireSource() {
+    if (canSelectSource()) return true;
+    error_ = active_ ? QStringLiteral("请等待当前视频就绪后选择弹幕") : QStringLiteral("请先打开视频，或从更多菜单独立播放弹幕，再选择来源");
+    emit stateChanged(); emit app_->requestNavigateToPage(1, -1); return false;
+}
+void MediaSession::loadCached(const QString& key) { if (!key.isEmpty() && requireSource()) library_.loadCached(key); }
+void MediaSession::searchDanmaku() { if (requireSource()) emit requestOnlineDanmakuSearch(); }
+void MediaSession::searchForAnime(const QString& title, const QString& episodeTitle, double episodeNumber) {
+    if (!requireSource()) return;
+    app_->showMainWindow(); emit requestOnlineDanmakuSearch();
+    if (title.trimmed().isEmpty()) return;
+    if (episodeNumber > 0 || !episodeTitle.trimmed().isEmpty()) library_.searchAnimeForEpisode(title.trimmed(), episodeTitle, episodeNumber);
+    else library_.searchAnime(title.trimmed());
+}
 void MediaSession::copyRecoveryTitle() { if (auto* clipboard = QGuiApplication::clipboard()) clipboard->setText(automatic_.playbackRecovery()->title()); }

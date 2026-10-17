@@ -126,7 +126,6 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/MediaPlaybackBackend.h
         src/infrastructure/VlcHttpBackend.cpp src/infrastructure/VlcHttpBackend.h
         src/infrastructure/VlcProtocol.cpp src/infrastructure/VlcProtocol.h
-        src/platform/windows/SmtcBackend.cpp src/platform/windows/SmtcBackend.h
         src/application/PlaybackRecovery.cpp src/application/PlaybackRecovery.h
         src/infrastructure/MediaTitleParser.cpp src/infrastructure/MediaTitleParser.h
         src/application/AutomaticDanmaku.cpp src/application/AutomaticDanmaku.h
@@ -140,7 +139,7 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/CoverCache.cpp src/infrastructure/CoverCache.h
         src/infrastructure/AppPaths.cpp src/infrastructure/AppPaths.h
         src/platform/windows/MediaMonitor.cpp src/platform/windows/MediaMonitor.h
-        src/platform/windows/SmtcReader.cpp src/platform/windows/SmtcReader.h
+        src/platform/windows/PotPlayerBackend.cpp src/platform/windows/PotPlayerBackend.h
         src/platform/windows/WindowBackdropController.cpp src/platform/windows/WindowBackdropController.h
         src/platform/windows/SystemUiPreferences.cpp src/platform/windows/SystemUiPreferences.h
         src/platform/windows/ToolbarInputFilter.cpp src/platform/windows/ToolbarInputFilter.h
@@ -204,6 +203,18 @@ if(DANMAKU_BUILD_APP)
         endif()
         add_executable(online_danmaku_tests tests/runtime/OnlineDanmakuTests.cpp)
         add_executable(video_open_tests tests/runtime/VideoOpenTests.cpp)
+        add_executable(potplayer_window_fixture WIN32 tests/fixtures/PotPlayerWindowFixture.cpp)
+        target_link_libraries(potplayer_window_fixture PRIVATE user32 shell32)
+        add_executable(potplayer_playback_tests tests/runtime/PotPlayerPlaybackTests.cpp)
+        target_link_libraries(potplayer_playback_tests PRIVATE danmaku_runtime Qt6::Test)
+        target_compile_definitions(potplayer_playback_tests PRIVATE POTPLAYER_FIXTURE="$<TARGET_FILE:potplayer_window_fixture>")
+        add_dependencies(potplayer_playback_tests potplayer_window_fixture)
+        danmaku_compile_options(potplayer_playback_tests)
+        if(DANMAKU_STATIC_QT)
+            qt_import_plugins(potplayer_playback_tests INCLUDE Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin Qt6::QSchannelBackendPlugin)
+        endif()
+        add_test(NAME potplayer_playback COMMAND potplayer_playback_tests -o "${CMAKE_BINARY_DIR}/potplayer-playback-tests.txt,txt")
+        set_tests_properties(potplayer_playback PROPERTIES TIMEOUT 45 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
         add_executable(vlc_playback_tests tests/runtime/VlcPlaybackTests.cpp)
         add_executable(workflow_session_tests tests/runtime/WorkflowSessionTests.cpp)
         target_link_libraries(workflow_session_tests PRIVATE danmaku_runtime Qt6::Test)
@@ -249,11 +260,6 @@ if(DANMAKU_BUILD_APP)
         danmaku_compile_options(anime_metadata_tests)
         add_test(NAME anime_metadata COMMAND anime_metadata_tests -o "${CMAKE_BINARY_DIR}/anime-metadata-tests.txt,txt")
         set_tests_properties(anime_metadata PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
-        add_executable(smtc_reader_tests tests/runtime/SmtcReaderTests.cpp)
-        target_link_libraries(smtc_reader_tests PRIVATE danmaku_runtime Qt6::Test)
-        danmaku_compile_options(smtc_reader_tests)
-        add_test(NAME smtc_reader COMMAND smtc_reader_tests -o "${CMAKE_BINARY_DIR}/smtc-reader-tests.txt,txt")
-        set_tests_properties(smtc_reader PROPERTIES TIMEOUT 30)
         add_executable(xml_loader_tests tests/runtime/XmlLoaderTests.cpp
             src/infrastructure/XmlLoader.cpp src/infrastructure/ChineseConverter.cpp)
         target_include_directories(xml_loader_tests PRIVATE src)

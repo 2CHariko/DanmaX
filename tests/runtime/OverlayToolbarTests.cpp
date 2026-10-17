@@ -20,144 +20,7 @@
 class OverlayToolbarTests : public QObject {
     Q_OBJECT
 private slots:
-    void realMediaSessionReadOnlyLifecycle() {
-        const auto session = qEnvironmentVariable("DANMAKU_TEST_MEDIA_SESSION");
-        if (session.isEmpty())
-            QSKIP("Opt in with DANMAKU_TEST_MEDIA_SESSION; never creates or controls a player session.");
-        QTemporaryDir dir;
-        QVERIFY(dir.isValid());
-        AppController controller(dir.path(), nullptr, {}, dir.path());
-        auto* monitor = controller.findChild<MediaMonitor*>();
-        QVERIFY(monitor);
-        auto* settings = qobject_cast<SettingsStore*>(controller.settings());
-        QVERIFY(settings->setValue("foregroundOnly", false));
-        QQuickWindow overlay;
-        overlay.resize(800, 600);
-        DanmakuItem renderer;
-        renderer.setParentItem(overlay.contentItem());
-        controller.attach(&renderer, &overlay);
-        connect(&controller, &AppController::stateChanged, &overlay,
-                [&] { overlay.setVisible(controller.overlayVisible()); });
-
-        MediaSample latest;
-        int foundSamples = 0;
-        QJsonArray observations, checkpoints;
-        const auto reportPath = qEnvironmentVariable("DANMAKU_TEST_MEDIA_REPORT");
-        const auto saveReport = qScopeGuard([&] {
-            if (reportPath.isEmpty()) return;
-            QSaveFile report(reportPath);
-            if (report.open(QIODevice::WriteOnly)) {
-                report.write(QJsonDocument(QJsonObject{{"session", session},
-                    {"readOnly", true}, {"samples", observations},
-                    {"checkpoints", checkpoints}}).toJson());
-                report.commit();
-            }
-        });
-        connect(monitor, &MediaMonitor::sampleReceived, this, [&](const MediaSample& sample) {
-            if (sample.id != session || !sample.found) return;
-            latest = sample;
-            ++foundSamples;
-            observations.append(QJsonObject{{"generation", static_cast<qint64>(sample.generation)},
-                {"observedAt", sample.observedAt}, {"position", sample.position},
-                {"duration", sample.duration}, {"rate", sample.rate},
-                {"playback", static_cast<int>(sample.playback)}, {"title", sample.title}});
-        });
-        const auto record = [&](const QString& stage) {
-            checkpoints.append(QJsonObject{{"stage", stage}, {"position", controller.position()},
-                {"danmakuPosition", controller.danmakuPosition()}, {"running", controller.running()},
-                {"playing", controller.playing()}, {"state", static_cast<int>(controller.playbackState())},
-                {"visible", controller.overlayVisible()}, {"total", controller.total()},
-                {"sampleGeneration", static_cast<qint64>(latest.generation)},
-                {"samplePosition", latest.position}});
-        };
-        QFile source(dir.filePath("source.xml"));
-        QVERIFY(source.open(QIODevice::WriteOnly));
-        source.write("<i><d p=\"0,5,25,16777215,0,0,x,1\">zero</d><d p=\"600,5,25,16777215,0,0,x,2\">later</d></i>");
-        source.close();
-        QSignalSpy loaded(&controller, &AppController::loadCompleted);
-        controller.loadFile(source.fileName());
-        QTRY_COMPARE(loaded.count(), 1);
-        controller.selectSession(session);
-        controller.start(false);
-        QTRY_VERIFY_WITH_TIMEOUT(foundSamples >= 3 && !controller.mediaTitle().isEmpty(), 10000);
-        QVERIFY(latest.observedAt > 0);
-        QVERIFY(latest.duration > 0);
-        QVERIFY(controller.running());
-        QVERIFY(!controller.manualMode());
-        QVERIFY(controller.overlayVisible());
-        record("connected");
-
-        const double pausedPosition = controller.position();
-        const auto initial = latest;
-        const int observationStart = observations.size();
-        QTest::qWait(1200);
-        bool stablePause = initial.playback == MediaSample::Playback::Paused;
-        for (int i = observationStart; i < observations.size(); ++i) {
-            const auto sample = observations[i].toObject();
-            stablePause = stablePause && sample["playback"].toInt() == static_cast<int>(MediaSample::Playback::Paused)
-                && sample["position"].toDouble() == initial.position && sample["title"].toString() == initial.title;
-        }
-        if (stablePause) {
-            QCOMPARE(controller.playbackState(), AppController::Paused);
-            QCOMPARE(controller.position(), pausedPosition);
-            QVERIFY(!controller.playing());
-            record("real-pause-frozen");
-        } else {
-            qInfo("Stable external pause was not observed; its freeze assertion was not exercised.");
-            record("external-state-changing");
-        }
-        QVERIFY(std::abs(controller.position() - latest.position) < 0.5);
-        QVERIFY(settings->setValue("timeOffset", 1.5));
-        QCOMPARE(controller.danmakuPosition(), controller.position() + 1.5);
-        record("positive-offset");
-        QVERIFY(settings->setValue("timeOffset", -1.5));
-        QCOMPARE(controller.danmakuPosition(), std::max(0.0, controller.position() - 1.5));
-        record("negative-offset");
-        QVERIFY(settings->setValue("timeOffset", 0.0));
-        const auto sourceTitle = controller.sourceTitle();
-        quint64 previousGeneration = latest.generation;
-        for (int cycle = 0; cycle < 2; ++cycle) {
-            controller.stop();
-            QCOMPARE(controller.playbackState(), AppController::Ready);
-            QCOMPARE(controller.total(), 2);
-            QCOMPARE(controller.sourceTitle(), sourceTitle);
-            QVERIFY(!controller.overlayVisible());
-            QCOMPARE(controller.position(), 0.0);
-            const int count = foundSamples;
-            QTRY_VERIFY_WITH_TIMEOUT(foundSamples >= count + 3, 5000);
-            // Real monitor keeps reading, but exiting must not restart the overlay/time axis.
-            QVERIFY(!controller.running());
-            QCOMPARE(controller.position(), 0.0);
-            record("exited-retaining-source");
-            previousGeneration = latest.generation;
-            controller.start(false);
-            QTRY_VERIFY_WITH_TIMEOUT(latest.generation > previousGeneration &&
-                controller.playbackState() != AppController::WaitingForPlayer, 5000);
-            QVERIFY(std::abs(controller.position() - latest.position) < 0.5);
-            QVERIFY(controller.overlayVisible());
-            record("restarted-aligned");
-        }
-        controller.stop();
-        controller.start(true);
-        QTRY_VERIFY(controller.position() > 0);
-        controller.togglePause();
-        const double independentPosition = controller.position();
-        const int count = foundSamples;
-        QTRY_VERIFY_WITH_TIMEOUT(foundSamples >= count + 3, 5000);
-        QCOMPARE(controller.position(), independentPosition);
-        QCOMPARE(controller.playbackState(), AppController::Paused);
-        controller.togglePause();
-        QTRY_VERIFY(controller.position() > independentPosition);
-        QVERIFY(controller.playing());
-        record("independent-ignores-real-session");
-        controller.unload();
-        QCOMPARE(controller.total(), 0);
-        QCOMPARE(controller.playbackState(), AppController::Empty);
-        QVERIFY(!controller.overlayVisible());
-        record("unloaded");
-    }
-
-    void independentLifecycleAndRetainedSource() {
+    void internalRendererLifecycleAndRetainedSource() {
         QTemporaryDir dir;
         AppController controller(dir.path(), nullptr, {}, dir.path());
         auto* monitor = controller.findChild<MediaMonitor*>();
@@ -185,7 +48,7 @@ private slots:
         QCOMPARE(controller.danmakuPosition(), controller.position());
         controller.setManualMode(false);
         QVERIFY(controller.manualMode());
-        controller.selectSession("other-player");
+        controller.setRenderTestSession("other-player");
         QVERIFY(controller.playing());
         QSignalSpy states(&controller, &AppController::stateChanged);
         monitor->errorOccurred("independent-isolation");
@@ -252,7 +115,7 @@ private slots:
                 [&] { overlay.setVisible(controller.overlayVisible()); });
         controller.beginDemo(50);
         controller.stop();
-        controller.selectSession("player-one");
+        controller.setRenderTestSession("player-one");
         controller.start(false);
         QCOMPARE(controller.playbackState(), AppController::WaitingForPlayer);
         MediaSample sample;
@@ -339,7 +202,7 @@ private slots:
         sample.position = 40;
         send(sample);
         QCOMPARE(controller.position(), 40.0);
-        controller.selectSession("player-two");
+        controller.setRenderTestSession("player-two");
         QCOMPARE(controller.playbackState(), AppController::WaitingForPlayer);
         send(sample);
         QCOMPARE(controller.position(), 0.0);
@@ -452,7 +315,7 @@ private slots:
         QVERIFY(settings->setValue("foregroundOnly", true));
         controller.beginDemo(50);
         controller.stop();
-        controller.selectSession("Policy.Player");
+        controller.setRenderTestSession("Policy.Player");
         auto* mediaMonitor = controller.findChild<MediaMonitor*>(); QVERIFY(mediaMonitor);
         QObject::disconnect(mediaMonitor, &MediaMonitor::sampleReceived, &controller, nullptr);
         controller.start(false);

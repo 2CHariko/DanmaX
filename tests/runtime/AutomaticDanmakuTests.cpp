@@ -113,7 +113,7 @@ private slots:
         QObject::disconnect(monitor, &MediaMonitor::sampleReceived, &controller, nullptr);
         auto* settings = qobject_cast<SettingsStore*>(controller.settings());
         settings->setValue("foregroundOnly", false);
-        controller.selectSession("Test.Player");
+        controller.setRenderTestSession("Test.Player");
         QQuickWindow overlay; overlay.resize(800, 600);
         DanmakuItem renderer; renderer.setParentItem(overlay.contentItem()); renderer.setSize(QSizeF(800, 600));
         controller.attach(&renderer, &overlay);
@@ -136,7 +136,7 @@ private slots:
         QVERIFY(inject()); QVERIFY(!controller.overlayVisible()); QVERIFY(!controller.toolbarPresentationAllowed());
         QVERIFY(controller.running()); QCOMPARE(controller.total(), 2);
         QTRY_COMPARE_WITH_TIMEOUT(renderer.snapshotCount(), 0, 2500);
-        QCOMPARE(settings->values().value("targetSession").toString(), QString("Test.Player"));
+        QVERIFY(!settings->values().contains("targetSession"));
         sample.playback = MediaSample::Playback::Playing; sample.position = 10; QVERIFY(inject());
         QVERIFY(controller.overlayVisible()); QVERIFY(controller.playing()); QCOMPARE(controller.position(), 10.0);
         QElapsedTimer playbackTime; playbackTime.start();
@@ -511,45 +511,6 @@ private slots:
         server.commentDelay = 0; heartbeat.start();
         QTRY_COMPARE(ready.count(), 2);
         QCOMPARE(automatic.takeReadyResult()->metadata.value("episodeId").toString(), QString("42004"));
-    }
-    void controllerCutoverAndManualPriority() {
-        QTemporaryDir directory; Server server; server.commentDelay = 200;
-        AppController controller(directory.filePath("data"), nullptr, {}, directory.filePath("cache"));
-        auto* monitor = controller.findChild<MediaMonitor*>(); QVERIFY(monitor);
-        QObject::disconnect(monitor, nullptr, &controller, nullptr);
-        auto* settings = qobject_cast<SettingsStore*>(controller.settings());
-        auto* automatic = qobject_cast<AutomaticDanmaku*>(controller.automatic()); QVERIFY(automatic);
-        settings->setValue("danmakuServers", QStringList{server.base()});
-        controller.selectSession("Test.Player"); controller.setAutomaticDanmaku(true);
-        QQuickWindow overlay; DanmakuItem renderer;
-        renderer.setParentItem(overlay.contentItem()); renderer.setSize({800, 600});
-        controller.attach(&renderer, &overlay);
-        QSignalSpy loaded(&controller, &AppController::loadCompleted);
-        auto sample = media(); QTimer heartbeat;
-        const auto inject = [&] {
-            sample.observedAt = MediaMonitor::monotonicSeconds(); sample.generation = monitor->generation();
-            return QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
-        };
-        connect(&heartbeat, &QTimer::timeout, &controller, [&] { inject(); }); heartbeat.start(30);
-        QVERIFY(inject()); QTRY_COMPARE(loaded.count(), 1);
-        QVERIFY(controller.running()); QVERIFY(controller.playing()); QVERIFY(controller.sourceTitle().contains(QStringLiteral("第1话")));
-        sample.title = "Test - 02"; sample.identity = "second"; sample.position = 3;
-        QVERIFY(inject()); QCOMPARE(controller.total(), 0); QVERIFY(!controller.running());
-        QTRY_COMPARE(server.count("/comment/"), 2);
-        sample.position = 42; sample.playback = MediaSample::Playback::Paused; QVERIFY(inject());
-        QTRY_COMPARE(loaded.count(), 2);
-        QCOMPARE(controller.position(), 42.0); QVERIFY(controller.running()); QVERIFY(!controller.playing());
-        sample.duration = 101; sample.identity = "duration updated"; sample.position = 43; QVERIFY(inject());
-        QCOMPARE(loaded.count(), 2); QCOMPARE(controller.position(), 43.0);
-        sample.title = "Test - 03"; sample.playback = MediaSample::Playback::Playing;
-        QVERIFY(inject()); QTRY_COMPARE(server.count("/comment/"), 3);
-        controller.stop(); QVERIFY(automatic->suspended()); QTest::qWait(350); QCOMPARE(loaded.count(), 2);
-        sample.title = "Test - 04"; QVERIFY(inject()); QTest::qWait(700); QCOMPARE(loaded.count(), 2);
-        automatic->retry(); QTRY_COMPARE(loaded.count(), 3); QVERIFY(controller.sourceTitle().contains(QStringLiteral("第4话")));
-        controller.loadFile(QStringLiteral(DANMAKU_SOURCE_DIR "/tests/fixtures/sample.xml"));
-        QTRY_COMPARE(loaded.count(), 4); QVERIFY(automatic->suspended());
-        sample.title = "Test - 05"; QVERIFY(inject()); QTest::qWait(700); QCOMPARE(loaded.count(), 4);
-        controller.stop(); heartbeat.stop();
     }
 };
 QTEST_MAIN(AutomaticDanmakuTests)

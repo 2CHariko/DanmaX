@@ -7,6 +7,9 @@ import "../i18n"
 ColumnLayout {
     id: pane
     required property QtObject library
+    property bool selectionAllowed: true
+    onSelectionAllowedChanged: if (!selectionAllowed) deleteDialog.close()
+    signal loadRequested(string key)
     property string deleteKey: ""
     property string deleteTitle: ""
     readonly property var filteredEntries: {
@@ -197,13 +200,14 @@ ColumnLayout {
                         spacing: 8
 
                         Button {
+                            objectName: "loadCachedDanmaku"
                             text: I18n.cache.loadBtn
-                            enabled: itemDelegate.modelData.valid && !pane.library.busy
+                            enabled: pane.selectionAllowed && itemDelegate.modelData.valid && !pane.library.busy
                             highlighted: true
                             Accessible.name: I18n.format(I18n.cache.loadAccessibleFormat, itemDelegate.modelData.animeTitle, itemDelegate.modelData.episodeTitle)
                             onClicked: {
                                 cachedList.currentIndex = itemDelegate.index
-                                pane.library.loadCached(itemDelegate.modelData.key)
+                                pane.loadRequested(itemDelegate.modelData.key)
                             }
                         }
 

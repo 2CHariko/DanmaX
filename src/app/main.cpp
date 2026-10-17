@@ -104,10 +104,8 @@ int main(int argc, char* argv[]) {
     parser.addOption({"benchmark", "Generate a synthetic workload with this active count", "count"});
     parser.addOption({"seconds", "Benchmark duration", "seconds", "15"});
     parser.addOption({"report", "Write benchmark metrics to JSON", "path"});
-    parser.addOption({"media-session", "Select a real SMTC session (read only)", "id"});
     parser.addOption({"file", "Load an XML file on startup", "path"});
     parser.addOption({"page", "Initial page: home, player, logs, settings, about", "page", "home"});
-    parser.addOption({"source-tab", "Initial player source tab: xml, cache (UI validation)", "tab", "xml"});
     parser.addOption({"online-search", "Open online danmaku search on the home page (UI validation)"});
     parser.addOption({"theme", "Theme for isolated UI validation", "theme"});
     parser.addOption({"window-width", "Width for layout validation", "pixels"});
@@ -117,16 +115,12 @@ int main(int argc, char* argv[]) {
         const QStringList pageNames{"home", "player", "logs", "settings", "about"};
         const int initialPage = pageNames.indexOf(parser.value("page"));
         if (initialPage < 0) throw std::runtime_error("Unknown initial page");
-        if (parser.value("source-tab") != "xml" && parser.value("source-tab") != "cache")
-            throw std::runtime_error("Unknown player source tab; use --online-search for home search");
         const auto paths =
             AppPaths::prepare(app.applicationFilePath(), parser.value("data-dir"), parser.value("cache-dir"));
         qmlRegisterType<DanmakuItem>("DanmaX.Native", 1, 0, "DanmakuCanvas");
         AppController controller(paths.data, nullptr, {}, paths.cache);
         if (parser.isSet("theme"))
             qobject_cast<SettingsStore*>(controller.settings())->setValue("theme", parser.value("theme"));
-        if (parser.isSet("media-session"))
-            controller.selectSession(parser.value("media-session"));
         WindowBackdropController backdrop(qobject_cast<SettingsStore*>(controller.settings()), qobject_cast<LogModel*>(controller.logs()));
         QQmlApplicationEngine engine;
         bool creationFailed = false;
@@ -144,7 +138,6 @@ int main(int argc, char* argv[]) {
             app.exit(1);
         });
         engine.setInitialProperties({{"backdrop", QVariant::fromValue(&backdrop)}, {"backend", QVariant::fromValue(&controller)},
-                                     {"sourceTab", parser.value("source-tab") == "cache" ? 1 : 0},
                                      {"selectedPage", initialPage}});
         QWK::registerTypes(&engine);
         engine.loadFromModule("DanmaX", "Main");
@@ -228,10 +221,12 @@ int main(int argc, char* argv[]) {
                 });
             });
         }
+        if (parser.isSet("file") && !parser.isSet("smoke-test") && !parser.isSet("benchmark"))
+            throw std::runtime_error("--file is only available for internal smoke/benchmark validation; open video in the application");
         if (parser.isSet("file")) {
             QObject::connect(&controller, &AppController::loadCompleted, &app, [&](bool success) {
                 if (success)
-                    controller.start(!parser.isSet("media-session"));
+                    controller.start(true);
             });
             controller.loadFile(parser.value("file"));
         }
@@ -251,8 +246,6 @@ int main(int argc, char* argv[]) {
                 if (parser.isSet("smoke-test") && !parser.isSet("file") &&
                     qEnvironmentVariable("DANMAKU_RENDER_BACKEND") != "text")
                     passed = passed && controller.metrics().value("imageNodes").toInt() > 0;
-                if (parser.isSet("media-session"))
-                    passed = passed && !controller.manualMode() && !controller.mediaTitle().isEmpty();
                 if (parser.isSet("capture"))
                     passed = mainWindow->grabWindow().save(parser.value("capture")) && passed;
                 if (parser.isSet("capture-overlay") && !overlayCaptured)

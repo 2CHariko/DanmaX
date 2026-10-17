@@ -3,8 +3,8 @@
 #include <QString>
 #include <QVariantList>
 #include "infrastructure/MediaPlaybackBackend.h"
-class SmtcBackend;
 class VlcHttpBackend;
+class PotPlayerBackend;
 class MediaMonitor final : public QObject {
     Q_OBJECT
   public:
@@ -16,6 +16,7 @@ class MediaMonitor final : public QObject {
     void requestSeek(MediaSample expected, double seconds, quint64 request);
     ManagedPlaybackOpen openManaged(const QString& adapter, const QString& executable, const QString& video);
     void cancelManagedOpen();
+    void closeOwnedPlayer(const QString& session);
     static double monotonicSeconds();
     static bool targetForeground(const QString& applicationId);
     static bool windowMatchesSession(quintptr handle, const QString& id);
@@ -28,13 +29,15 @@ class MediaMonitor final : public QObject {
     void errorOccurred(QString error);
     void playbackControlFinished(quint64 request, bool success, QString error);
     void seekFinished(quint64 request, bool success, QString error);
+    void ownedPlayerExited(QString session);
+    void ownedPlayerCloseFailed(QString error);
 
   private:
     void publishSessions();
-    SmtcBackend* smtc_{};
     VlcHttpBackend* vlc_{};
+    PotPlayerBackend* pot_{};
     MediaPlaybackBackend* active_{};
-    QVariantList smtcSessions_, vlcSessions_;
+    QVariantList vlcSessions_;
     QString selected_;
     quint64 generation_{1};
 };

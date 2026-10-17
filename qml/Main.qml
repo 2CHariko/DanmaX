@@ -15,7 +15,6 @@ ApplicationWindow {
     Binding { target: Ui; property: "micaActive"; value: root.backdrop ? root.backdrop.effectiveMica : false }
     Binding { target: Ui; property: "systemAnimationsEnabled"; value: root.backend.uiPreferences.animationsEnabled }
     property int selectedPage: 0
-    property int sourceTab: 0
     readonly property string currentPageName: ["home", "player", "logs", "settings", "about", "media"][selectedPage] || ""
     readonly property bool compact: width < Ui.expandedNavigationWidth
     readonly property real pageContentInset: pages.children[selectedPage].contentInset
@@ -45,10 +44,6 @@ ApplicationWindow {
             root.requestActivate()
         }
         function onRequestNavigateToPage(page, tab) {
-            if (page === 1 && tab >= 0) {
-                root.sourceTab = tab
-                playerPage.selectSourceTab(tab)
-            }
             root.navigate(page)
         }
     }
@@ -163,7 +158,7 @@ ApplicationWindow {
                 spacing: 12
 
             RowLayout {
-                visible: (root.backend.error.length > 0 && root.backend.error !== root.backend.danmaku.error)
+                visible: (root.backend.error.length > 0 && root.backend.error !== root.backend.media.error)
                     || root.backend.settings.error.length > 0
                 Layout.fillWidth: true
                 Layout.leftMargin: root.pageContentInset
@@ -171,7 +166,7 @@ ApplicationWindow {
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
-                    text: root.backend.error.length > 0 && root.backend.error !== root.backend.danmaku.error
+                    text: root.backend.error.length > 0 && root.backend.error !== root.backend.media.error
                         ? root.backend.error : root.backend.settings.error
                     Accessible.name: I18n.common.errorPrefix + text
                 }
@@ -204,10 +199,7 @@ ApplicationWindow {
                         id: playerPage
                         objectName: "playerPage"
                         backend: root.backend
-                        sourceTab: root.sourceTab
                         onOpenVideo: playbackVideoPicker.open()
-                        onOpenDanmaku: { root.xmlAsContent = true; playbackXmlPicker.open() }
-                        onReplaceXml: { root.xmlAsContent = false; playbackXmlPicker.open() }
                     }
                     LogsPage {
                         backend: root.backend
@@ -238,10 +230,12 @@ ApplicationWindow {
             anchors.bottom: parent.bottom
             backend: root.backend
             onOpenVideo: playbackVideoPicker.open()
-            onOpenDanmaku: { root.xmlAsContent = true; playbackXmlPicker.open() }
-            onReplaceXml: { root.xmlAsContent = false; playbackXmlPicker.open() }
-            onShowSources: { root.navigate(1); playerPage.openOptions(false) }
-            onShowPlayer: { root.navigate(1); playerPage.openOptions(true) }
+            onOpenStandalone: { standaloneXmlPicker.context = root.backend.nowPlaying.contextId; standaloneXmlPicker.open() }
+            onReplaceXml: {
+                const target = root.backend.nowPlaying.sourceSession
+                if (target.canSelectSource) { playbackXmlPicker.workflow = target; playbackXmlPicker.task = target.taskId; playbackXmlPicker.open() }
+            }
+            onShowSources: cachedDanmakuDialog.choose()
             onShowSettings: root.navigate(3)
             onShowPlaying: root.navigate(1)
         }
@@ -259,20 +253,23 @@ ApplicationWindow {
     }
 
     MatchingRecoveryDialog {
-        backend: root.backend
-        workflow: root.backend.danmaku
-        onClosed: root.backend.nowPlaying.cancelEpisodeSelection()
-        onOpenSettings: { root.navigate(3); Qt.callLater(settingsPage.focusOnlineSettings) }
-        onManualSourceLoaded: { root.sourceTab = 0; playerPage.selectSourceTab(0); root.navigate(1) }
-    }
-    MatchingRecoveryDialog {
         objectName: "mediaMatchingRecoveryDialog"
         allowLocalXml: true
         backend: root.backend.media
         onOpenSettings: root.navigate(3)
         onManualSourceLoaded: root.navigate(1)
     }
-    property bool xmlAsContent: false
+    DanmakuSearchDialog { backend: root.backend.standalone; onOpenSettings: root.navigate(3) }
+    CachedDanmakuDialog { id: cachedDanmakuDialog; player: root.backend.nowPlaying }
+    FileDialog {
+        id: standaloneXmlPicker
+        objectName: "standaloneXmlPicker"
+        property double context: -1
+        title: "独立播放弹幕 XML"
+        fileMode: FileDialog.OpenFile
+        nameFilters: ["弹幕 XML (*.xml)"]
+        onAccepted: if (context === root.backend.nowPlaying.contextId) root.backend.nowPlaying.openStandalone(selectedFile)
+    }
     FileDialog {
         id: playbackVideoPicker
         title: "打开视频"
@@ -281,11 +278,13 @@ ApplicationWindow {
     }
     FileDialog {
         id: playbackXmlPicker
-        title: root.xmlAsContent ? "独立播放弹幕 XML" : "更换当前弹幕 XML"
+        property double task: -1
+        property QtObject workflow: null
+        title: root.backend.nowPlaying.count > 0 ? "更换弹幕 XML" : "加载弹幕 XML"
         nameFilters: ["弹幕 XML (*.xml)"]
         onAccepted: {
-            if (root.xmlAsContent) root.backend.nowPlaying.openDanmaku(selectedFile)
-            else root.backend.nowPlaying.replaceDanmaku(selectedFile)
+            if (workflow && workflow === root.backend.nowPlaying.sourceSession && task === workflow.taskId && workflow.canSelectSource)
+                root.backend.nowPlaying.replaceDanmaku(selectedFile)
             root.navigate(1)
         }
     }

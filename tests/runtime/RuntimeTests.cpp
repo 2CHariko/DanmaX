@@ -55,14 +55,14 @@ int main(int argc, char** argv) {
             value.vt = VT_LPWSTR;
             value.pwszVal = appId;
             check(SUCCEEDED(properties->SetValue(PKEY_AppUserModel_ID, value)), "Set hosted window AUMID");
-            check(MediaMonitor::windowMatchesSession(reinterpret_cast<quintptr>(window),
+            check(!MediaMonitor::windowMatchesSession(reinterpret_cast<quintptr>(window),
                                                      "Test.Player_family!Player"),
-                  "Match hosted player by window AUMID");
+                  "AUMID alone cannot claim an application-owned player");
             check(!MediaMonitor::windowMatchesSession(reinterpret_cast<quintptr>(window),
                                                       "Other.Player_family!Player"),
                   "Reject another hosted application");
-            check(MediaMonitor::windowMatchesSession(reinterpret_cast<quintptr>(window), "runtime_tests.exe"),
-                  "Preserve desktop executable matching when shell app ID differs");
+            check(!MediaMonitor::windowMatchesSession(reinterpret_cast<quintptr>(window), "runtime_tests.exe"),
+                  "Executable basename alone cannot claim an application-owned player");
             properties->Release();
         } else
             check(false, "Access window property store");
@@ -145,7 +145,6 @@ int main(int argc, char** argv) {
             {
                 SettingsStore settings(roundtrip.path());
                 check(settings.setValue("lastFile", value), "Save quoted INI string");
-                check(settings.setValue("targetSession", value), "Save arbitrary session ID");
                 check(settings.setValue("opacity", 0.375), "Save C-locale decimal");
                 check(settings.setValue("timeOffset", -0.125), "Save negative decimal");
                 check(settings.setValue("overlap", true), "Save boolean");
@@ -451,7 +450,7 @@ int main(int argc, char** argv) {
         controller.togglePause();
         controller.seek(1);
         check(controller.position() == 1, "Manual seek");
-        controller.selectSession("test-session");
+        controller.setRenderTestSession("test-session");
         // Isolate injected snapshots from real machine session discovery.
         QObject::disconnect(controller.findChild<MediaMonitor*>(), nullptr, &controller, nullptr);
         controller.stop();
@@ -638,7 +637,7 @@ int main(int argc, char** argv) {
         auto* settings = qobject_cast<SettingsStore*>(controller.settings());
         settings->setValue("speed", 100);
         settings->setValue("foregroundOnly", true);
-        controller.selectSession("hidden-session");
+        controller.setRenderTestSession("hidden-session");
         QQuickWindow overlay;
         DanmakuItem renderer;
         renderer.setParentItem(overlay.contentItem());

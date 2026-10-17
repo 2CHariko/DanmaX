@@ -28,6 +28,7 @@ class MediaSession final : public QObject {
     Q_PROPERTY(double duration READ duration NOTIFY stateChanged)
     Q_PROPERTY(bool targetSessionConnected READ connected NOTIFY stateChanged)
     Q_PROPERTY(bool manualMode READ manualMode CONSTANT)
+    Q_PROPERTY(quint64 taskId READ taskId NOTIFY stateChanged)
   public:
     enum Intent { Normal, Continue, FromStart };
     Q_ENUM(Intent)
@@ -48,7 +49,8 @@ class MediaSession final : public QObject {
     bool loading() const { return loading_; }
     bool restoring() const { return restoring_; }
     bool restoreFailed() const { return restoreFailed_; }
-    bool canSelectSource() const { return active_ ? ready_ : !video_.isEmpty(); }
+    bool canSelectSource() const { return active_ && ready_; }
+    quint64 taskId() const { return task_; }
     double position() const { return latest_.position; }
     double duration() const { return latest_.duration; }
     bool connected() const;
@@ -58,8 +60,9 @@ class MediaSession final : public QObject {
     Q_INVOKABLE void retryRestore();
     Q_INVOKABLE void continueAtCurrentPosition();
     Q_INVOKABLE void loadFile(const QString& file);
+    Q_INVOKABLE void loadCached(const QString& key);
+    void searchForAnime(const QString& title, const QString& episodeTitle = {}, double episodeNumber = 0);
     Q_INVOKABLE void unload();
-    Q_INVOKABLE void stopDanmaku();
     Q_INVOKABLE void retryMatching();
     Q_INVOKABLE void showAutomaticDanmakuChoice();
     Q_INVOKABLE void searchDanmaku();
@@ -72,10 +75,12 @@ class MediaSession final : public QObject {
     void stateChanged();
     void requestOnlineDanmakuSearch();
     void seekRequested(MediaSample expected, double seconds, quint64 request);
+    void sourceCommitted();
   private:
     friend class AppController;
     friend class NowPlayingModel;
     void beginTask(const QString& path);
+    bool requireSource();
     void confirmed();
     void beginRestore();
     void restoreError(const QString& error);

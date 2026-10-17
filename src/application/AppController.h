@@ -32,18 +32,15 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* settings READ settings CONSTANT)
     Q_PROPERTY(QObject* logs READ logs CONSTANT)
     Q_PROPERTY(QObject* library READ library CONSTANT)
-    Q_PROPERTY(QObject* automatic READ automatic CONSTANT)
     Q_PROPERTY(QObject* videoOpen READ videoOpen CONSTANT)
-    Q_PROPERTY(QObject* danmaku READ danmaku CONSTANT)
     Q_PROPERTY(QObject* media READ media CONSTANT)
-    Q_PROPERTY(QObject* coordinator READ coordinator CONSTANT)
+    Q_PROPERTY(QObject* standalone READ standalone CONSTANT)
     Q_PROPERTY(QObject* nowPlaying READ nowPlaying CONSTANT)
     Q_PROPERTY(QObject* players READ players CONSTANT)
     Q_PROPERTY(QObject* metadata READ metadata CONSTANT)
     Q_PROPERTY(QObject* uiPreferences READ uiPreferences CONSTANT)
     Q_PROPERTY(QObject* toolbarPointer READ toolbarPointer CONSTANT)
     Q_PROPERTY(QString sourceTitle READ sourceTitle NOTIFY stateChanged)
-    Q_PROPERTY(QVariantList sessions READ sessions NOTIFY sessionsChanged)
     Q_PROPERTY(bool targetSessionConnected READ targetSessionConnected NOTIFY stateChanged)
     Q_PROPERTY(QStringList screens READ screens NOTIFY screensChanged)
     Q_PROPERTY(QStringList fontFamilies READ fontFamilies NOTIFY fontFamiliesChanged)
@@ -84,10 +81,11 @@ class AppController final : public QObject {
     QObject* logs() {
         return &logs_;
     }
-    QObject* library() { return &library_; }
-    QObject* automatic() { return &automatic_; }
+    QObject* library() { return media_.library(); }
+    QObject* automatic() { return media_.automatic(); }
     QObject* videoOpen() { return &videoOpen_; }
     QObject* danmaku() { return &danmaku_; }
+    QObject* standalone() { return &danmaku_; }
     QObject* media() { return &media_; }
     QObject* coordinator() { return &coordinator_; }
     QObject* nowPlaying() { return &nowPlaying_; }
@@ -159,16 +157,16 @@ class AppController final : public QObject {
     bool hasFluentIcons() const;
     Q_INVOKABLE void attach(QObject* renderer, QObject* overlay, QObject* toolbar = nullptr,
                            QObject* mainWindow = nullptr);
-    Q_INVOKABLE void loadFile(const QString& path);
-    Q_INVOKABLE void cancelLoad();
-    Q_INVOKABLE void start(bool manual = false);
+    // Low-level C++ test drivers. Product entry points belong to the two sessions.
+    void loadFile(const QString& path);
+    void cancelLoad();
+    void start(bool manual = false);
     Q_INVOKABLE void stop();
     Q_INVOKABLE void unload();
-    Q_INVOKABLE void setManualMode(bool manual);
+    void setManualMode(bool manual);
     Q_INVOKABLE void togglePause();
     Q_INVOKABLE void seek(double position);
-    Q_INVOKABLE void selectSession(const QString& id);
-    Q_INVOKABLE void setAutomaticDanmaku(bool enabled);
+    void setRenderTestSession(const QString& id);
     Q_INVOKABLE void exportLogs(const QString& path);
      Q_INVOKABLE void clearError();
      Q_INVOKABLE void clearActiveDanmaku();
@@ -228,9 +226,7 @@ class AppController final : public QObject {
     LogModel logs_;
     PlaybackCoordinator coordinator_;
     DanmakuSession danmaku_;
-    DanmakuLibrary& library_;
     AnimeMetadataService metadata_;
-    AutomaticDanmaku& automatic_;
     VideoOpenService videoOpen_;
     ExternalPlayerStore players_;
     bool bindingVideo_{};
@@ -269,6 +265,7 @@ class AppController final : public QObject {
     bool syncConnected_{};
     PlaybackState playbackState_{Empty};
     QString sourceTitle_;
+    QString renderTestSession_; // Synthetic clock input for C++ renderer tests, never persisted or exposed to QML.
     QVariantList sessions_;
     QStringList fontFamilies_;
     bool fontsLoaded_{};

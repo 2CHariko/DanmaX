@@ -8,27 +8,9 @@ PageFrame {
     id: page
     required property QtObject backend
     readonly property QtObject player: backend.nowPlaying
-    property int sourceTab: 0
-    property bool connectionOptions: false
     signal openVideo()
-    signal openDanmaku()
-    signal replaceXml()
     title: "播放"
     description: "当前内容、弹幕与播放控制。"
-    function selectSourceTab(tab) { setup.selectSourceTab(tab) }
-    function openOptions(connection) { connectionOptions = connection; options.expanded = true; Qt.callLater(() => page.reveal(options)) }
-    function reveal(item) {
-        let ancestor = item
-        while (ancestor) {
-            if (ancestor === setup) { options.expanded = true; break }
-            ancestor = ancestor.parent
-        }
-        Qt.callLater(() => {
-            const point = item.mapToItem(page.bodyItem, 0, 0)
-            page.contentItem.contentY = Math.max(0, Math.min(point.y, page.contentItem.contentHeight - page.availableHeight))
-            item.forceActiveFocus()
-        })
-    }
     ColumnLayout {
         Layout.fillWidth: true
         Layout.topMargin: 16
@@ -75,13 +57,17 @@ PageFrame {
         Label { Layout.fillWidth: true; text: page.player.status; textFormat: Text.PlainText; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter; color: Ui.secondaryText }
         Label { Layout.fillWidth: true; text: page.player.error; textFormat: Text.PlainText; visible: text.length > 0; color: Ui.cautionText; wrapMode: Text.WordWrap; Accessible.role: Accessible.AlertMessage }
         BusyIndicator { Layout.alignment: Qt.AlignHCenter; visible: page.player.busy; running: visible }
+        RowLayout {
+            visible: page.player.openingStandalone
+            Layout.fillWidth: true
+            Label { text: "正在准备独立弹幕…"; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+            Button { objectName: "cancelStandaloneOpen"; text: "取消"; onClicked: page.player.cancelStandaloneOpen() }
+        }
         Flow {
             visible: !page.player.active
             Layout.fillWidth: true
             spacing: 8
             Button { text: "打开视频"; objectName: "openVideoButton"; onClicked: page.openVideo() }
-            Button { text: "打开弹幕"; onClicked: page.openDanmaku() }
-            Button { text: "连接播放器"; onClicked: page.openOptions(true) }
         }
         RowLayout {
             visible: page.player.video && page.backend.media.restoreFailed
@@ -91,32 +77,7 @@ PageFrame {
         }
         RowLayout {
             visible: page.backend.videoOpen.pending || page.backend.videoOpen.needsPlayer
-            Button { text: "使用当前视频"; visible: page.backend.videoOpen.needsConfirmation; onClicked: page.backend.videoOpen.confirmCurrent() }
             Button { text: "取消打开"; objectName: "cancelVideoOpenButton"; onClicked: page.backend.videoOpen.cancel() }
-        }
-    }
-    Disclosure {
-        id: options
-        objectName: "playbackOptions"
-        visible: expanded
-        title: page.connectionOptions ? "连接播放器与播放方式" : "弹幕来源"
-        PlaybackSetupPane {
-            id: setup
-            visible: !page.player.video || page.connectionOptions
-            backend: page.backend
-            sourceTab: page.sourceTab
-        }
-        ColumnLayout {
-            visible: page.player.video && !page.connectionOptions
-            Layout.fillWidth: true
-            spacing: 8
-            Label { Layout.fillWidth: true; text: page.backend.media.sourceTitle; wrapMode: Text.WrapAnywhere }
-            RowLayout {
-                Button { text: "更换 XML"; enabled: page.backend.media.canSelectSource; onClicked: page.replaceXml() }
-                Button { text: "搜索弹幕"; enabled: page.backend.media.canSelectSource; onClicked: page.backend.media.searchDanmaku() }
-                Button { text: "重新匹配"; onClicked: page.backend.media.retryMatching() }
-            }
-            CachedDanmakuPane { Layout.fillWidth: true; library: page.backend.media.library }
         }
     }
 }

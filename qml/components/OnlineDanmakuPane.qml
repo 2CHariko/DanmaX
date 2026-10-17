@@ -13,6 +13,11 @@ ColumnLayout {
         : (pane.library.servers.length > 0 ? pane.library.servers[0] : "")
     signal openSettings()
     signal cancelled()
+    function focusSearch() {
+        if (!keyword.visible || !keyword.enabled) return false
+        keyword.forceActiveFocus()
+        return true
+    }
     spacing: 10
 
     // 1. 无服务器配置时的引导横幅

@@ -14,10 +14,12 @@ Dialog {
     property bool manualSearch: false
     property bool allowLocalXml: false
     property bool manualBoundToPlayer: false
+    property double task: -1
     readonly property QtObject activeLibrary: manualSearch ? backend.library : automatic.library
     signal openSettings()
     signal manualSourceLoaded()
     function cancelMatching() {
+        if (backend.taskId !== task) { close(); return }
         if (manualSearch) { backend.library.cancel(); close() }
         else automatic.cancelRecovery()
     }
@@ -45,31 +47,33 @@ Dialog {
     }
     Connections {
         target: dialog.recovery
-        function onShowRequested() { dialog.manualSearch = false; dialog.open() }
+        function onShowRequested() { dialog.task = dialog.backend.taskId; dialog.manualSearch = false; dialog.open() }
         function onChanged() { if (!dialog.manualSearch && !dialog.recovery.active) dialog.close() }
     }
     Connections {
         target: dialog.backend
         function onRequestOnlineDanmakuSearch() {
             dialog.manualSearch = true
+            dialog.task = dialog.backend.taskId
             dialog.manualBoundToPlayer = !dialog.workflow.manualMode && dialog.workflow.targetSessionConnected
             dialog.open()
         }
         function onStateChanged() {
+            if (dialog.visible && (!dialog.backend.active || dialog.backend.taskId !== dialog.task)) { dialog.close(); return }
             if (dialog.visible && dialog.manualSearch && dialog.manualBoundToPlayer && !dialog.workflow.targetSessionConnected)
                 dialog.cancelMatching()
         }
     }
     Connections {
-        target: dialog.backend.library
-        function onSourceReady() {
+        target: dialog.backend
+        function onSourceCommitted() {
             if (dialog.manualSearch && dialog.visible) {
                 dialog.close()
                 dialog.manualSourceLoaded()
             }
         }
     }
-    Component.onCompleted: if (recovery.active) open()
+    Component.onCompleted: if (recovery.active) { task = backend.taskId; open() }
     Binding { target: dialog.enter; property: "enabled"; value: Ui.motionEnabled }
     Binding { target: dialog.exit; property: "enabled"; value: Ui.motionEnabled }
     contentItem: ScrollView {
@@ -119,7 +123,7 @@ Dialog {
                 visible: dialog.allowLocalXml
                 objectName: "chooseRecoveryXml"
                 text: "选择本地 XML"
-                onClicked: xmlDialog.open()
+                onClicked: { xmlDialog.task = dialog.backend.taskId; xmlDialog.open() }
             }
             Button {
                 objectName: "copyRecoveryFileName"
@@ -129,7 +133,7 @@ Dialog {
             }
             Label {
                 Layout.fillWidth: true
-                text: dialog.manualSearch ? "搜索并确认动画与剧集后载入弹幕，可在播放页选择播放方式。"
+                text: dialog.manualSearch ? "搜索并确认动画与剧集后，为当前视频载入弹幕。"
                     : "输入番名搜索，确认动画与剧集后载入弹幕。仅当本次操作自动暂停了播放器，完成或取消时才恢复播放。取消后下一集仍会自动识别。"
                 color: Ui.secondaryText
                 wrapMode: Text.WordWrap
@@ -148,8 +152,9 @@ Dialog {
     }
     FileDialog {
         id: xmlDialog
+        property double task: -1
         title: "为当前视频选择弹幕 XML"
         nameFilters: ["弹幕 XML (*.xml)"]
-        onAccepted: { dialog.manualSearch = false; dialog.backend.loadFile(selectedFile) }
+        onAccepted: { if (task === dialog.backend.taskId && dialog.backend.canSelectSource) { dialog.manualSearch = false; dialog.backend.loadFile(selectedFile) } }
     }
 }

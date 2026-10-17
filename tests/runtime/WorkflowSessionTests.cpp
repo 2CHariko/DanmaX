@@ -51,17 +51,84 @@ struct Harness {
     }
     void send() {
         QTest::qWait(2); sample.id = service->sessionId(); sample.generation = monitor->generation(); sample.observedAt = MediaMonitor::monotonicSeconds();
-        sample.identity = sample.title;
+        sample.identity = sample.title; sample.mediaUri = QUrl::fromLocalFile(f.video).toString(QUrl::FullyEncoded);
         QMetaObject::invokeMethod(&app, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample));
     }
     void open(int intent = MediaSession::Normal) {
-        media->openVideo(f.video, intent); sample.title = "Other - 02.mp4"; send(); sample.title = QFileInfo(f.video).fileName(); send();
+        media->openVideo(f.video, intent); sample.title = QFileInfo(f.video).fileName(); send();
     }
 };
 }
 class WorkflowSessionTests final : public QObject {
     Q_OBJECT
 private slots:
+    void standalonePlaybackReplacementUnloadAndEnd() {
+        Fixture f; Harness h(f); auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
+        auto* standalone = qobject_cast<DanmakuSession*>(h.app.standalone()); QVERIFY(standalone);
+        now->openStandalone(f.xml); QTRY_VERIFY(now->standalone()); QTRY_COMPARE(now->count(), 2);
+        QVERIFY(now->active()); QVERIFY(now->playing()); QVERIFY(now->canPlay()); QVERIFY(now->canSeek());
+        QVERIFY(!now->video()); QVERIFY(!h.media->active()); QVERIFY(!h.service->active());
+        now->togglePlayback(); QVERIFY(!now->playing()); now->seek(6); QCOMPARE(now->position(), 6.0);
+        QTest::qWait(80); QCOMPARE(now->position(), 6.0);
+        now->replaceDanmaku(f.second); QTRY_COMPARE(now->count(), 1);
+        QVERIFY(!now->playing()); QCOMPARE(now->position(), 6.0); QCOMPARE(now->duration(), 16.0);
+        now->togglePlayback(); QVERIFY(now->playing());
+        now->unloadDanmaku(); QVERIFY(now->active()); QCOMPARE(now->count(), 0); QVERIFY(!now->canPlay());
+        QVERIFY(now->canSelectSource()); now->replaceDanmaku(f.xml); QTRY_COMPARE(now->count(), 2);
+        now->endPlayback(); QVERIFY(!now->active()); QVERIFY(!h.app.running()); QCOMPARE(now->count(), 0);
+        QVERIFY(!now->canSeek()); QVERIFY(!now->canSelectSource());
+        now->openStandalone(f.xml); QTRY_VERIFY(now->standalone()); h.app.stop();
+        QVERIFY(!now->active()); QVERIFY(!h.app.overlayVisible());
+    }
+    void independentPreparationPreservesVideoUntilCommit() {
+        Fixture f; f.seed(); Harness h(f); h.open(); QTRY_COMPARE(h.media->total(), 2);
+        auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
+        const auto bound = h.service->sessionId(); const auto generation = h.monitor->generation();
+        now->openStandalone(f.directory.filePath("missing.xml")); QTRY_VERIFY(!now->openingStandalone());
+        QVERIFY(!now->error().isEmpty()); QVERIFY(h.media->active()); QVERIFY(h.app.running());
+        QCOMPARE(h.media->total(), 2); QCOMPARE(h.service->sessionId(), bound); QCOMPARE(h.monitor->generation(), generation);
+        h.media->loadFile(f.xml); QTRY_VERIFY(!h.media->loading()); QVERIFY(now->error().isEmpty());
+        now->openStandalone(f.second); now->cancelStandaloneOpen(); QTest::qWait(80);
+        QVERIFY(h.media->active()); QVERIFY(now->video()); QCOMPARE(now->count(), 2);
+        now->openStandalone(f.second); now->unloadDanmaku(); QTest::qWait(60);
+        QVERIFY(now->video()); QVERIFY(h.media->active()); QCOMPARE(now->count(), 0);
+        h.media->loadFile(f.xml); QTRY_COMPARE(h.media->total(), 2);
+        now->openStandalone(f.second); QTRY_VERIFY(now->standalone()); QCOMPARE(now->count(), 1);
+        QVERIFY(!h.media->active()); QVERIFY(!h.service->active()); QVERIFY(h.app.manualMode());
+        h.send(); h.monitor->ownedPlayerExited(bound); QVERIFY(now->standalone()); QVERIFY(now->playing());
+    }
+    void standalonePreparationCannotTakeOverLaterVideoOrEnd() {
+        Fixture f; f.seed(); Harness h(f); auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
+        disconnect(h.media, &MediaSession::seekRequested, h.monitor, &MediaMonitor::requestSeek);
+        QSignalSpy seeks(h.media, &MediaSession::seekRequested);
+        now->openStandalone(f.second); h.open(); QTRY_COMPARE(h.media->total(), 2); QTest::qWait(60);
+        QVERIFY(now->video()); QVERIFY(!now->standalone());
+        now->openStandalone(f.second); now->endPlayback(); QTest::qWait(60);
+        QVERIFY(!now->active()); QVERIFY(!h.app.running());
+        now->openStandalone(f.second); h.app.stop(); QTest::qWait(60);
+        QVERIFY(!now->active()); QVERIFY(!h.app.running()); QVERIFY(!now->openingStandalone());
+        now->openStandalone(f.second); QTRY_VERIFY(now->standalone()); h.open();
+        if (h.media->restoring()) { QVERIFY(!seeks.isEmpty()); h.monitor->seekFinished(seeks.last()[2].toULongLong(), true, {}); h.send(); }
+        QTRY_COMPARE(h.media->total(), 2); QVERIFY(!qobject_cast<DanmakuSession*>(h.app.standalone())->active());
+        QVERIFY(now->video()); QVERIFY(!h.app.manualMode());
+    }
+    void standaloneCachedSourcesAreTaskBound() {
+        Fixture f; Harness h(f); auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
+        auto result = parseOnlineDanmaku(R"({"comments":[{"p":"0,1,16777215,u","m":"cached"}]})");
+        result.metadata = {{"server", "https://offline.test"}, {"animeId", "42"}, {"episodeId", "42001"}, {"animeTitle", "Cached"}, {"episodeTitle", "Episode 1"}, {"downloadedAt", "2026-10-17T00:00:00.000Z"}};
+        QVERIFY(saveCachedDanmaku(f.directory.filePath("cache/danmaku"), result).isEmpty());
+        const auto key = danmakuCacheKey("https://offline.test", 42001);
+        now->openStandalone(f.xml); QTRY_VERIFY(now->standalone()); now->togglePlayback(); now->seek(6);
+        auto* task = qobject_cast<DanmakuSession*>(h.app.standalone());
+        h.app.loadCachedDanmaku(key); QTRY_COMPARE(now->count(), 1); QCOMPARE(now->title(), QString("Cached"));
+        QVERIFY(!now->playing()); QCOMPARE(now->position(), 6.0); QVERIFY(!h.media->active());
+        task->loadFile(f.xml); QVERIFY(task->preparing()); task->loadCached(key); QVERIFY(!task->preparing());
+        QTRY_COMPARE(now->count(), 1); QTest::qWait(60); QCOMPARE(now->count(), 1);
+        task->loadCached(key); now->endPlayback(); QTest::qWait(80); QVERIFY(!now->active());
+        now->openStandalone(f.xml); QTRY_VERIFY(now->standalone());
+        task->loadCached(key); h.open(); QTest::qWait(100); QVERIFY(now->video()); QCOMPARE(now->count(), 0);
+        QVERIFY(!task->active());
+    }
     void recentPersistenceBoundsAndReplacement() {
         Fixture f; RecentVideoStore store(f.data()); store.opened(f.video);
         store.checkpoint(f.video, 30, 120, {{"kind", "xml"}, {"path", f.xml}});
@@ -97,39 +164,36 @@ private slots:
         QVERIFY(history.open(QIODevice::ReadOnly)); QCOMPARE(history.readAll(), before);
     }
     void startupRestoresPreferencesWithoutPlayback() {
-        Fixture f;
-        QVERIFY(QDir().mkpath(f.data()));
-        { SettingsStore settings(f.data()); settings.setValue("automaticDanmaku", true); settings.setValue("targetSession", "danmax-vlc:123:456"); settings.setValue("lastFile", f.xml); }
+        Fixture f; QVERIFY(QDir().mkpath(f.data()));
+        { SettingsStore settings(f.data()); settings.setValue("lastFile", f.xml); }
+        const auto path = QDir(f.data()).filePath("settings.ini");
+        { QFile file(path); QVERIFY(file.open(QIODevice::Append)); file.write("\n[Sync]\nautomaticDanmaku=true\ntargetSession=obsolete-player\n"); }
+        QFile before(path); QVERIFY(before.open(QIODevice::ReadOnly)); const auto content = before.readAll(); before.close();
+        { SettingsStore settings(f.data()); QVERIFY(settings.error().isEmpty()); }
+        QVERIFY(before.open(QIODevice::ReadOnly)); QCOMPARE(before.readAll(), content); before.close();
         Harness h(f); QVERIFY(!h.app.running()); QVERIFY(!h.media->active());
-        QVERIFY(!qobject_cast<AutomaticDanmaku*>(h.app.automatic())->enabled());
-        QCOMPARE(qobject_cast<SettingsStore*>(h.app.settings())->values().value("targetSession").toString(), QString());
+        auto* settings = qobject_cast<SettingsStore*>(h.app.settings());
+        QVERIFY(!settings->values().contains("targetSession")); QVERIFY(!settings->values().contains("automaticDanmaku"));
         QCOMPARE(qobject_cast<DanmakuSession*>(h.app.danmaku())->filePath(), f.xml);
     }
-    void independentPreparationDoesNotInterruptMedia() {
-        Fixture f; f.seed(); Harness h(f); h.open(); QTRY_COMPARE(h.media->total(), 2); QVERIFY(h.app.running());
-        auto* settings = qobject_cast<SettingsStore*>(h.app.settings()); settings->setValue("targetSession", "Browser");
-        QCOMPARE(settings->values().value("targetSession").toString(), QString("Browser"));
-        h.app.loadFile(f.directory.filePath("missing.xml"));
-        QTRY_VERIFY(!qobject_cast<DanmakuSession*>(h.app.danmaku())->error().isEmpty());
-        QVERIFY(h.media->error().isEmpty()); QVERIFY(h.app.running()); QCOMPARE(h.media->total(), 2);
-        QSignalSpy loaded(&h.app, &AppController::loadCompleted); h.app.loadFile(f.second); QTRY_VERIFY(!loaded.isEmpty());
-        QVERIFY(qobject_cast<DanmakuSession*>(h.app.danmaku())->error().isEmpty());
-        QVERIFY(h.app.running()); QCOMPARE(h.media->total(), 2);
-        QCOMPARE(qobject_cast<DanmakuSession*>(h.app.danmaku())->total(), 1);
-        QCOMPARE(qobject_cast<PlaybackCoordinator*>(h.app.coordinator())->owner(), PlaybackCoordinator::Media);
-        h.app.start(true); QVERIFY(h.app.running()); QVERIFY(h.app.manualMode()); QVERIFY(!h.media->active());
-        QCOMPARE(qobject_cast<PlaybackCoordinator*>(h.app.coordinator())->owner(), PlaybackCoordinator::Danmaku);
-        QCOMPARE(h.app.total(), 1); QCOMPARE(settings->values().value("targetSession").toString(), QString("Browser"));
+    void sourcesRequireCurrentVideo() {
+        Fixture f; Harness h(f); auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
+        QSignalSpy search(&h.app, &AppController::requestOnlineDanmakuSearch);
+        h.media->loadFile(f.xml); QVERIFY(!h.media->error().isEmpty());
+        h.app.loadCachedDanmaku("missing"); h.app.showOnlineDanmakuForAnime("Test");
+        QCOMPARE(search.size(), 0); QVERIFY(!h.media->active()); QVERIFY(!h.app.running());
+        QVERIFY(!now->canPlay()); QVERIFY(!now->canSeek()); QCOMPARE(now->count(), 0);
+        QVERIFY(h.app.metaObject()->indexOfMethod("start(bool)") < 0);
+        QVERIFY(h.app.metaObject()->indexOfMethod("selectSession(QString)") < 0);
+        QVERIFY(h.app.metaObject()->indexOfProperty("danmaku") < 0);
     }
-    void unifiedIndependentPlaybackAndEnd() {
-        Fixture f; Harness h(f); auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying()); QVERIFY(now);
-        now->openDanmaku(f.xml); QTRY_VERIFY(h.app.running()); QVERIFY(now->playing()); QVERIFY(now->canSeek());
-        QCOMPARE(now->count(), 2); QVERIFY(!now->video());
-        now->togglePlayback(); QVERIFY(!now->playing()); now->seek(1); QCOMPARE(now->position(), 1.0);
-        now->replaceDanmaku(f.second); QTRY_VERIFY(!now->busy()); QCOMPARE(now->count(), 1); QVERIFY(!now->playing());
-        now->togglePlayback(); QVERIFY(now->playing()); h.app.setDanmakuVisible(false); QVERIFY(now->playing());
-        now->endPlayback(); QVERIFY(!now->active()); QCOMPARE(qobject_cast<PlaybackCoordinator*>(h.app.coordinator())->owner(), PlaybackCoordinator::None);
-        QVERIFY(now->canPlay()); now->togglePlayback(); QVERIFY(now->active());
+    void endingTaskRejectsLateSource() {
+        Fixture f; f.seed(); Harness h(f); h.open(); QTRY_COMPARE(h.media->total(), 2);
+        const auto task = h.media->taskId(); h.media->loadFile(f.second);
+        qobject_cast<NowPlayingModel*>(h.app.nowPlaying())->endPlayback();
+        QTest::qWait(100); QVERIFY(!h.media->active()); QVERIFY(!h.app.running()); QCOMPARE(h.media->total(), 0);
+        QVERIFY(h.media->taskId() != task); QVERIFY(!h.media->canSelectSource());
+        h.media->loadCached("missing"); QVERIFY(!h.media->active()); QVERIFY(!h.app.running());
     }
     void unifiedExternalControlNeedsAckAndReadback() {
         Fixture f; f.seed(); Harness h(f); h.open(); QTRY_COMPARE(h.media->total(), 2);
@@ -137,7 +201,7 @@ private slots:
         disconnect(now, &NowPlayingModel::playbackRequested, h.monitor, &MediaMonitor::requestPlayback);
         QSignalSpy commands(now, &NowPlayingModel::playbackRequested);
         h.media->unload(); QCOMPARE(now->count(), 0); QVERIFY(now->playing()); QVERIFY(now->canPlay());
-        QVERIFY(!now->canSeek());
+        QVERIFY(now->canSeek());
         now->togglePlayback(); QCOMPARE(commands.size(), 1); QVERIFY(now->busy());
         const auto id = commands.first()[2].toULongLong();
         h.monitor->playbackControlFinished(id, true, {}); QVERIFY(now->busy()); QVERIFY(now->playing());
@@ -147,28 +211,11 @@ private slots:
         now->endPlayback(); h.monitor->playbackControlFinished(commands.last()[2].toULongLong(), true, {});
         QVERIFY(!now->busy()); QVERIFY(!now->active());
     }
-    void failedIndependentOpenKeepsCurrentVideoAndReportsError() {
+    void failedXmlReplacementKeepsCurrentVideoAndReportsError() {
         Fixture f; f.seed(); Harness h(f); h.open(); QTRY_COMPARE(h.media->total(), 2);
         auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
-        now->openDanmaku(f.directory.filePath("missing.xml")); QTRY_VERIFY(!now->busy());
+        now->replaceDanmaku(f.directory.filePath("missing.xml")); QTRY_VERIFY(!now->error().isEmpty());
         QVERIFY(!now->error().isEmpty()); QVERIFY(now->video()); QVERIFY(h.media->active()); QCOMPARE(now->count(), 2);
-    }
-    void firstFollowPlayResumesOnlyFreshConfirmedContent() {
-        Fixture f; Harness h(f); auto* now = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
-        h.app.selectSession("Test.Player"); QSignalSpy loaded(&h.app, &AppController::loadCompleted);
-        h.app.loadFile(f.xml); QTRY_VERIFY(!loaded.isEmpty());
-        disconnect(now, &NowPlayingModel::playbackRequested, h.monitor, &MediaMonitor::requestPlayback);
-        QSignalSpy commands(now, &NowPlayingModel::playbackRequested);
-        h.sample.id = "Test.Player"; h.sample.title = "Video.mp4"; h.sample.playing = false; h.sample.playback = MediaSample::Playback::Paused;
-        const auto inject = [&] {
-            QTest::qWait(2); h.sample.generation = h.monitor->generation(); h.sample.observedAt = MediaMonitor::monotonicSeconds();
-            QMetaObject::invokeMethod(&h.app, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, h.sample));
-        };
-        inject(); QVERIFY(now->canPlay()); now->togglePlayback(); QVERIFY(now->busy()); QVERIFY(h.app.running());
-        QCOMPARE(commands.size(), 0); inject(); QCOMPARE(commands.size(), 1); QVERIFY(commands.first()[1].toBool());
-        h.monitor->playbackControlFinished(commands.first()[2].toULongLong(), true, {});
-        h.sample.playing = true; h.sample.playback = MediaSample::Playback::Playing; inject();
-        QVERIFY(!now->busy()); QVERIFY(now->playing());
     }
     void videoMetadataSurvivesXmlAndReopen() {
         Fixture f; RecentVideoStore store(f.data()); store.opened(f.video);
@@ -227,8 +274,8 @@ private slots:
         disconnect(h.media, &MediaSession::seekRequested, h.monitor, &MediaMonitor::requestSeek);
         QSignalSpy seeks(h.media, &MediaSession::seekRequested); h.open(MediaSession::Continue);
         const auto request = seeks.first()[2].toULongLong();
-        QSignalSpy loaded(&h.app, &AppController::loadCompleted); h.app.loadFile(f.second); QTRY_VERIFY(!loaded.isEmpty()); h.app.start(true);
-        h.monitor->seekFinished(request, true, {}); QVERIFY(!h.media->active()); QCOMPARE(h.app.total(), 1);
+        qobject_cast<NowPlayingModel*>(h.app.nowPlaying())->endPlayback();
+        h.monitor->seekFinished(request, true, {}); QVERIFY(!h.media->active()); QCOMPARE(h.media->total(), 0);
         h.app.stop(); h.open(MediaSession::FromStart); QVERIFY(h.media->restoring());
         h.monitor->seekFinished(seeks.last()[2].toULongLong(), true, {}); h.sample.position = 0; h.send(); QTRY_COMPARE(h.media->total(), 2);
         h.sample.title = "Changed.mp4"; h.sample.sessionToken = 999; h.send();

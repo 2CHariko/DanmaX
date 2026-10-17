@@ -7,14 +7,14 @@
 #include <QFileInfo>
 #include <QByteArray>
 namespace {
-QString key(HANDLE handle, DWORD pid) {
+QString key(HANDLE handle, DWORD pid, bool potplayer = false) {
     FILETIME created{}, exited{}, kernel{}, user{};
     if (!GetProcessTimes(handle, &created, &exited, &kernel, &user)) return {};
     const quint64 stamp = (quint64(created.dwHighDateTime) << 32) | created.dwLowDateTime;
-    return QString("danmax-vlc:%1:%2").arg(pid).arg(stamp);
+    return QString("%1:%2:%3").arg(potplayer ? "danmax-potplayer" : "danmax-vlc").arg(pid).arg(stamp);
 }
 DWORD processId(const QString& session) {
-    if (!session.startsWith("danmax-vlc:")) return 0;
+    if (!session.startsWith("danmax-vlc:") && !session.startsWith("danmax-potplayer:")) return 0;
     bool ok = false; const auto value = session.section(':', 1, 1).toUInt(&ok);
     return ok ? value : 0;
 }
@@ -58,7 +58,7 @@ bool alive(const QString& session, const QString& executable) {
     const auto pid = processId(session); if (!pid) return false;
     HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
     if (!handle) return false;
-    bool result = WaitForSingleObject(handle, 0) == WAIT_TIMEOUT && key(handle, pid) == session;
+    bool result = WaitForSingleObject(handle, 0) == WAIT_TIMEOUT && key(handle, pid, session.startsWith("danmax-potplayer:")) == session;
     if (result && !executable.isEmpty()) {
         wchar_t buffer[32768]; DWORD size = 32768;
         result = QueryFullProcessImageNameW(handle, 0, buffer, &size)

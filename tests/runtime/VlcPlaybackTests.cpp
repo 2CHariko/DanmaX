@@ -110,15 +110,6 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(sessions.last()[0].toList().isEmpty(), 3000);
         const auto count = sessions.size(); QTest::qWait(1100); QCOMPARE(sessions.size(), count);
     }
-    void unavailableProcessDoesNotReplaceBinding() {
-        QTemporaryDir directory; AppController controller(directory.path());
-        auto* monitor = controller.findChild<MediaMonitor*>(); QVERIFY(monitor);
-        const auto selected = qobject_cast<SettingsStore*>(controller.settings())->values().value("targetSession");
-        monitor->sessionsChanged({QVariantMap{{"id", "danmax-vlc:123:456"}, {"connectable", false}, {"reason", "Open through DanmaX"}}});
-        controller.selectSession("danmax-vlc:123:456");
-        QCOMPARE(qobject_cast<SettingsStore*>(controller.settings())->values().value("targetSession"), selected);
-        QCOMPARE(controller.error(), QString("Open through DanmaX"));
-    }
     void protocolValidationAndPrecision() {
         const QString uri = QUrl::fromLocalFile("D:/媒体/中文 [% & #].mp4").toString(QUrl::FullyEncoded);
         QJsonObject obj{{"protocol", 1}, {"request", "7"}, {"ok", true}, {"found", true}, {"uri", uri}, {"item", "2"},
@@ -179,7 +170,7 @@ private slots:
         sample.title = QFileInfo(f.video).fileName(); sample.mediaUri = QUrl::fromLocalFile(f.directory.filePath("other/" + sample.title)).toString();
         service.observe(sample); QCOMPARE(confirmed.size(), 0);
         sample.mediaUri = QUrl::fromLocalFile(f.video).toString(); service.observe(sample); QCOMPARE(confirmed.size(), 1);
-        QVERIFY(service.active()); QVERIFY(!service.needsConfirmation());
+        QVERIFY(service.active());
     }
     void staleResponsesForeignPortsAndSizeLimit() {
         Fixture f; f.foreign = true;
@@ -225,8 +216,6 @@ private slots:
             return false;
         };
         QTRY_VERIFY_WITH_TIMEOUT(ordinaryListed(), 5000);
-        const auto originalBinding = settings->values().value("targetSession"); controller.selectSession(ordinarySession);
-        QCOMPARE(settings->values().value("targetSession"), originalBinding); QVERIFY(!controller.error().isEmpty());
         closeOwned(ordinarySession); QTRY_VERIFY_WITH_TIMEOUT(!ordinaryListed(), 5000);
         MediaSample sample; connect(monitor, &MediaMonitor::sampleReceived, &controller, [&](MediaSample value) { sample = value; });
         QString session; auto cleanup = qScopeGuard([&] { controller.stop(); closeOwned(session); closeOwned(service->sessionId()); });
@@ -264,7 +253,6 @@ private slots:
         monitor->requestPlayback(sample, true, 1002); QTRY_COMPARE_WITH_TIMEOUT(controls.size(), 2, 4000); QVERIFY(controls.last()[1].toBool()); QTRY_VERIFY(controller.playing());
         QSignalSpy confirmed(service, &VideoOpenService::confirmed); service->open({QUrl::fromLocalFile(video)});
         QTRY_COMPARE_WITH_TIMEOUT(confirmed.size(), 1, 15000); QCOMPARE(service->sessionId(), session);
-        QVERIFY(!service->needsConfirmation());
         verifyMediaWorkflow(controller, monitor, service, sample, video, evidence, session);
     }
 };

@@ -106,81 +106,6 @@ QtObject {
     })
 
     // 播放页
-    readonly property var player: ({
-        title: "播放",
-        description: "当前内容、弹幕与播放控制。",
-        sourceTabsAccessible: "弹幕来源",
-        sourceLocalTab: "本地 XML",
-        sourceCachedTab: "已缓存",
-
-        // 本地 XML 来源
-        localSectionTitle: "XML 弹幕文件",
-        pathPlaceholder: "输入或选择 Bilibili XML 文件路径",
-        pathAccessible: "弹幕文件路径",
-        browseFile: "选择文件",
-        browseDialogTitle: "选择弹幕 XML",
-        browseFileFilter: "弹幕文件 (*.xml)",
-        loadDanmaku: "载入弹幕",
-        cancelLoad: "取消载入",
-        currentDanmakuPrefix: "当前弹幕：",
-        loadedCountFormat: "已载入 %1 条弹幕",
-
-        // 播放方式
-        modeSectionTitle: "播放方式",
-        syncMode: "跟随播放器",
-        manualMode: "独立播放",
-        sessionWaitPlaceholder: "等待媒体会话，请先在播放器中播放视频",
-        sessionAccessible: "目标播放器",
-        sessionHint: "选择后自动记住此播放器；暂未打开或关闭后会继续等待，再次播放时自动连接。开始弹幕后跟随暂停和跳转。",
-        vlcDiscoveryHint: "未连接的 VLC：请在设置中将 VLC 设为默认外部播放器，再到媒体库打开视频建立同步连接。",
-        savedSessionWaiting: "等待已保存的播放器：%1",
-        forgetSession: "取消绑定",
-        automaticTitle: "按播放内容自动匹配弹幕",
-        automaticHint: "读取指定播放器标题，缓存优先，唯一匹配时下载并自动跟随；切集时清除上一集弹幕。手动载入、停止或卸载会暂停自动匹配。",
-        automaticChoice: "选择当前内容的弹幕",
-        automaticResume: "继续自动匹配",
-        automaticRetry: "重新匹配",
-        automaticForget: "忘记本番关联",
-        sessionIdTitle: "手动指定应用 ID",
-        sessionIdPlaceholder: "播放器应用 ID",
-        sessionIdAccessible: "播放器应用 ID",
-        sessionIdHint: "填写播放器实际提供的 Windows 媒体会话标识（AUMID）。保存后持续等待该应用；留空取消绑定。",
-        manualHint: "使用独立时间轴，可在下方暂停或调整进度。",
-
-        // 播放控制
-        controlSectionTitle: "播放控制",
-        statusAccessiblePrefix: "播放状态：",
-        blockedLoading: "正在载入弹幕，请稍候。",
-        blockedNoDanmaku: "先选择并载入弹幕，再开始播放。",
-        blockedNoSession: "请选择播放器，或切换为独立播放。",
-        startPlayback: "开始播放",
-        pausePlayback: "暂停",
-        resumePlayback: "继续",
-        stopPlayback: "停止",
-        stopPlaybackDesc: "退出覆盖层，保留弹幕，可再次开始",
-        unloadDanmaku: "卸载弹幕",
-        unloadDanmakuDesc: "停止覆盖层并释放弹幕数据，再次播放需重新载入",
-        replayPlayback: "重新播放",
-        timeManualSuffix: "（预计）",
-        timeSyncSuffix: " · 由播放器控制",
-        manualSeekAccessible: "独立播放进度",
-        playerProgressAccessible: "播放器进度",
-        runtimeDetailsTitle: "运行详情",
-        runtimeDetailsFormat: "在屏 %1 · 丢弃 %2 · 内存 %3 MiB",
-        heroStatusReady: "就绪，随时可播放",
-        heroStatusWaiting: "等待配置",
-        heroStatusRunning: "弹幕正在播放",
-        danmakuBadgeNotLoaded: "未载入弹幕",
-        danmakuBadgeReady: "%1 条弹幕",
-        playerBadgeConnected: "已连接：%1",
-        playerBadgeWaiting: "尚未绑定播放器",
-        playerBadgeManual: "独立播放模式",
-        danmakuBadgeAccessible: "弹幕载入状态",
-        playerBadgeAccessible: "播放器连接状态",
-        loadedDanmakuCardTitle: "已就绪弹幕",
-        clearDanmakuBtn: "清除",
-        changeDanmakuBtn: "更换文件"
-    })
 
     // 在线弹幕子面板
     readonly property var online: ({
@@ -317,7 +242,7 @@ QtObject {
         // 同步与窗口
         syncSection: "同步与窗口",
         timeOffsetTitle: "时间偏移（0.1 秒）",
-        timeOffsetDesc: "仅用于跟随播放器：正值提前显示弹幕，负值延后。独立播放使用自身进度。",
+        timeOffsetDesc: "相对当前视频调整弹幕时间：正值提前显示弹幕，负值延后。",
         timeOffsetAccessible: "时间偏移十分之一秒",
         screenTitle: "显示器",
         screenAccessible: "弹幕显示器",

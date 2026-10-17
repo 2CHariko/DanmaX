@@ -160,7 +160,8 @@ Item {
                 icon.source: Ui.icon("stop")
                 icon.width: 18; icon.height: 18
                 display: AbstractButton.IconOnly
-                Accessible.name: root.backend.manualMode ? I18n.toolbar.stopPlayback : I18n.toolbar.exitOverlay
+                Accessible.name: root.backend.nowPlaying.ownsPlayer ? "结束本次播放并关闭播放器"
+                    : root.backend.manualMode ? I18n.toolbar.stopPlayback : I18n.toolbar.exitOverlay
                 ToolbarTip { trigger: parent.hovered; text: parent.Accessible.name }
                 onClicked: root.backend.stop()
             }

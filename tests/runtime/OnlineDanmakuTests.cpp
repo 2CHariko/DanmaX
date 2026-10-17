@@ -1,3 +1,4 @@
+#include "../fixtures/PlayerExecutableFixture.h"
 #include "application/AppController.h"
 #include "application/DanmakuLibrary.h"
 #include "infrastructure/OnlineDanmakuData.h"
@@ -127,12 +128,12 @@ class OnlineDanmakuTests final : public QObject {
         QSignalSpy loaded(&controller, &AppController::loadCompleted);
         const auto key = danmakuCacheKey(result.metadata["server"].toString(), 42001);
         controller.loadCachedDanmaku(key);
-        QTRY_COMPARE(loaded.count(), 1);
-        QVERIFY(loaded.first().first().toBool());
-        QCOMPARE(controller.total(), 2);
+        QCOMPARE(loaded.count(), 0); QVERIFY(!controller.running());
+        QVERIFY(!qobject_cast<MediaSession*>(controller.media())->active());
+        QVERIFY(!qobject_cast<MediaSession*>(controller.media())->error().isEmpty());
         QCOMPARE(navigation.count(), 1);
         QCOMPARE(navigation.first().at(0).toInt(), 1);
-        QCOMPARE(navigation.first().at(1).toInt(), 1);
+        QCOMPARE(navigation.first().at(1).toInt(), -1);
         QVERIFY(!library->busy());
         QVERIFY(library->error().isEmpty());
         QTRY_VERIFY(!library->scanning());
@@ -468,64 +469,77 @@ class OnlineDanmakuTests final : public QObject {
         library.selectAnime("42"); QTest::qWait(20); library.cancel(); QTest::qWait(150);
         QVERIFY(library.episodes().isEmpty()); QVERIFY(library.selectedEpisode().isEmpty());
     }
+    void standaloneOnlineSourceRoutingAndLateResultCancellation() {
+        QTemporaryDir root; FakeServer server;
+        AppController controller(root.filePath("data"), nullptr, {}, root.filePath("cache"));
+        auto* settings = qobject_cast<SettingsStore*>(controller.settings()); QVERIFY(settings->setDanmakuServers({server.base()}));
+        QQuickWindow overlay; DanmakuItem renderer; renderer.setParentItem(overlay.contentItem()); controller.attach(&renderer, &overlay);
+        auto* now = qobject_cast<NowPlayingModel*>(controller.nowPlaying());
+        auto* standalone = qobject_cast<DanmakuSession*>(controller.standalone());
+        auto* library = qobject_cast<DanmakuLibrary*>(standalone->library());
+        const auto xml = root.filePath("standalone.xml"); writeBytes(xml, R"(<i><d p="0,1,25,16777215">local</d><d p="50,1,25,16777215">later</d></i>)");
+        now->openStandalone(xml); QTRY_VERIFY(now->standalone()); now->togglePlayback(); now->seek(8);
+        QSignalSpy commands(now, &NowPlayingModel::playbackRequested), seeks(now, &NowPlayingModel::seekRequested);
+        QSignalSpy search(standalone, &DanmakuSession::requestOnlineDanmakuSearch), committed(standalone, &DanmakuSession::sourceCommitted);
+        controller.showOnlineDanmakuForAnime("测试"); QCOMPARE(search.size(), 1); QTRY_VERIFY(!library->busy());
+        library->selectAnime("42"); QTRY_VERIFY(!library->busy()); library->selectEpisode("42001"); library->downloadEpisode();
+        QTRY_COMPARE(committed.size(), 1); QCOMPARE(now->count(), 2); QVERIFY(now->title().contains("测试动画"));
+        QVERIFY(!now->playing()); QCOMPARE(now->position(), 8.0); QVERIFY(now->standalone());
+        QVERIFY(!qobject_cast<MediaSession*>(controller.media())->active()); QCOMPARE(commands.size(), 0); QCOMPARE(seeks.size(), 0);
+        server.response = [](QByteArray) { return Response{200, commentBody("late"), 150}; };
+        const auto requests = server.targets.size(); library->downloadEpisode(true); QTRY_VERIFY(server.targets.size() > requests);
+        now->replaceDanmaku(xml); QTRY_VERIFY(!now->busy()); QTest::qWait(220);
+        QCOMPARE(now->title(), QString("standalone.xml")); QCOMPARE(committed.size(), 2); QVERIFY(!now->playing()); QCOMPARE(now->position(), 8.0);
+        library->downloadEpisode(true); now->endPlayback(); QTest::qWait(220);
+        QVERIFY(!now->active()); QVERIFY(!controller.running()); QCOMPARE(now->count(), 0);
+    }
     void controllerSourceLifecycle() {
         QTemporaryDir root; FakeServer server;
-        AppController controller(root.path(), nullptr, [](const QString&) { return true; }, root.filePath("cache"));
-        auto* library = qobject_cast<DanmakuLibrary*>(controller.library()); QVERIFY(library);
-        QVERIFY(qobject_cast<SettingsStore*>(controller.settings())->setValue("danmakuServers", QStringList{server.base()}));
-        library->searchAnime("测试"); QTRY_VERIFY(!library->busy()); library->selectAnime("42"); QTRY_VERIFY(!library->busy()); library->selectEpisode("42001");
-        QSignalSpy loaded(&controller, &AppController::loadCompleted);
-        library->downloadEpisode(); QTRY_COMPARE(loaded.count(), 1);
-        QCOMPARE(controller.total(), 2); QVERIFY(!controller.running()); QVERIFY(controller.sourceTitle().contains("测试动画"));
-        DanmakuItem renderer;
-        QQuickWindow overlay;
-        controller.attach(&renderer, &overlay);
-        controller.start(true);
-        QVERIFY(controller.running()); QVERIFY(controller.playing());
-        QVERIFY(controller.filePath().isEmpty()); QVERIFY(controller.settings()->property("values").toMap()["lastFile"].toString().isEmpty());
-        QTRY_VERIFY(!library->scanning());
-        const auto key = library->cachedEntries().first().toMap()["key"].toString();
-        library->removeCached(key); QTRY_VERIFY(!library->busy()); QCOMPARE(controller.total(), 2);
-        server.response = [](QByteArray) { return Response{503, "failed"}; };
-        library->downloadEpisode(true); QTRY_VERIFY(!library->busy()); QCOMPARE(controller.total(), 2);
-        QVERIFY(controller.running()); QVERIFY(controller.playing());
-        server.response = [](QByteArray) { return Response{200, commentBody("新弹幕"), 100}; };
-        const auto count = server.targets.size(); library->downloadEpisode(true); QTRY_VERIFY(server.targets.size() > count);
-        controller.unload(); QTest::qWait(160); QCOMPARE(controller.total(), 0); QCOMPARE(loaded.count(), 1);
+        const auto exe = root.filePath("PotPlayerMini64.exe"), video = root.filePath("Test - 01.mp4");
+        writeBytes(exe, playerExecutableFixture()); writeBytes(video, "fixture");
+        VideoOpenService::Hooks hooks{[=] { return exe; }, [](const QString&) { return QString(); },
+            [](const QString&, const QStringList&) { return QString(); }};
+        RecentVideoStore recent(root.path()); recent.opened(video); recent.checkpoint(video, 0, 120, {{"kind", "disabled"}});
+        AppController controller(root.path(), nullptr, [](const QString&) { return true; }, root.filePath("cache"), {}, {}, {}, hooks);
+        auto* media = qobject_cast<MediaSession*>(controller.media()); auto* service = qobject_cast<VideoOpenService*>(controller.videoOpen());
+        auto* monitor = controller.findChild<MediaMonitor*>(); disconnect(monitor, &MediaMonitor::sampleReceived, &controller, nullptr);
+        auto* library = qobject_cast<DanmakuLibrary*>(media->library());
+        QVERIFY(qobject_cast<SettingsStore*>(controller.settings())->setDanmakuServers({server.base()}));
+        QQuickWindow overlay; DanmakuItem renderer; renderer.setParentItem(overlay.contentItem()); controller.attach(&renderer, &overlay);
+        MediaSample sample; sample.found = sample.playing = true; sample.playback = MediaSample::Playback::Playing;
+        sample.title = sample.identity = "Test - 01.mp4"; sample.mediaUri = QUrl::fromLocalFile(video).toString(QUrl::FullyEncoded);
+        sample.duration = 120; sample.position = 12; sample.sessionToken = 101;
+        const auto send = [&] { QTest::qWait(2); sample.id = service->sessionId(); sample.generation = monitor->generation();
+            sample.observedAt = MediaMonitor::monotonicSeconds();
+            QMetaObject::invokeMethod(&controller, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample)); };
+        media->openVideo(video); send(); QVERIFY(media->canSelectSource());
+        QTimer heartbeat; connect(&heartbeat, &QTimer::timeout, &controller, send); heartbeat.start(30);
+        QSignalSpy committed(media, &MediaSession::sourceCommitted);
+        controller.showOnlineDanmakuForAnime("测试"); QTRY_VERIFY(!library->busy());
+        library->selectAnime("42"); QTRY_VERIFY(!library->busy()); library->selectEpisode("42001");
+        library->downloadEpisode(); QTRY_COMPARE(committed.size(), 1); QCOMPARE(media->total(), 2); QVERIFY(controller.running());
+        QTRY_VERIFY(!library->scanning()); const auto key = library->cachedEntries().first().toMap()["key"].toString();
+        const auto bound = service->sessionId(); const auto generation = monitor->generation();
+        server.response = [](QByteArray) { return Response{200, commentBody("late"), 100}; };
         const auto xml = root.filePath("local.xml"); writeBytes(xml, R"(<i><d p="0,1,25,16777215">local</d></i>)");
-        library->downloadEpisode(true); QTest::qWait(20); controller.loadFile(xml);
-        QTRY_VERIFY(!controller.loading()); QTest::qWait(120); QCOMPARE(controller.total(), 1); QCOMPARE(controller.filePath(), xml);
-        // A queued cached result must also lose to an explicit stop.
-        library->downloadEpisode(true); QTRY_VERIFY(!library->busy()); QCOMPARE(controller.total(), 2);
-        QTRY_VERIFY(!library->scanning()); const auto cachedKey = library->cachedEntries().first().toMap()["key"].toString();
-        library->loadCached(cachedKey); controller.unload(); QTest::qWait(100); QCOMPARE(controller.total(), 0);
-        // Switching from XML preparation must also notify QML that XML loading ended.
-        controller.loadFile(xml); QVERIFY(controller.loading());
-        QSignalSpy state(&controller, &AppController::stateChanged);
-        library->loadCached(cachedKey); QVERIFY(!controller.loading()); QVERIFY(state.count() > 0);
-        QTRY_VERIFY(!library->busy()); QCOMPARE(controller.total(), 2); QVERIFY(!controller.running());
+        library->downloadEpisode(true); QTest::qWait(20); media->loadFile(xml);
+        QTRY_COMPARE(media->total(), 1); QTest::qWait(160); QCOMPARE(media->total(), 1);
+        QCOMPARE(service->sessionId(), bound); QCOMPARE(monitor->generation(), generation);
+        library->loadCached(key); media->unload(); QTest::qWait(120); QCOMPARE(media->total(), 0); QVERIFY(media->active());
+        media->loadFile(xml); QVERIFY(media->loading()); media->loadCached(key); QVERIFY(!media->loading());
+        QTRY_COMPARE(media->total(), 2); QVERIFY(controller.running());
+        media->loadCached(key); qobject_cast<NowPlayingModel*>(controller.nowPlaying())->endPlayback();
+        QTest::qWait(160); QVERIFY(!media->active()); QCOMPARE(media->total(), 0); QVERIFY(!controller.running());
         auto* quitting = new DanmakuLibrary(root.filePath("quit")); quitting->setServers({server.base()});
         quitting->searchAnime("退出"); delete quitting; QTest::qWait(120);
     }
-    void sourcePagesSmoke() {
-        QTemporaryDir root;
-        auto result = parseOnlineDanmaku(commentBody()); result.metadata = metadata();
-        const auto cacheRoot = root.filePath("cache");
-        QVERIFY(saveCachedDanmaku(QDir(cacheRoot).filePath("danmaku"), result).isEmpty());
-        const auto damagedKey = danmakuCacheKey("https://damaged.test", 1);
-        writeBytes(QDir(cacheRoot).filePath("danmaku/" + damagedKey + ".json"), "broken");
-        for (const auto& source : {"online", "cache"}) {
-            QProcess process;
-            QStringList arguments{"--smoke-test", "--seconds", "3", "--page", source == QString("online") ? "home" : "player",
-                "--data-dir", root.filePath(QString(source) + "-data"), "--cache-dir", cacheRoot,
-                "--window-width", "520", "--theme", source == QString("cache") ? "dark" : "light"};
-            if (source == QString("online")) arguments << "--online-search";
-            else arguments << "--source-tab" << "cache";
-            process.start(QDir(QCoreApplication::applicationDirPath()).filePath("DanmaX.exe"),
-                arguments);
+    void retiredProductArgumentsRejected() {
+        QTemporaryDir root; const auto xml = root.filePath("comments.xml"); writeBytes(xml, "<i/>");
+        for (const auto& arguments : {QStringList{"--media-session", "obsolete"}, QStringList{"--source-tab", "cache"}, QStringList{"--file", xml}}) {
+            QProcess process; auto args = arguments; args << "--data-dir" << root.filePath("data") << "--cache-dir" << root.filePath("cache");
+            process.start(QDir(QCoreApplication::applicationDirPath()).filePath("DanmaX.exe"), args);
             QVERIFY(process.waitForStarted()); QVERIFY(process.waitForFinished(15000));
-            QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-            QVERIFY2(process.exitCode() == 0, process.readAllStandardError().constData());
+            QCOMPARE(process.exitStatus(), QProcess::NormalExit); QVERIFY(process.exitCode() != 0);
         }
     }
 };
