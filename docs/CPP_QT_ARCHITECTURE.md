@@ -240,4 +240,6 @@ Qt/CMake/Ninja 应使用项目内独立版本。MSVC/SDK 后续可选择：
 
 ## 内置 libVLC 开发接入
 
+VideoViewportController 在 GUI 线程内管理唯一原生视频窗口与共享弹幕覆盖窗。内置观看时通过 Windows SDK SetWindowSubclass 观察自有主窗／视频子窗，先让 Qt／QWindowKit 处理位置消息，再以实际视频 QWindow／HWND 同步覆盖窗；维护 Qt 逻辑几何并有界校验原生矩形，不替换窗口过程、不改桌面置顶或激活窗口。Qt 布局通知合并后作为兜底；隐藏、交接、表面销毁与对象析构撤销挂接。该适配不依赖 libVLC 接口，不改变公共播放器后端、唯一引擎和帧驱动；仍为两个独立 GPU 表面，不保证原子呈现。实现与验收边界见 [原生跟随接入](OWNED_OVERLAY_FOLLOW_INTEGRATION.md)。
+
 `windows-libvlc-debug/release` 显式启用 `DANMAKU_ENABLE_LIBVLC`，共享锁定依赖由独立 prepare 步骤准备。LibVlcBackend 的 C API 位于单一后台线程，使用同进程自有对象与原生输出 HWND；不套用外部 VLC 的 PID／创建时间归属规则，也不接管外部进程。公共后端新增呈现能力，桌面覆盖与内置视口分别处理几何、所有者、焦点及显隐。MediaSession、NowPlayingModel、SeekController、唯一弹幕引擎／帧驱动保持共用。生产透明主窗的黑边问题采用内置资源存续期间的纯色回退，不修改用户材质偏好。退出等待 libVLC 后台释放后才销毁输出；超时报告仍在等待，不强制终止。正式发布仍不包含内置运行库，完整说明及验收见 [LIBVLC_INTEGRATION.md](LIBVLC_INTEGRATION.md)。

@@ -272,13 +272,31 @@ private slots:
         auto* media = qobject_cast<MediaSession*>(backend.media()); media->openVideo(video);
         QTRY_VERIFY_WITH_TIMEOUT(player->canSeek() && !player->busy() && player->count() == 2, 15000);
         QVERIFY(window->property("watching").toBool());
-        player->togglePlayback(); QTRY_VERIFY(!player->playing() && !player->busy());
         auto* viewport = qobject_cast<VideoViewportController*>(backend.videoViewport());
-        auto* presentation = qobject_cast<PlaybackPresentationController*>(backend.presentation());
+        auto* overlay = window->findChild<QQuickWindow*>("danmakuOverlay"); QVERIFY(overlay);
+        QTRY_VERIFY(viewport->followMetrics().value("hooked").toBool());
         const auto handle = viewport->nativeHandle(); const auto connection = media->boundSession();
+        auto moveAndCheck = [&] {
+            const auto origin = window->position();
+            for (int i = 0; i < 20; ++i) {
+                window->setPosition(origin + QPoint(i % 2 ? 0 : 37, i % 2 ? 0 : 19));
+                RECT videoRect{}, overlayRect{};
+                if (!GetWindowRect(reinterpret_cast<HWND>(handle), &videoRect) ||
+                    !GetWindowRect(reinterpret_cast<HWND>(overlay->winId()), &overlayRect) ||
+                    !EqualRect(&videoRect, &overlayRect)) return false;
+            }
+            return true;
+        };
+        QVERIFY(player->playing()); QVERIFY(moveAndCheck());
+        const auto corrections = viewport->followMetrics().value("nativeCorrections").toULongLong();
+        for (int i = 0; i < 100; ++i) viewport->synchronize();
+        QCOMPARE(viewport->followMetrics().value("nativeCorrections").toULongLong(), corrections);
+        player->togglePlayback(); QTRY_VERIFY(!player->playing() && !player->busy());
+        auto* presentation = qobject_cast<PlaybackPresentationController*>(backend.presentation());
         auto* slider = window->findChild<QQuickItem*>("nowPlayingSeek"); QVERIFY(slider);
         auto* bar = window->findChild<QQuickItem*>("nowPlayingBar"); QVERIFY(bar);
         const auto paused = player->position();
+        QVERIFY(moveAndCheck()); QCOMPARE(player->position(), paused);
         QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, slider->mapToScene(QPointF(slider->width() * .6, slider->height() / 2)).toPoint());
         QTest::mouseMove(window, slider->mapToScene(QPointF(slider->width() * .8, slider->height() / 2)).toPoint());
         QCOMPARE(player->position(), paused);
@@ -300,6 +318,9 @@ private slots:
         else qInfo() << "OS foreground activation was not granted; keyboard focus intent checked, physical focus requires desktop validation.";
         QVERIFY(presentation->handleKey(Qt::Key_Escape)); QTRY_VERIFY(!presentation->fullscreen()); QCOMPARE(bar->window(), window);
         QCOMPARE(viewport->nativeHandle(), handle); QCOMPARE(media->boundSession(), connection);
+        QCOMPARE(viewport->followMetrics().value("failures").toULongLong(), 0);
+        QCOMPARE(viewport->followMetrics().value("maxAfterEventPx").toInt(), 0);
+        qInfo().noquote() << QJsonDocument(QJsonObject::fromVariantMap(viewport->followMetrics())).toJson(QJsonDocument::Compact);
         backend.requestClose(); QTRY_VERIFY_WITH_TIMEOUT(backend.requestClose(), 10000);
         QCOMPARE(warnings.size(), 0);
 #endif
@@ -365,7 +386,13 @@ private slots:
         QCOMPARE(now->contextId(), currentContext); QCOMPARE(now->position(), 4.0); QVERIFY(!now->openingStandalone());
         auto* seek = find(bar, "nowPlayingSeek"); QVERIFY(seek && seek->isEnabled()); QTRY_COMPARE(seek->property("value").toDouble(), 4.0);
         for (int page : {0, 5, 1}) { QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, page))); QVERIFY(now->standalone()); QCOMPARE(now->position(), 4.0); }
-        key(find(bar, "nowPlayingDanmaku"));
+        // Navigation changes page focus/layout. Wait for an actual UI frame
+        // before sending the next keyboard action, as a user would observe it.
+        QSignalSpy navigationFrame(window, &QQuickWindow::afterAnimating);
+        QTRY_VERIFY(!navigationFrame.isEmpty());
+        auto* sourceButton = find(bar, "nowPlayingDanmaku"); QVERIFY(sourceButton && sourceButton->isEnabled());
+        sourceButton->forceActiveFocus(); QTRY_COMPARE(window->activeFocusItem(), sourceButton);
+        key(sourceButton);
         auto* menu = bar->findChild<QObject*>("nowPlayingDanmakuMenu"); QVERIFY(menu); QTRY_VERIFY(menu->property("opened").toBool());
         key(menu->findChild<QQuickItem*>("selectCachedDanmaku"));
         auto* cacheDialog = window->findChild<QObject*>("cachedDanmakuDialog"); QVERIFY(cacheDialog); QTRY_VERIFY(cacheDialog->property("opened").toBool());

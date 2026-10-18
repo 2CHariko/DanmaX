@@ -3,8 +3,10 @@
 #include <QPointer>
 #include <QQuickItem>
 #include <QWindow>
+#include <QVariantMap>
 #include <memory>
 class QQuickWindow;
+class NativeOverlayFollower;
 
 class VideoViewportController final : public QObject {
     Q_OBJECT
@@ -29,6 +31,7 @@ public:
     void setOverlay(QWindow* overlay);
     void setReleaseStatus(const QString& value) { releaseStatus_ = value; emit changed(); }
     void synchronize();
+    QVariantMap followMetrics() const;
 signals:
     void changed();
     void videoDropped(QString path);
@@ -38,10 +41,13 @@ protected:
     bool eventFilter(QObject* object, QEvent* event) override;
 private:
     void placeDialog(QQuickWindow* dialog);
+    void scheduleSynchronize();
     std::unique_ptr<QWindow> video_;
+    std::unique_ptr<NativeOverlayFollower> follower_;
     QPointer<QQuickItem> item_;
     QPointer<QWindow> overlay_, host_;
     bool active_{}, shown_{};
+    bool synchronizePending_{}, synchronizing_{};
     QString releaseStatus_;
     bool dragging_{};
     QString dragName_;

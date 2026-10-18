@@ -33,3 +33,32 @@ pwsh -File scripts/probe-libvlc.ps1 -Video '<本地视频完整路径>' -NoBuild
 libVLC 公开接口采用 LGPL-2.1-or-later。开发探针保留完整上游运行归档，其中还包含 GPL 插件及其他组件，保留 COPYING.txt、COPYING.LIB、THANKS.txt 等材料；本目录没有给出生产可分发插件清单。C API 使用动态加载与库自身的释放函数，避免 MSVC 与上游工具链之间交换分配器所有权。
 
 完整实机记录见 [LIBVLC_EMBEDDING_PROBE.md](../../docs/LIBVLC_EMBEDDING_PROBE.md)。
+
+## 同父子窗对照
+
+`-ChildLayers` 改为两个同父 `WindowContainer`，不使用屏幕坐标跟随，构建缓存独立放在 `out/build/libvlc-child-probe-release/`。默认主窗 alpha=0、弹幕 alpha=8；`-ChildHostAlpha 8` 重现透明主窗对照。`-NativeLayeredChild` 在绑定视频前，仅为弹幕子窗补充原生 layered／穿透样式；探针 manifest 声明 Windows 8／10 兼容。`-QuickSoftware` 使用 Qt 官方软件场景图，VLC 解码和 HWND 视频输出保持原路径。
+
+```powershell
+# 当前 D3D11 Quick 子窗的失败对照：状态检查通过也不代表合成成功。
+pwsh -File scripts/probe-libvlc.ps1 -Video '<本地视频完整路径>' -ChildLayers -NativeLayeredChild -KeepOpen -RunName child-d3d11
+# 已目视确认可透明叠加的对照；软件适配影响整个探针的 Qt Quick 界面。
+pwsh -File scripts/probe-libvlc.ps1 -Video '<本地视频完整路径>' -ChildLayers -NativeLayeredChild -QuickSoftware -KeepOpen -RunName child-software
+```
+
+自动检查增加移动、最大化／最小化恢复、父子关系、HWND 身份及原生样式，记录消息中两个子窗的物理矩形差；不是逐帧呈现延迟测量。界面“弹幕层”按钮只切换子窗显隐，便于对照同一视频输出；浮层仍用官方 `Popup.Window`。脚本拒绝覆盖或重启仍在运行的同一探针，不强制结束进程。
+
+本机结果是 **D3D11 Quick 透明子窗未通过；软件 Quick 子窗最小验证通过**。`result.json.passed` 仍仅表示自动状态／几何检查，必须结合前台目视检查。限制、失败轮次与证据见 [同父子窗验证记录](../../docs/LIBVLC_CHILD_WINDOWS_PROBE.md)，没有替换生产播放器或全局渲染后端。
+
+## 独立顶层覆盖窗跟随对照
+
+`-FollowSync Qt/Native` 在独立缓存 `out/build/libvlc-follow-probe-release/` 编译复用正式 VideoViewportController 并挂接现有 QWindowKit。Qt 使用当前正式控制器，Native 使用独立实验适配器。正式控制器现已包含原生消息跟随，因此重新构建后，Qt 模式不再代表旧的延后同步基线。两组均为 GPU 弹幕＋独立透明顶层窗，不使用同父子窗或软件场景图；默认 `Off` 保留原探针。
+
+先显式准备已有锁定的 libVLC 与 QWindowKit。本模式与子窗／软件实验开关互斥，使用不同 RunName 保存证据：
+
+```powershell
+pwsh -File scripts/probe-libvlc.ps1 -Video '<本地视频完整路径>' -FollowSync Native -KeepOpen -RunName follow-native
+# 正常关闭上一窗口后再运行当前正式控制器；不要与旧基线成绩混用。
+pwsh -File scripts/probe-libvlc.ps1 -Video '<本地视频完整路径>' -FollowSync Qt -NoBuild -RunName follow-qt
+```
+
+结果包含消息前后矩形差、播放／暂停／手动阶段、原生移动循环计数及窗口身份。历史同 EXE 对照中 Qt 为 16/18，Native 为 18/18，所列二进制哈希见 [顶层覆盖窗跟随验证](../../docs/OWNED_OVERLAY_FOLLOW_PROBE.md)。后续正式接入见 [生产记录](../../docs/OWNED_OVERLAY_FOLLOW_INTEGRATION.md)；几何同步不等于逐帧呈现保证。

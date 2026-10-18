@@ -999,6 +999,7 @@ void AppController::writeReport(const QString& path) {
     metrics_["videoPlaying"] = nowPlaying_.playing();
     metrics_["videoActive"] = nowPlaying_.active();
     metrics_["videoViewportShown"] = videoViewport_.shown();
+    metrics_["videoOverlayFollow"] = videoViewport_.followMetrics();
     metrics_["videoHandle"] = QString::number(videoViewport_.nativeHandle());
     metrics_["videoConnection"] = media_.boundSession();
     metrics_["presentation"] = presentation_.diagnostics();

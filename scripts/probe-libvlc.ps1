@@ -1,7 +1,8 @@
 #requires -Version 7.0
-param([Parameter(Mandatory)][string] $Video, [switch] $BuildOnly, [switch] $NoBuild, [switch] $KeepOpen,
+param([Parameter(Mandatory)][string] $Video, [switch] $BuildOnly, [switch] $NoBuild, [switch] $KeepOpen, [switch] $ChildLayers, [switch] $NativeLayeredChild, [switch] $QuickSoftware,
       [ValidatePattern('^[a-zA-Z0-9-]+$')][string] $RunName = (Get-Date -Format 'yyyyMMdd-HHmmss'),
-      [ValidateRange(1,3)][double] $Scale = 1)
+      [ValidateRange(1,3)][double] $Scale = 1, [ValidateSet(0,8)][int] $ChildHostAlpha = 0,
+      [ValidateSet('Off','Qt','Native')][string] $FollowSync = 'Off')
 . "$PSScriptRoot/common.ps1"
 Invoke-ProjectEnvironment {
     $tools = Initialize-Toolchain
@@ -12,7 +13,14 @@ Invoke-ProjectEnvironment {
     if (-not (Test-Path -LiteralPath $marker) -or (Get-Content -LiteralPath $marker -Raw).Trim() -ne (Get-FileHash -LiteralPath $lockPath).Hash) {
         throw 'Run scripts/prepare-libvlc-probe.ps1 explicitly before building/running.'
     }
-    $build = Get-ProjectPath 'out/build/libvlc-probe-release'
+    $followProbe = $FollowSync -ne 'Off'
+    if ($followProbe -and ($ChildLayers -or $NativeLayeredChild -or $QuickSoftware)) { throw '-FollowSync uses the owned D3D11 overlay and cannot be combined with child/software modes.' }
+    $build = Get-ProjectPath $(if ($followProbe) { 'out/build/libvlc-follow-probe-release' } elseif ($ChildLayers) { 'out/build/libvlc-child-probe-release' } else { 'out/build/libvlc-probe-release' })
+    $executable = Join-Path $build 'libvlc_probe.exe'
+    if ($NativeLayeredChild -and -not $ChildLayers) { throw '-NativeLayeredChild requires -ChildLayers.' }
+    foreach ($running in @(Get-Process -Name libvlc_probe -ErrorAction SilentlyContinue)) {
+        if ($running.Path -eq $executable) { throw "Probe PID $($running.Id) is still running; close it normally before building or starting another run." }
+    }
     $compiler = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/cl.exe'
     $identity = [ordered]@{root=$ProjectRoot;compiler=$compiler;qt=$tools.Qt;sdk=$env:WindowsSdkDir;sdkVersion=$env:WindowsSDKVersion} | ConvertTo-Json -Compress
     $identityPath = Join-Path $build '.probe-identity.json'
@@ -25,7 +33,7 @@ Invoke-ProjectEnvironment {
         $includePrefix = Get-MsvcIncludesPrefix
         Invoke-Checked $tools.CMake @('-S',(Get-ProjectPath 'tools/libvlc-probe'),'-B',$build,'-G','Ninja',
             '-DCMAKE_BUILD_TYPE=Release',"-DCMAKE_MAKE_PROGRAM=$($tools.Ninja)","-DCMAKE_CXX_COMPILER=$compiler",
-            "-DDANMAKU_MSVC_INCLUDES_PREFIX=$includePrefix")
+            "-DDANMAKU_MSVC_INCLUDES_PREFIX=$includePrefix", "-DDANMAKU_FOLLOW_PROBE=$($followProbe.ToString().ToUpperInvariant())")
         Set-Content -LiteralPath $identityPath -Value $identity -Encoding utf8
         Invoke-Checked $tools.CMake @('--build',$build,'--parallel','4')
     }
@@ -35,10 +43,11 @@ Invoke-ProjectEnvironment {
     if (Test-Path -LiteralPath (Join-Path $report 'result.json')) { throw 'Choose a new RunName to preserve prior evidence.' }
     New-Item -ItemType Directory -Force $report | Out-Null
     $library = Join-Path $deps "$($lock.sourceDirectory)/libvlc.dll"
-    $executable = Join-Path $build 'libvlc_probe.exe'
     [ordered]@{toolchain=($identity | ConvertFrom-Json);libvlcLockSha256=(Get-FileHash -LiteralPath $lockPath).Hash;
         libvlcSha256=(Get-FileHash -LiteralPath $library).Hash;executableSha256=(Get-FileHash -LiteralPath $executable).Hash;
-        scale=$Scale;video=$mediaPath;videoBytes=(Get-Item -LiteralPath $mediaPath).Length;
+        scale=$Scale;childLayers=[bool]$ChildLayers;childHostAlpha=$ChildHostAlpha;nativeLayeredChild=[bool]$NativeLayeredChild;quickSoftware=[bool]$QuickSoftware;followSync=$FollowSync;
+        qwindowkitLockSha256=$(if($followProbe){(Get-FileHash -LiteralPath (Get-ProjectPath 'toolchain/qwindowkit.lock.json')).Hash}else{$null});video=$mediaPath;videoBytes=(Get-Item -LiteralPath $mediaPath).Length;
+        followSources=$(if($followProbe){@('tools/libvlc-probe/Probe.cpp','tools/libvlc-probe/OwnedOverlayFollow.h','tools/libvlc-probe/FollowProbe.qml','src/platform/windows/VideoViewportController.cpp') | ForEach-Object { @{path=$_;sha256=(Get-FileHash -LiteralPath (Get-ProjectPath $_)).Hash} }}else{$null});
         gpu=@(Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion);
         cpu=@(Get-CimInstance Win32_Processor | Select-Object Name,NumberOfLogicalProcessors)} |
         ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $report 'environment.json') -Encoding utf8
@@ -55,6 +64,10 @@ Invoke-ProjectEnvironment {
     }
     $arguments = @('--library',$library,'--video',$mediaPath,'--report',$report)
     if ($KeepOpen) { $arguments += '--keep-open' }
+    if ($ChildLayers) { $arguments += @('--child-layers','--child-host-alpha',[string]$ChildHostAlpha) }
+    if ($NativeLayeredChild) { $arguments += '--native-layered-child' }
+    if ($QuickSoftware) { $arguments += '--quick-software' }
+    if ($followProbe) { $arguments += @('--follow-sync',$FollowSync.ToLowerInvariant()) }
     Write-Host "Probe evidence: $report"
     if ($KeepOpen) {
         $start = [Diagnostics.ProcessStartInfo]::new($executable)

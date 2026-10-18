@@ -23,11 +23,26 @@ endif()
 find_package(Qt6 ${QT_VERSION} EXACT REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2
     PATHS "${PROJECT_ROOT}/.tools/qt/${QT_VERSION}/msvc2022_64/lib/cmake/Qt6" NO_DEFAULT_PATH)
 qt_standard_project_setup(REQUIRES 6.11)
-qt_add_executable(libvlc_probe Probe.cpp
+option(DANMAKU_FOLLOW_PROBE "Build the owned-overlay follow experiment with the locked QWindowKit" OFF)
+if(DANMAKU_FOLLOW_PROBE)
+    set(QWINDOWKIT_BUILD_WIDGETS OFF CACHE BOOL "" FORCE)
+    set(QWINDOWKIT_BUILD_QUICK ON CACHE BOOL "" FORCE)
+    set(QWINDOWKIT_BUILD_STATIC ON CACHE BOOL "" FORCE)
+    set(QWINDOWKIT_INSTALL OFF CACHE BOOL "" FORCE)
+    set(QWINDOWKIT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${PROJECT_ROOT}/.deps/qwindowkit" qwindowkit EXCLUDE_FROM_ALL)
+endif()
+qt_add_executable(libvlc_probe Probe.cpp Probe.manifest
+    "${PROJECT_ROOT}/src/platform/windows/VideoViewportController.cpp"
+    "${PROJECT_ROOT}/src/platform/windows/VideoViewportController.h"
     "${PROJECT_ROOT}/src/core/DanmakuEngine.cpp"
     "${PROJECT_ROOT}/src/renderer/DanmakuItem.cpp" "${PROJECT_ROOT}/src/renderer/DanmakuItem.h")
-qt_add_resources(libvlc_probe ui PREFIX "/" FILES Probe.qml)
+qt_add_resources(libvlc_probe ui PREFIX "/" FILES Probe.qml ChildProbe.qml FollowProbe.qml)
 target_include_directories(libvlc_probe PRIVATE "${PROJECT_ROOT}/src" "${VLC_ROOT}/include")
-target_link_libraries(libvlc_probe PRIVATE Qt6::Quick Qt6::QuickControls2 user32 psapi)
+target_link_libraries(libvlc_probe PRIVATE Qt6::Quick Qt6::QuickControls2 user32 psapi comctl32)
+if(DANMAKU_FOLLOW_PROBE)
+    target_link_libraries(libvlc_probe PRIVATE QWindowKit::Quick)
+    target_compile_definitions(libvlc_probe PRIVATE DANMAKU_FOLLOW_PROBE)
+endif()
 include("${PROJECT_ROOT}/cmake/CompilerOptions.cmake")
 danmaku_compile_options(libvlc_probe)
