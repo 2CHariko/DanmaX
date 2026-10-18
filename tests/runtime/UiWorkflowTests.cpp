@@ -276,6 +276,30 @@ private slots:
         auto* overlay = window->findChild<QQuickWindow*>("danmakuOverlay"); QVERIFY(overlay);
         QTRY_VERIFY(viewport->followMetrics().value("hooked").toBool());
         const auto handle = viewport->nativeHandle(); const auto connection = media->boundSession();
+        auto* back = window->findChild<QQuickItem*>("watchingBack"); QVERIFY(back && back->isVisible());
+        auto* titleBar = window->findChild<QQuickItem*>("mainTitleBar"); QVERIFY(titleBar);
+        const auto hitAt = [&](const QPointF& scene) {
+            POINT pixel{qRound(scene.x() * window->devicePixelRatio()), qRound(scene.y() * window->devicePixelRatio())};
+            const auto hwnd = reinterpret_cast<HWND>(window->winId());
+            ClientToScreen(hwnd, &pixel);
+            return SendMessageW(hwnd, WM_NCHITTEST, 0, MAKELPARAM(pixel.x, pixel.y));
+        };
+        QCOMPARE(hitAt(back->mapToScene(QPointF(back->width() / 2, back->height() / 2))), LRESULT(HTCLIENT));
+        QCOMPARE(hitAt(titleBar->mapToScene(QPointF(titleBar->width() / 2, titleBar->height() / 2))), LRESULT(HTCAPTION));
+        // Cover the real button handler, not a direct call to the destination.
+        const auto checkBack = [&](int expectedPage) {
+            QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                back->mapToScene(QPointF(back->width() / 2, back->height() / 2)).toPoint());
+            QTRY_COMPARE(window->property("selectedPage").toInt(), expectedPage);
+            QTRY_VERIFY(!viewport->shown());
+            QVERIFY(player->playing()); QCOMPARE(viewport->nativeHandle(), handle); QCOMPARE(media->boundSession(), connection);
+            QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 1)));
+            QTRY_VERIFY(viewport->shown());
+        };
+        checkBack(0); // No browsing history: return home.
+        QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 5)));
+        QVERIFY(QMetaObject::invokeMethod(window, "navigate", Q_ARG(QVariant, 1)));
+        checkBack(5); // Return to the most recently visited browsing page.
         auto moveAndCheck = [&] {
             const auto origin = window->position();
             for (int i = 0; i < 20; ++i) {

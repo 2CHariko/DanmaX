@@ -1,5 +1,11 @@
 # C++ 重构交付状态
 
+## 观看页返回按钮命中修复（2026-10-18）
+
+- 返回按钮补充 QWindowKit `setHitTestVisible` 注册，避免其被标题栏原生命中识别为拖动区域。保持官方 ToolButton、原有最近浏览页／首页回退逻辑和播放器生命周期。
+- 内置 Release 构建通过；真实 HEVC 播放页专项确认按钮中心 `WM_NCHITTEST=HTCLIENT`、标题栏空白 `HTCAPTION`，再通过按钮点击处理返回首页及最近浏览页，媒体继续播放、视频 HWND／连接不变。标准专项含主窗布局为 4 passed，150% 模拟缩放专项 3 passed，均无失败／跳过（含初始化／清理），记录在 `out/validation/watching-back-fix/`。
+- 本轮验证原生命中和 Qt Test 按钮事件，不冒充人工物理鼠标验收；模拟缩放不代替真实混合 DPI，未重复运行完整回归或长测。
+
 ## 内置视频覆盖窗跟随优化接入（2026-10-18）
 
 - 正式 VideoViewportController 已接入 GUI 线程原生位置消息跟随，保留 Qt／QWindowKit 消息链，以实际视频 QWindow／HWND 为几何基准；Qt 布局通知合并兜底，实际矩形未变时跳过写入。隐藏、任务交接与表面／对象销毁撤销挂接，复用唯一引擎和帧驱动，继续与播放器内核解耦。

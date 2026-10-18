@@ -140,6 +140,7 @@ ApplicationWindow {
                 visible: !root.presentation.fullscreen
                 Rectangle { anchors.fill: parent; visible: root.watching; color: Ui.playbackSurface }
                 ToolButton {
+                    id: watchingBack
                     objectName: "watchingBack"
                     visible: root.watching
                     anchors.left: parent.left; anchors.leftMargin: 8; anchors.verticalCenter: parent.verticalCenter
@@ -379,6 +380,7 @@ ApplicationWindow {
         windowAgent.setSystemButton(WindowAgent.Close, captionButtons.closeBtn)
         windowAgent.setHitTestVisible(navPane, true)
         windowAgent.setHitTestVisible(homeSearch, true)
+        windowAgent.setHitTestVisible(watchingBack, true)
         root.syncTheme()
         root.backend.attach(overlay.renderer, overlay, toolbarWindow, root)
         root.presentation.attach(root, fullscreenControls, overlay)
