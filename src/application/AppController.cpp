@@ -65,6 +65,8 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
         emit stateChanged();
         if (closingApplication_ && !monitor_.embeddedBusy()) emit closeReady();
     });
+    connect(&videoViewport_, &VideoViewportController::interaction, &presentation_, [this] { presentation_.interact(); });
+    connect(&videoViewport_, &VideoViewportController::keyPressed, &presentation_, [this](int key) { presentation_.handleKey(key); });
     connect(&videoViewport_, &VideoViewportController::changed, this, [this] { updatePresentationVisibility(true); });
     connect(&videoViewport_, &VideoViewportController::videoDropped, this, [this](const QString& path) { media_.openVideo(path); });
     connect(&monitor_, &MediaMonitor::ownedPlayerCloseFailed, this, [this](const QString& error) {
@@ -164,6 +166,7 @@ AppController::~AppController() {
 bool AppController::requestClose() {
     if (!closingApplication_) {
         closingApplication_ = true;
+        presentation_.setWatching(false);
         nowPlaying_.endPlayback(); stop(); monitor_.cancelManagedOpen();
     }
     return !monitor_.embeddedBusy();
@@ -996,8 +999,14 @@ void AppController::writeReport(const QString& path) {
     metrics_["videoPlaying"] = nowPlaying_.playing();
     metrics_["videoActive"] = nowPlaying_.active();
     metrics_["videoViewportShown"] = videoViewport_.shown();
+    metrics_["videoHandle"] = QString::number(videoViewport_.nativeHandle());
+    metrics_["videoConnection"] = media_.boundSession();
+    metrics_["presentation"] = presentation_.diagnostics();
+    metrics_["fullscreen"] = presentation_.fullscreen();
+    metrics_["fullscreenControlsVisible"] = presentation_.controlsVisible();
     metrics_["videoError"] = nowPlaying_.error();
     metrics_["validationElapsedSeconds"] = property("validationElapsedSeconds");
+    metrics_["validationFullscreenSamples"] = property("validationFullscreenSamples");
     metrics_["validationQmlWarning"] = property("validationQmlWarning");
     metrics_["validationPlayingSamples"] = property("validationPlayingSamples");
     metrics_["validationChecks"] = property("validationChecks");

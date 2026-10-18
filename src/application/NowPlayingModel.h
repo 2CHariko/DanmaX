@@ -62,6 +62,7 @@ class NowPlayingModel final : public QObject {
     double duration() const;
     Q_INVOKABLE void togglePlayback();
     Q_INVOKABLE void seek(double seconds);
+    Q_INVOKABLE void seekRelative(double deltaSeconds);
     Q_INVOKABLE void endPlayback();
     Q_INVOKABLE void openStandalone(const QString& path);
     Q_INVOKABLE void cancelStandaloneOpen();

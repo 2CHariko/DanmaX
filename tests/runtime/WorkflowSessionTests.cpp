@@ -67,6 +67,22 @@ struct Harness {
 class WorkflowSessionTests final : public QObject {
     Q_OBJECT
 private slots:
+    void relativeSeekAccumulatesPendingIntentAndClamps() {
+        Fixture f; f.seed(); Harness h(f); h.open(); QTRY_VERIFY(h.media->canSelectSource());
+        auto* player = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());
+        QTRY_VERIFY(!player->busy()); h.send(); QVERIFY(player->canSeek());
+        auto* seek = h.app.findChild<SeekController*>();
+        disconnect(seek, &SeekController::dispatchRequested, h.monitor, &MediaMonitor::requestSeek);
+        QSignalSpy transmitted(seek, &SeekController::dispatchRequested);
+        QSignalSpy requests(player, &NowPlayingModel::seekRequested);
+        player->seekRelative(30); QCOMPARE(player->seekPreviewPosition(), 42.0);
+        player->seekRelative(30); QCOMPARE(player->seekPreviewPosition(), 72.0);
+        player->seekRelative(-10); QCOMPARE(player->seekPreviewPosition(), 62.0);
+        player->seekRelative(1000); QCOMPARE(player->seekPreviewPosition(), 120.0);
+        player->seekRelative(-1000); QCOMPARE(player->seekPreviewPosition(), 0.0);
+        QVERIFY(!requests.isEmpty()); QCOMPARE(transmitted.size(), 1); player->endPlayback(); QVERIFY(!player->seekPending());
+        const auto count = requests.size(); player->seekRelative(30); QCOMPARE(requests.size(), count);
+    }
     void seekUnknownDeliveryCoalescesAndRequiresReadback() {
         MediaMonitor monitor; SeekController seek(&monitor, nullptr, 1000, 1000);
         disconnect(&seek, &SeekController::dispatchRequested, &monitor, &MediaMonitor::requestSeek);

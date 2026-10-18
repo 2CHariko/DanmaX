@@ -10,25 +10,17 @@ Item {
     readonly property QtObject player: backend.nowPlaying
     readonly property real contentInset: Ui.pageMargin(Window.window ? Window.window.width : width)
     signal openVideo()
-    function focusHeading() { if (backend.embeddedVideo) videoTitle.forceActiveFocus(); else information.focusHeading() }
+    function focusHeading() { if (backend.embeddedVideo) viewport.forceActiveFocus(); else information.focusHeading() }
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: page.contentInset
+        anchors.margins: 0
         spacing: 8
         visible: page.backend.embeddedVideo
-        Label {
-            id: videoTitle
-            objectName: "embeddedVideoTitle"
-            Layout.fillWidth: true
-            text: page.player.title
-            textFormat: Text.PlainText
-            font.pixelSize: Ui.subtitleSize
-            elide: Text.ElideRight
-            Accessible.role: Accessible.Heading
-        }
         Item {
             id: viewport
             objectName: "embeddedVideoViewport"
+            Accessible.name: "视频画面"
+            Accessible.role: Accessible.Pane
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.minimumHeight: 120
@@ -37,6 +29,7 @@ Item {
         }
         ScrollView {
             id: videoInfo
+            visible: page.player.error.length > 0 || page.backend.media.restoreFailed || page.backend.videoViewport.releaseStatus.length > 0 || page.backend.videoOpen.pending
             Layout.fillWidth: true
             Layout.preferredHeight: Math.min(96 * Ui.textScale, infoColumn.implicitHeight)
             contentWidth: availableWidth
@@ -49,10 +42,8 @@ Item {
                 id: infoColumn
                 width: videoInfo.availableWidth
                 spacing: 4
-                Label { Layout.fillWidth: true; text: page.player.status; textFormat: Text.PlainText; wrapMode: Text.WordWrap; color: Ui.secondaryText }
-                Label { Layout.fillWidth: true; visible: text.length > 0; text: page.player.source; textFormat: Text.PlainText; wrapMode: Text.WordWrap; color: Ui.secondaryText }
-                Label { Layout.fillWidth: true; visible: text.length > 0; text: page.player.error; textFormat: Text.PlainText; wrapMode: Text.WrapAnywhere; color: Ui.cautionText; Accessible.role: Accessible.AlertMessage }
-                Label { Layout.fillWidth: true; visible: text.length > 0; text: page.backend.videoViewport.releaseStatus; wrapMode: Text.WordWrap; color: Ui.cautionText }
+                Label { Layout.fillWidth: true; visible: text.length > 0; text: page.player.error; textFormat: Text.PlainText; wrapMode: Text.WrapAnywhere; color: Ui.playbackCaution; Accessible.role: Accessible.AlertMessage }
+                Label { Layout.fillWidth: true; visible: text.length > 0; text: page.backend.videoViewport.releaseStatus; wrapMode: Text.WordWrap; color: Ui.playbackCaution }
                 RowLayout {
                     visible: page.backend.media.restoreFailed
                     Button { text: "重试恢复"; onClicked: page.backend.media.retryRestore() }

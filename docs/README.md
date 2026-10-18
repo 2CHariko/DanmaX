@@ -52,3 +52,5 @@ docs/
 - **[文字渲染优化记录 (RENDERER_PERFORMANCE_20261007.md)](RENDERER_PERFORMANCE_20261007.md)**：QSGTextNode 矢量渲染与文字纹理图集渲染的实测帧率与 CPU 占用对照。
 
 - [内置播放页开发接入与验证](LIBVLC_INTEGRATION.md)
+
+- [内置观看布局、全屏与动态底栏](PLAYBACK_PRESENTATION.md)

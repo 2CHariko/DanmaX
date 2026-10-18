@@ -9,9 +9,10 @@ Rectangle {
     implicitWidth: 200
     implicitHeight: 30
     radius: 8
-    color: Ui.popupSurface
+    property bool watchingTheme: false
+    color: watchingTheme ? Ui.playbackPopup : Ui.popupSurface
     border.width: Ui.highContrast ? 2 : 1
-    border.color: Ui.popupBorder
+    border.color: watchingTheme ? Ui.playbackBorder : Ui.popupBorder
     property bool shadowEnabled: !Ui.highContrast
         && GraphicsInfo.api !== GraphicsInfo.Software
         && GraphicsInfo.api !== GraphicsInfo.Unknown

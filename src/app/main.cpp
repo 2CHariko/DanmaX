@@ -116,6 +116,7 @@ int main(int argc, char* argv[]) {
     parser.addOption({"file", "Load an XML file on startup", "path"});
     parser.addOption({"video", "Open a local video using the selected player", "path"});
     parser.addOption({"video-xml", "Load danmaku for --video after media readiness", "path"});
+    parser.addOption({"fullscreen-validation", "Exercise integrated fullscreen during real playback validation"});
     parser.addOption({"playback-validation", "Internal real playback validation duration (seconds)", "seconds"});
     parser.addOption({"page", "Initial page: home, player, logs, settings, about", "page", "home"});
     parser.addOption({"online-search", "Open online danmaku search on the home page (UI validation)"});
@@ -196,12 +197,17 @@ int main(int argc, char* argv[]) {
         if (parser.isSet("playback-validation")) {
             if (!parser.isSet("video") || !parser.isSet("report")) throw std::runtime_error("Playback validation requires --video and --report");
             const int seconds = std::clamp(parser.value("playback-validation").toInt(), 10, 7200);
-            auto* timer = new QTimer(&controller); timer->setInterval(1000);
+            auto* timer = new QTimer(&controller); timer->setInterval(1000); timer->setTimerType(Qt::PreciseTimer);
             auto elapsed = std::make_shared<int>(0);
             auto checks = std::make_shared<QVariantMap>();
             auto playingSamples = std::make_shared<int>(0);
             auto hiddenPosition = std::make_shared<double>(0);
-            QObject::connect(timer, &QTimer::timeout, &controller, [&, elapsed, seconds, timer, checks, playingSamples, hiddenPosition] {
+            auto videoHandle = std::make_shared<quintptr>(0);
+            auto connection = std::make_shared<QString>();
+            auto windowGeometry = std::make_shared<QRect>();
+            auto fullscreenSize = std::make_shared<QSize>();
+            auto fullscreenSamples = std::make_shared<int>(0);
+            QObject::connect(timer, &QTimer::timeout, &controller, [&, elapsed, seconds, timer, checks, playingSamples, hiddenPosition, videoHandle, connection, windowGeometry, fullscreenSize, fullscreenSamples] {
                 ++*elapsed;
                 // This C++ validation driver is deliberately absent from QML.
                 auto* player = qobject_cast<NowPlayingModel*>(controller.nowPlaying());
@@ -219,6 +225,36 @@ int main(int argc, char* argv[]) {
                     && player->position() > *hiddenPosition + 1;
                 if (*elapsed == 55) mainWindow->setProperty("selectedPage", 1);
                 if (*elapsed == 58) (*checks)["return-to-player"] = qobject_cast<VideoViewportController*>(controller.videoViewport())->shown() && player->playing();
+                if (parser.isSet("fullscreen-validation")) {
+                    auto* presentation = qobject_cast<PlaybackPresentationController*>(controller.presentation());
+                    auto* viewport = qobject_cast<VideoViewportController*>(controller.videoViewport());
+                    auto* media = qobject_cast<MediaSession*>(controller.media());
+                    if (*elapsed == 70) {
+                        *videoHandle = viewport->nativeHandle(); *connection = media->boundSession(); *windowGeometry = mainWindow->geometry();
+                        presentation->toggleFullscreen(QStringLiteral("validation"));
+                    }
+                    if (*elapsed == 75) *fullscreenSize = viewport->videoWindow()->size();
+                    if (*elapsed == 80) (*checks)["fullscreen-entered-identity"] = presentation->fullscreen() && mainWindow->windowState() == Qt::WindowFullScreen
+                        && viewport->nativeHandle() == *videoHandle && media->boundSession() == *connection;
+                    if (*elapsed == 90) player->togglePlayback();
+                    if (*elapsed == 93) (*checks)["fullscreen-pause-readback"] = !player->playing() && !player->busy();
+                    if (*elapsed == 95) player->togglePlayback();
+                    if (*elapsed == 100) (*checks)["fullscreen-viewport-stable"] = player->playing() && viewport->videoWindow()->size() == *fullscreenSize;
+                    if (*elapsed == 110) presentation->exitFullscreen();
+                    if (*elapsed == 113) (*checks)["fullscreen-restored-identity"] = !presentation->fullscreen()
+                        && mainWindow->geometry() == *windowGeometry && viewport->nativeHandle() == *videoHandle && media->boundSession() == *connection;
+                    if (*elapsed == 115) presentation->toggleFullscreen(QStringLiteral("validation"));
+                    // Keep one connection alive even when the validation sample is
+                    // shorter than the requested endurance run. EOF/replay is tested separately.
+                    if (player->canSeek() && !player->seekPending() && !player->busy() && player->duration() > 20
+                        && player->position() > player->duration() - 15 && *elapsed < seconds - 10) player->seek(5);
+                    if (*elapsed >= 180 && *elapsed % 300 == 180) player->seekRelative(30);
+                    if (*elapsed >= 300 && *elapsed % 300 == 0) player->togglePlayback();
+                    if (*elapsed >= 304 && *elapsed % 300 == 4) player->togglePlayback();
+                    if (presentation->fullscreen() && mainWindow->windowState() == Qt::WindowFullScreen) ++*fullscreenSamples;
+                    controller.setProperty("validationFullscreenSamples", *fullscreenSamples);
+                    if (*elapsed >= seconds) (*checks)["fullscreen-final-identity"] = presentation->fullscreen() && mainWindow->windowState() == Qt::WindowFullScreen && viewport->nativeHandle() == *videoHandle && media->boundSession() == *connection;
+                }
                 if (player->completed() && *elapsed < seconds - 10) player->togglePlayback();
                 controller.setProperty("validationElapsedSeconds", *elapsed);
                 controller.setProperty("validationQmlWarning", qmlWarning);

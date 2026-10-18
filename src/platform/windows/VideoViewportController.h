@@ -32,6 +32,8 @@ public:
 signals:
     void changed();
     void videoDropped(QString path);
+    void interaction();
+    void keyPressed(int key);
 protected:
     bool eventFilter(QObject* object, QEvent* event) override;
 private:

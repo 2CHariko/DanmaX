@@ -4,6 +4,7 @@
 #include <QUrl>
 #include <atomic>
 #include <cmath>
+#include <algorithm>
 namespace { quint64 nextCommand() { static std::atomic<quint64> id{quint64(1) << 59}; return ++id; } }
 NowPlayingModel::NowPlayingModel(AppController* app) : QObject(app), app_(app) {
     connect(this, &NowPlayingModel::playbackRequested, &app_->monitor_, &MediaMonitor::requestPlayback);
@@ -163,6 +164,10 @@ void NowPlayingModel::togglePlayback() {
 void NowPlayingModel::seek(double seconds) {
     if (!canSeek() || !std::isfinite(seconds) || seconds < 0 || seconds > duration()) return;
     if (standalone()) app_->seek(seconds); else request(false, seconds);
+}
+void NowPlayingModel::seekRelative(double deltaSeconds) {
+    if (!canSeek() || !std::isfinite(deltaSeconds)) return;
+    seek(std::clamp(seekPreviewPosition() + deltaSeconds, 0.0, duration()));
 }
 void NowPlayingModel::endPlayback() {
     finish(true, {});

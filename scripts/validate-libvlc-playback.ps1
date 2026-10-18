@@ -2,11 +2,12 @@
 param([Parameter(Mandatory)][string] $Video,
       [ValidateRange(60,7200)][int] $Seconds = 1800,
       [ValidatePattern('^[a-zA-Z0-9-]+$')][string] $RunName = (Get-Date -Format 'yyyyMMdd-HHmmss'),
-      [switch] $NoBuild, [switch] $Opaque, [ValidateRange(1,3)][double] $Scale = 1,
+      [switch] $NoBuild, [switch] $Opaque, [switch] $Fullscreen, [ValidateRange(1,3)][double] $Scale = 1,
       [ValidateSet('system','light','dark')][string] $Theme = 'system')
 . "$PSScriptRoot/common.ps1"
 . "$PSScriptRoot/deployment.ps1"
 Invoke-ProjectEnvironment {
+    if ($Fullscreen -and $Seconds -lt 120) { throw "Fullscreen validation requires at least 120 seconds." }
     $videoFile = Get-Item -LiteralPath $Video
     if ($videoFile.PSIsContainer) { throw 'Video must be a local file.' }
     $preset = 'windows-libvlc-release'
@@ -44,10 +45,11 @@ Invoke-ProjectEnvironment {
     $info.UseShellExecute = $false; $info.WorkingDirectory = $runtime
     foreach ($argument in @('--data-dir',$report,'--video',$videoFile.FullName,'--theme',$Theme,'--playback-validation',[string]$Seconds,
             '--report',(Join-Path $report 'result.json'),'--capture',(Join-Path $report 'composition.png'))) { $info.ArgumentList.Add($argument) }
+    if ($Fullscreen) { $info.ArgumentList.Add("--fullscreen-validation") }
     $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
     $process = [Diagnostics.Process]::Start($info)
     $stdout = $process.StandardOutput.ReadToEndAsync(); $stderr = $process.StandardError.ReadToEndAsync()
-    @{pid=$process.Id; started=$process.StartTime.ToUniversalTime().ToString('o'); seconds=$Seconds; scale=$Scale; theme=$Theme; micaRequested=(-not $Opaque);
+    @{pid=$process.Id; started=$process.StartTime.ToUniversalTime().ToString('o'); seconds=$Seconds; fullscreen=[bool]$Fullscreen; scale=$Scale; theme=$Theme; micaRequested=(-not $Opaque);
         exeSha256=(Get-FileHash -LiteralPath $exe).Hash; lockSha256=(Get-FileHash -LiteralPath (Get-ProjectPath 'toolchain/libvlc.lock.json')).Hash;
         cpu=@(Get-CimInstance Win32_Processor | Select-Object Name,NumberOfLogicalProcessors);
         gpu=@(Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion)} |
@@ -60,8 +62,13 @@ Invoke-ProjectEnvironment {
     @{exitCode=$process.ExitCode; exitedAt=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json |
         Set-Content -LiteralPath (Join-Path $report 'exit.json') -Encoding utf8
     $result = Get-Content -LiteralPath (Join-Path $report 'result.json') -Raw | ConvertFrom-Json
+    # The fullscreen driver deliberately pauses for four seconds every five
+    # minutes, in addition to the initial contract checks covered by the margin.
+    $pauseAllowance = 20
+    if ($Fullscreen) { $pauseAllowance += 4 * [Math]::Floor($Seconds / 300) }
     if ($process.ExitCode -ne 0 -or $result.validationElapsedSeconds -lt $Seconds -or $result.validationQmlWarning -or
-        -not $result.videoActive -or $result.embeddedPlayback.displayedPictures -le 0 -or $result.validationPlayingSamples -lt ($Seconds - 20) -or
+        ($Fullscreen -and $Seconds -ge 1920 -and $result.validationFullscreenSamples -lt 1800) -or
+        -not $result.videoActive -or $result.embeddedPlayback.displayedPictures -le 0 -or $result.validationPlayingSamples -lt ($Seconds - $pauseAllowance) -or
         @($result.validationChecks.PSObject.Properties | Where-Object { -not $_.Value }).Count -gt 0) { throw 'Real playback validation failed; inspect recorded evidence.' }
     Write-Host 'Playback duration/state checks passed. Visual, audible output and window interactions require separate review.'
 }

@@ -97,6 +97,8 @@ DanmaX 的默认发布格式为 **静态单 EXE**（`static-exe`），主程序�
 
 ### 5.1 Fluent System Icons（2026-10-08）
 项目采用来自微软官方开源库 Microsoft Fluent System Icons 的矢量图标，协议为 MIT License。
+
+2026-10-18 内置观看底栏新增 Full Screen Maximize／Minimize 的 20 regular 原稿及仅改色派生稿，继续使用同一锁定提交与 MIT 许可证，资源清单现为 30 个原稿和 30 个派生稿；未引入另一套图标库或运行时依赖。
 - 锁定提交、原始 SVG 下载地址及 原始／派生 SVG SHA-256 位于 `resources/fluent/manifest.json`，完整版权与许可见 `resources/fluent/LICENSE`。
 - 发布材料中完整包含 `Fluent-System-Icons-LICENSE.txt`。
 - 2026-10-17 按用户要求从预渲染 PNG 迁移至 SVG；保留官方路径，深色稿只将 #212121 改为 #DEDEDE，可通过 prepare-fluent-assets.ps1 -Offline 重建。运行时使用锁定 QtSvg：动态清单已包含该模块，静态源码清单新增 qtsvg；动态部署包含 SVG 图片／图标插件，静态显式导入相同插件。标准控件保留 FluentWinUI3 语义着色，装饰图按实际 DPR 解码。

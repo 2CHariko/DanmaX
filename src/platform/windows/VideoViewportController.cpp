@@ -5,6 +5,7 @@
 #include <QQuickWindow>
 #include <QTimer>
 #include <QExposeEvent>
+#include <QKeyEvent>
 #include <QResizeEvent>
 #include <QScreen>
 #include <QDragEnterEvent>
@@ -104,6 +105,10 @@ void VideoViewportController::placeDialog(QQuickWindow* dialog) {
     });
 }
 bool VideoViewportController::eventFilter(QObject* object, QEvent* event) {
+    if (active_ && object == video_.get()) {
+        if (event->type() == QEvent::KeyPress) emit keyPressed(static_cast<QKeyEvent*>(event)->key());
+        if (event->type() == QEvent::MouseMove || event->type() == QEvent::MouseButtonPress || event->type() == QEvent::TouchBegin) emit interaction();
+    }
     if (active_ && event->type() == QEvent::Show) {
         if (auto* quick = qobject_cast<QQuickWindow*>(object); quick && quick->type() == Qt::Dialog
             && quick != host_ && quick->transientParent() == host_) {

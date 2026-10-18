@@ -17,6 +17,20 @@ ApplicationWindow {
     Binding { target: Ui; property: "micaActive"; value: root.backdrop ? root.backdrop.effectiveMica : false }
     Binding { target: Ui; property: "systemAnimationsEnabled"; value: root.backend.uiPreferences.animationsEnabled }
     property int selectedPage: 0
+    property int lastBrowsePage: 0
+    readonly property QtObject presentation: backend.presentation
+    readonly property bool watching: presentation.watching
+    onSelectedPageChanged: if (selectedPage !== 1) lastBrowsePage = selectedPage
+    Binding { target: root.presentation; property: "watching"; value: root.backend.embeddedVideo && root.selectedPage === 1 }
+    Binding { target: root.presentation; property: "playing"; value: root.backend.nowPlaying.playing }
+    Binding { target: root.presentation; property: "blocked"; value: root.backend.nowPlaying.busy || root.backend.nowPlaying.completed || root.backend.nowPlaying.seekPending || root.backend.nowPlaying.error.length > 0 || root.backend.videoViewport.releaseStatus.length > 0 || nowPlayingBar.interacting }
+    Connections {
+        target: root.presentation
+        function onAboutToChangeHost() { nowPlayingBar.prepareHostChange() }
+        function onKeyboardControlsRequested() { fullscreenControls.requestActivate(); nowPlayingBar.focusTransport() }
+        function onPointerInteraction() { nowPlayingBar.keyboardFocus = false }
+        function onKeyboardInteraction() { nowPlayingBar.keyboardFocus = true }
+    }
     readonly property string currentPageName: ["home", "player", "logs", "settings", "about", "media"][selectedPage] || ""
     readonly property bool compact: width < Ui.expandedNavigationWidth
     readonly property real pageContentInset: pages.children[selectedPage].contentInset
@@ -53,7 +67,7 @@ ApplicationWindow {
     // Keep the swapchain alpha-capable across live material preference changes.
     color: root.backdrop && root.backdrop.compatibilityOpaque ? Ui.windowSurface : "transparent"
     background: Rectangle {
-        color: Ui.windowSurface
+        color: root.watching ? Ui.playbackSurface : Ui.windowSurface
     }
     function navigate(page) { selectedPage = page; pages.children[page].focusHeading() }
 
@@ -63,6 +77,7 @@ ApplicationWindow {
         anchors.fill: parent
         Rectangle {
             anchors.fill: workspace
+            visible: !root.watching
             anchors.leftMargin: (root.compact ? Ui.navigationCompactWidth : Ui.navigationExpandedWidth) + 1
             color: Ui.contentAreaSurface
         }
@@ -72,12 +87,14 @@ ApplicationWindow {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.bottom: nowPlayingBar.top
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: root.presentation.fullscreen ? 0 : nowPlayingBar.height
         spacing: 0
 
         // 1. 常驻侧边栏：宽屏展开，窄屏自动缩小为图标模式（最小宽度下始终显示图标）
         Item {
             objectName: "mainNavigation"
+            visible: !root.watching
             Layout.preferredWidth: root.compact ? Ui.navigationCompactWidth : Ui.navigationExpandedWidth
             Layout.minimumWidth: Layout.preferredWidth
             Layout.maximumWidth: Layout.preferredWidth
@@ -104,6 +121,7 @@ ApplicationWindow {
 
         // 2. 左侧导航与右侧内容的分隔线
         Rectangle {
+            visible: !root.watching
             Layout.fillHeight: true
             Layout.preferredWidth: 1
             color: Ui.cardBorder
@@ -119,6 +137,17 @@ ApplicationWindow {
             Item {
                 id: titleBar
                 objectName: "mainTitleBar"
+                visible: !root.presentation.fullscreen
+                Rectangle { anchors.fill: parent; visible: root.watching; color: Ui.playbackSurface }
+                ToolButton {
+                    objectName: "watchingBack"
+                    visible: root.watching
+                    anchors.left: parent.left; anchors.leftMargin: 8; anchors.verticalCenter: parent.verticalCenter
+                    text: "返回"; icon.source: Ui.icon("chevron-left", true)
+                    palette.buttonText: Ui.playbackText; palette.button: Ui.playbackSurface
+                    Accessible.name: "返回浏览页面"
+                    onClicked: root.navigate(root.lastBrowsePage)
+                }
                 Layout.fillWidth: true
                 // Keep every page heading aligned with the homepage search layout.
                 Layout.preferredHeight: Math.max(44, homeSearch.height + 2 * Ui.titleBarVerticalPadding)
@@ -145,6 +174,7 @@ ApplicationWindow {
                 WindowCaptionButtons {
                     id: captionButtons
                     objectName: "mainCaptionButtons"
+                    watchingTheme: root.watching
                     anchors.right: parent.right
                     anchors.top: parent.top
                 }
@@ -157,7 +187,7 @@ ApplicationWindow {
                 Layout.leftMargin: 0
                 Layout.rightMargin: 0
                 Layout.bottomMargin: 0
-                Layout.topMargin: Ui.pageHeaderGap
+                Layout.topMargin: root.watching ? 0 : Ui.pageHeaderGap
                 spacing: 12
 
             RowLayout {
@@ -169,6 +199,8 @@ ApplicationWindow {
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
+                    color: root.watching ? Ui.playbackText : Ui.textColor
+                    textFormat: Text.PlainText
                     text: root.backend.error.length > 0 && root.backend.error !== root.backend.media.error
                         ? root.backend.error : root.backend.settings.error
                     Accessible.name: I18n.common.errorPrefix + text
@@ -228,6 +260,7 @@ ApplicationWindow {
     }
         NowPlayingBar {
             id: nowPlayingBar
+            parent: root.presentation.fullscreen ? fullscreenControls.contentItem : mainScene
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
@@ -242,6 +275,17 @@ ApplicationWindow {
             onShowSettings: root.navigate(3)
             onShowPlaying: root.navigate(1)
         }
+    }
+
+    Window {
+        id: fullscreenControls
+        objectName: "fullscreenControlsWindow"
+        transientParent: root
+        flags: Qt.Tool | Qt.FramelessWindowHint
+        color: Ui.playbackSurface
+        width: root.width
+        height: nowPlayingBar.implicitHeight
+        visible: false
     }
 
     VideoDropOverlay {
@@ -337,6 +381,7 @@ ApplicationWindow {
         windowAgent.setHitTestVisible(homeSearch, true)
         root.syncTheme()
         root.backend.attach(overlay.renderer, overlay, toolbarWindow, root)
+        root.presentation.attach(root, fullscreenControls, overlay)
     }
     onClosing: function(event) { if (!root.backend.requestClose()) event.accepted = false }
 }

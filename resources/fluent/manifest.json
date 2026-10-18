@@ -142,6 +142,16 @@
       "file": "transparency-square.svg",
       "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Transparency%20Square/SVG/ic_fluent_transparency_square_20_regular.svg",
       "sha256": "53e82cf736ede1da35f7f3fe366a3d5ea43655468b3f764ad8d61ef749563b0c"
+    },
+    {
+      "sha256": "bcef45dfd2fc91dfef2e06079278330f774557a49451fe07b51834b1d65859ea",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Full%20Screen%20Maximize/SVG/ic_fluent_full_screen_maximize_20_regular.svg",
+      "file": "full-screen.svg"
+    },
+    {
+      "sha256": "22d70445c47ba6d76e8629cf8cb9f95fbed283d0d9ea57459a590d549a3effab",
+      "url": "https://raw.githubusercontent.com/microsoft/fluentui-system-icons/cd332ec1f90cda2fad16f86754f8da52f1e9ab30/assets/Full%20Screen%20Minimize/SVG/ic_fluent_full_screen_minimize_20_regular.svg",
+      "file": "full-screen-exit.svg"
     }
   ],
   "derivedAssets": [
@@ -284,6 +294,16 @@
       "file": "transparency-square-dark.svg",
       "source": "transparency-square.svg",
       "sha256": "74c9acebc0358e2a4e6eb524349bccf5cf1d9e593460ebd4dc0721772fd6940c"
+    },
+    {
+      "sha256": "26040e94d6aafa69fafa51de6b603fd061d105007dd15bca294c363684a75aba",
+      "file": "full-screen-dark.svg",
+      "source": "full-screen.svg"
+    },
+    {
+      "sha256": "489ab122fb0df78c8b60fdd8e925643e35256d17958d8fbf8389746688068670",
+      "file": "full-screen-exit-dark.svg",
+      "source": "full-screen-exit.svg"
     }
   ],
   "rendering": "Official SVG paths preserved; dark SVGs replace #212121 with #DEDEDE. Regenerate offline with scripts/prepare-fluent-assets.ps1 -Offline."

@@ -151,6 +151,7 @@ if(DANMAKU_BUILD_APP)
         src/platform/windows/ToolbarPointerMonitor.cpp src/platform/windows/ToolbarPointerMonitor.h
         src/platform/windows/WindowLayerController.cpp src/platform/windows/WindowLayerController.h
         src/platform/windows/VideoViewportController.cpp src/platform/windows/VideoViewportController.h
+        src/platform/windows/PlaybackPresentationController.cpp src/platform/windows/PlaybackPresentationController.h
         src/renderer/DanmakuItem.cpp src/renderer/DanmakuItem.h
         src/infrastructure/XmlLoader.cpp src/infrastructure/XmlLoader.h
         src/infrastructure/SettingsStore.cpp src/infrastructure/SettingsStore.h
@@ -228,6 +229,11 @@ if(DANMAKU_BUILD_APP)
         endif()
         add_executable(online_danmaku_tests tests/runtime/OnlineDanmakuTests.cpp)
         add_executable(video_open_tests tests/runtime/VideoOpenTests.cpp)
+        add_executable(playback_presentation_tests tests/runtime/PlaybackPresentationTests.cpp)
+        target_link_libraries(playback_presentation_tests PRIVATE danmaku_runtime Qt6::Test)
+        danmaku_compile_options(playback_presentation_tests)
+        add_test(NAME playback_presentation COMMAND playback_presentation_tests -o "${CMAKE_BINARY_DIR}/playback-presentation-tests.txt,txt")
+        set_tests_properties(playback_presentation PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=windows")
         if(DANMAKU_ENABLE_LIBVLC)
             add_executable(libvlc_playback_tests tests/runtime/LibVlcPlaybackTests.cpp)
             target_link_libraries(libvlc_playback_tests PRIVATE danmaku_runtime Qt6::Test)

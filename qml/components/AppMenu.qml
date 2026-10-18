@@ -4,6 +4,7 @@ import "../theme"
 
 Menu {
     id: menu
+    property bool watchingTheme: false
     popupType: Ui.embeddedVideoActive ? Popup.Window : Popup.Item
     property real revealProgress: 1
     height: implicitHeight * revealProgress
@@ -12,7 +13,7 @@ Menu {
     topInset: 0
     bottomInset: 0
     margins: Ui.popupEdgeMargin
-    background: PopupSurface {}
+    background: PopupSurface { watchingTheme: menu.watchingTheme }
     enter: Transition {
         NumberAnimation {
             target: menu

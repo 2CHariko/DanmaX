@@ -249,6 +249,61 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void realEmbeddedFullscreenDraftAndMenus() {
+#ifndef DANMAKU_ENABLE_LIBVLC
+        QSKIP("This build does not include embedded playback.");
+#else
+        const auto video = qEnvironmentVariable("DANMAKU_REAL_LIBVLC_VIDEO");
+        if (video.isEmpty()) QSKIP("Explicit real media required for the deployed embedded UI contract.");
+        QTemporaryDir directory;
+        const auto xml = directory.filePath("source.xml");
+        { QFile file(xml); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("<i><d p=\"0,1,25,16777215\">first</d><d p=\"50,1,25,16777215\">later</d></i>"); }
+        { RecentVideoStore recent(directory.path()); recent.opened(video); recent.checkpoint(video, 0, 120, {{"kind", "xml"}, {"path", xml}}); }
+        AppController backend(directory.path());
+        qobject_cast<SettingsStore*>(backend.settings())->setDanmakuServers({});
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        QScopeGuard releaseBeforeWindows([&] { while (!backend.requestClose()) QTest::qWait(20); });
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}, {"selectedPage", 1}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty()); auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
+        window->show(); QVERIFY(QTest::qWaitForWindowExposed(window)); window->requestActivate();
+        auto* player = qobject_cast<NowPlayingModel*>(backend.nowPlaying());
+        auto* media = qobject_cast<MediaSession*>(backend.media()); media->openVideo(video);
+        QTRY_VERIFY_WITH_TIMEOUT(player->canSeek() && !player->busy() && player->count() == 2, 15000);
+        QVERIFY(window->property("watching").toBool());
+        player->togglePlayback(); QTRY_VERIFY(!player->playing() && !player->busy());
+        auto* viewport = qobject_cast<VideoViewportController*>(backend.videoViewport());
+        auto* presentation = qobject_cast<PlaybackPresentationController*>(backend.presentation());
+        const auto handle = viewport->nativeHandle(); const auto connection = media->boundSession();
+        auto* slider = window->findChild<QQuickItem*>("nowPlayingSeek"); QVERIFY(slider);
+        auto* bar = window->findChild<QQuickItem*>("nowPlayingBar"); QVERIFY(bar);
+        const auto paused = player->position();
+        QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, slider->mapToScene(QPointF(slider->width() * .6, slider->height() / 2)).toPoint());
+        QTest::mouseMove(window, slider->mapToScene(QPointF(slider->width() * .8, slider->height() / 2)).toPoint());
+        QCOMPARE(player->position(), paused);
+        presentation->toggleFullscreen(); QTRY_VERIFY(presentation->fullscreen()); QTest::qWait(100);
+        auto* controls = window->findChild<QQuickWindow*>("fullscreenControlsWindow"); QVERIFY(controls);
+        QCOMPARE(bar->window(), controls);
+        QTest::mouseRelease(controls, Qt::LeftButton, Qt::NoModifier, slider->mapToScene(QPointF(slider->width() * .8, slider->height() / 2)).toPoint());
+        QTest::qWait(150); QCOMPARE(player->position(), paused); QVERIFY(!player->seekPending());
+        QCOMPARE(viewport->nativeHandle(), handle); QCOMPARE(media->boundSession(), connection);
+        auto* menu = bar->findChild<QObject*>("nowPlayingDanmakuMenu"); QVERIFY(menu);
+        QVERIFY(QMetaObject::invokeMethod(menu, "open")); QTRY_VERIFY(menu->property("visible").toBool());
+        QVERIFY(!presentation->handleKey(Qt::Key_Escape)); QVERIFY(presentation->fullscreen());
+        QVERIFY(QMetaObject::invokeMethod(menu, "close")); QTRY_VERIFY(!menu->property("visible").toBool());
+        QTRY_VERIFY(presentation->handleKey(Qt::Key_Tab)); QTest::qWait(150);
+        QVERIFY(bar->property("keyboardFocus").toBool());
+        auto* toggle = bar->findChild<QQuickItem*>("nowPlayingToggle"); QVERIFY(toggle);
+        QVERIFY(toggle->hasFocus());
+        if (controls->isActive()) QCOMPARE(controls->activeFocusItem(), toggle);
+        else qInfo() << "OS foreground activation was not granted; keyboard focus intent checked, physical focus requires desktop validation.";
+        QVERIFY(presentation->handleKey(Qt::Key_Escape)); QTRY_VERIFY(!presentation->fullscreen()); QCOMPARE(bar->window(), window);
+        QCOMPARE(viewport->nativeHandle(), handle); QCOMPARE(media->boundSession(), connection);
+        backend.requestClose(); QTRY_VERIFY_WITH_TIMEOUT(backend.requestClose(), 10000);
+        QCOMPARE(warnings.size(), 0);
+#endif
+    }
     void standaloneMenusControlsAndTaskDialogs() {
         QTemporaryDir directory;
         const auto xml = directory.filePath("standalone.xml");
@@ -281,6 +336,18 @@ private slots:
         };
         const auto key = [&](QQuickItem* item) { QVERIFY(item); item->forceActiveFocus(); QTest::keyClick(window, Qt::Key_Space); };
         auto* bar = find(window->contentItem(), "nowPlayingBar"); QVERIFY(bar);
+        QVariant formatted;
+        QVERIFY(QMetaObject::invokeMethod(bar, "time", Q_RETURN_ARG(QVariant, formatted), Q_ARG(QVariant, 3661)));
+        QCOMPARE(formatted.toString(), QString("1:01:01"));
+        for (const int width : {800, 1080, 1600}) {
+            window->resize(width, 760); QTest::qWait(40);
+            auto* toggle = find(bar, "nowPlayingToggle"); QVERIFY(toggle);
+            const auto middle = toggle->mapToScene(QPointF(toggle->width() / 2, toggle->height() / 2));
+            QVERIFY(std::abs(middle.x() - window->width() / 2.0) < 1);
+            auto* actions = find(bar, "nowPlayingMore"); QVERIFY(actions);
+            QVERIFY(actions->mapToScene(QPointF(actions->width(), 0)).x() <= window->width());
+        }
+        window->resize(1080, 760); QTest::qWait(40);
         key(find(bar, "nowPlayingMore"));
         auto* more = bar->findChild<QObject*>("nowPlayingMoreMenu"); QVERIFY(more); QTRY_VERIFY(more->property("opened").toBool());
         auto* entry = more->findChild<QQuickItem*>("openStandaloneDanmaku"); QVERIFY(entry);

@@ -35,7 +35,16 @@ QtObject {
     readonly property color contentSurface: contentAreaSurface
     readonly property bool dark: Application.styleHints.colorScheme === Qt.Dark
     readonly property int sectionGap: 24
-    function icon(name) { return "qrc:/fluent/" + name + (dark ? "-dark" : "") + ".svg" }
+    function icon(name, darkOverride) { return "qrc:/fluent/" + name + ((darkOverride === undefined ? dark : darkOverride) ? "-dark" : "") + ".svg" }
+    readonly property color playbackSurface: highContrast ? colors.window : "#161616"
+    readonly property color playbackText: highContrast ? colors.windowText : "#FFFFFF"
+    readonly property color playbackSecondary: highContrast ? colors.text : "#BDBDBD"
+    readonly property color playbackCaution: highContrast ? colors.windowText : "#EAA300"
+    readonly property color playbackDisabled: highContrast ? colors.mid : "#808080"
+    readonly property color playbackAccent: highContrast ? colors.highlight : "#60CDFF"
+    readonly property color playbackBorder: highContrast ? colors.windowText : "#404040"
+    readonly property color playbackHighlightText: highContrast ? colors.highlightedText : "#000000"
+    readonly property color playbackPopup: highContrast ? colors.window : "#292C34"
     readonly property int navigationIconSize: Math.round(20 * textScale)
     readonly property int navigationIconGap: 12
     readonly property int navigationExpandedWidth: 200

@@ -27,3 +27,5 @@
 `prepare-libvlc.ps1 [-Offline]` 显式准备共享依赖（旧 prepare-libvlc-probe 入口兼容）。`build.ps1 -Preset windows-libvlc-release -Test` 与 `run.ps1 -Preset windows-libvlc-release` 接入真实播放页；Debug 对应 windows-libvlc-debug。依赖未准备时构建失败，不联网。
 
 `validate-libvlc-playback.ps1 -Video <本地视频> -Seconds 1800 -RunName <新名称> -NoBuild` 创建隔离运行目录及状态／画面证据，正常等待结束，不强杀进程。`-Scale 1.5` 是模拟缩放。全部结果和限制见 docs/LIBVLC_INTEGRATION.md。
+
+`validate-libvlc-playback.ps1 -Fullscreen -Seconds 1920 -RunName <新名称>` 使用正式模型检查全屏往返、暂停与 HWND／连接身份，累计全屏采样不少于 1800 才通过长时检查。短媒体在结束前定位回开头保留同一连接，EOF 与重新播放另由真实契约验证；手动切换页面或退出全屏会影响该轮结果。

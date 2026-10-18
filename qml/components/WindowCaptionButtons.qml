@@ -5,6 +5,7 @@ import "../theme"
 
 RowLayout {
     id: captionButtons
+    property bool watchingTheme: false
     spacing: 0
     property alias minBtn: minBtn
     property alias maxBtn: maxBtn
@@ -19,6 +20,8 @@ RowLayout {
         icon.height: 16
         display: AbstractButton.IconOnly
         activeFocusOnTab: true
+        palette.buttonText: captionButtons.watchingTheme ? Ui.playbackText : Ui.colors.buttonText
+        palette.button: captionButtons.watchingTheme ? Ui.playbackSurface : Ui.colors.button
         Accessible.name: text
         ToolTip.visible: hovered
         ToolTip.text: text
@@ -27,14 +30,14 @@ RowLayout {
         id: minBtn
         objectName: "captionMinimize"
         text: "最小化"
-        icon.source: Ui.icon("subtract")
+        icon.source: Ui.icon("subtract", captionButtons.watchingTheme || Ui.dark)
         onClicked: if (captionButtons.win) captionButtons.win.showMinimized()
     }
     CaptionButton {
         id: maxBtn
         objectName: "captionMaximize"
         text: captionButtons.isMaximized ? "向下还原" : "最大化"
-        icon.source: Ui.icon(captionButtons.isMaximized ? "square-multiple" : "square")
+        icon.source: Ui.icon(captionButtons.isMaximized ? "square-multiple" : "square", captionButtons.watchingTheme || Ui.dark)
         onClicked: {
             if (captionButtons.win) {
                 if (captionButtons.isMaximized) captionButtons.win.showNormal()
@@ -46,8 +49,8 @@ RowLayout {
         id: closeBtn
         objectName: "captionClose"
         text: "关闭"
-        icon.source: Ui.icon("dismiss")
-        icon.color: hovered || down ? Ui.captionCloseText : palette.buttonText
+        icon.source: Ui.icon("dismiss", captionButtons.watchingTheme || Ui.dark)
+        icon.color: hovered || down ? Ui.captionCloseText : captionButtons.watchingTheme ? Ui.playbackText : Ui.textColor
         background: Rectangle {
             color: closeBtn.down ? Ui.captionClosePressed
                 : closeBtn.hovered ? Ui.captionCloseHover : "transparent"

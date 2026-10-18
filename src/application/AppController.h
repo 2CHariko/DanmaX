@@ -21,6 +21,7 @@
 #include "platform/windows/ToolbarPointerMonitor.h"
 #include "platform/windows/WindowLayerController.h"
 #include "platform/windows/VideoViewportController.h"
+#include "platform/windows/PlaybackPresentationController.h"
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QTimer>
@@ -43,6 +44,7 @@ class AppController final : public QObject {
     Q_PROPERTY(QObject* uiPreferences READ uiPreferences CONSTANT)
     Q_PROPERTY(QObject* toolbarPointer READ toolbarPointer CONSTANT)
     Q_PROPERTY(QObject* videoViewport READ videoViewport CONSTANT)
+    Q_PROPERTY(QObject* presentation READ presentation CONSTANT)
     Q_PROPERTY(bool embeddedVideo READ embeddedVideo NOTIFY stateChanged)
     Q_PROPERTY(QString sourceTitle READ sourceTitle NOTIFY stateChanged)
     Q_PROPERTY(bool targetSessionConnected READ targetSessionConnected NOTIFY stateChanged)
@@ -98,6 +100,7 @@ class AppController final : public QObject {
     QObject* uiPreferences() { return &uiPreferences_; }
     QObject* toolbarPointer() { return &toolbarPointer_; }
     QObject* videoViewport() { return &videoViewport_; }
+    QObject* presentation() { return &presentation_; }
     bool embeddedVideo() const { return media_.active() && monitor_.embedded(media_.boundSession()); }
     Q_INVOKABLE bool requestClose();
     QString sourceTitle() const { return sourceTitle_; }
@@ -241,6 +244,7 @@ class AppController final : public QObject {
     bool automaticCommit_{}, automaticSource_{};
     SystemUiPreferences uiPreferences_;
     VideoViewportController videoViewport_;
+    PlaybackPresentationController presentation_;
     MediaMonitor monitor_;
     SeekController seek_;
     MediaSession media_;
