@@ -14,7 +14,7 @@
 
 | 路线 | 单文件交付 | 不释放运行库 | 对现工程的可行性与状态 |
 | --- | --- | --- | --- |
-| 静态 Qt 主程序＋旁置 libVLC | 否 | 无解压步骤，但依赖旁置文件 | 技术风险相对低；静态 Qt 与 libVLC 组合目前被 CMake 禁止，尚未构建验证 |
+| 静态 Qt 主程序＋旁置 libVLC | 主程序是单 EXE；内置播放另需组件 | 无解压步骤，但依赖旁置文件 | 本机隔离探针通过；正式 CMake 与打包规则仍禁止此组合 |
 | EXE 内嵌归档，启动时解压 DLL／插件 | 是 | 否 | 可复用现有 CAB／FDI 基础；尚未实现 libVLC 版本，也未形成分发清单 |
 | 静态 Qt＋静态 libVLC／core／所需模块及第三方库 | 是 | 是 | 上游源码有静态机制；Windows 工具链、最终链接及播放能力待探针验证 |
 | DLL 放入资源，依靠普通 QLibrary 直接从内存加载 | 是 | 表面目标为是 | 现有加载机制不能实现；需要额外 PE 加载／路径虚拟化能力，不建议采用 |
@@ -26,7 +26,7 @@
 - `LibVlcBackend.cpp` 以绝对路径 `applicationDirPath()/libvlc/libvlc.dll` 加载公共 C API；通过 `AddDllDirectory` 注册依赖目录。`preflight()` 要求实际存在 `libvlc.dll`、`libvlccore.dll` 和 `plugins/`。
 - C API 由唯一后台线程串行使用，视频输出保持现有 HWND，媒体任务、SeekController、弹幕引擎和覆盖窗已接入。改变链接方式不需要重新设计媒体业务或改成视频帧回调。
 - `deployment.ps1` 的 libVLC 开发部署复制整个锁定归档目录，包括头文件、VLC 自身 EXE、其他界面和通知文件；这是验证用完整组合，不是产品最小运行库。
-- `CMakeLists.txt` 明确禁止同时启用 `DANMAKU_STATIC_QT` 和 `DANMAKU_ENABLE_LIBVLC`。当前 libVLC 预设采用动态 Qt；“Qt 静态、VLC 动态”也需要新增独立组合验证，不能直接宣称已有。
+- `CMakeLists.txt` 明确禁止同时启用 `DANMAKU_STATIC_QT` 和 `DANMAKU_ENABLE_LIBVLC`。当前正式 libVLC 预设仍采用动态 Qt；静态 Qt 与动态 libVLC 组合仅在下方隔离探针中验证。
 - `package.ps1` 同时检查预设与实际缓存，拒绝将内置构建打包；`release.ps1` 沿用现有未启用内置功能的发布预设。
 - `src/portable/main.cpp` 和 `scripts/portable.ps1` 已有 Windows CAB 自解压、包摘要目录、互斥锁、逐文件 SHA-256 校验、损坏目录保留与子进程启动。现实现释放整个动态 Qt 主程序，不是仅释放 libVLC 的同进程方案。
 
@@ -151,3 +151,10 @@ cache/downloads/       下载中及可重试的归档
 开发准备继续显式执行并离线构建，运行期组件安装是独立产品动作，不能将它移入 CMake 配置或普通构建。现有 PowerShell 准备脚本可提供锁定与校验设计参考，不能直接当作最终用户安装器；运行期解包优先评估可明确定位的 Windows 能力，新增库须另给必要性和部署说明。
 
 组件包仍需许可通知、实际第三方清单和对应源码／重建材料；“从 GitHub 下载”不改变分发义务。先验收完整已锁定组合，再基于明确的格式／字幕支持矩阵裁剪。正式交付前还应验证缺组件、手动安装、网络取消／失败、损坏包、并发安装、组件升级、静态 Qt 与动态 VLC 共存，以及无系统 VLC 的实际播放与退出。本节为方案分析，尚未实现组件安装器、GitHub 下载或对应发布预设。
+
+## 静态 Qt＋旁置 libVLC 本机探针（2026-11-13）
+
+- 从 `3bddb6c` 导出源码，仅在 `out/rsv3/` 的副本中移除组合构建限制，使用当前 MSVC 工具链、静态 Qt 6.11.0 和 libVLC 3.0.23 公开头文件构建 Release。正式源码、预设和发布保护不变。实际 EXE 导入表没有 Qt、libVLC 或 MSVC 运行库 DLL。
+- 在只给系统目录 PATH 的两个独立运行目录测试同一个 EXE。没有组件时，应用能启动，选择视频后提示内置运行库不完整，没有加载本机安装的 VLC。手动放入 SHA-256 校验通过的完整锁定发行包后，进程清单中 `libvlc.dll`／`libvlccore.dll` 均来自旁置 `libvlc/`，未加载 Qt DLL。
+- 旁置组件轮用无音轨的 1080p HEVC 和本地 XML 实播 60 秒，56 个播放采样，暂停、恢复、前后定位、切页及返回共 7 项检查全过；报告记录显示 1372 帧、丢 3 帧、0 音频缓冲，应用退出码 0。证据见 `out/rsv3/` 下的 `imports.txt`、`no-component/` 和 `with-component/`。
+- 这轮支持继续做离线导入：先在没有系统 VLC 的 Windows 环境复验，再实现组件校验、安装和升级；按需下载可以复用这套安装流程。探针未实现安装器、插件裁剪、干净系统或正式分发验收，也没有验证不释放运行库的纯单 EXE。
