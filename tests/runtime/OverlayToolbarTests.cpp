@@ -145,11 +145,24 @@ private slots:
         sample.playback = MediaSample::Playback::Playing;
         sample.rate = 2;
         sample.position = 0;
-        send(sample);
+        sample.generation = monitor->generation();
+        sample.observedAt = MediaMonitor::monotonicSeconds();
+        send(sample, false);
         QTRY_VERIFY(renderer.snapshotCount() > 0);
         const auto playing = controller.position();
         QTest::qWait(100);
         QVERIFY(controller.position() > playing + 0.1);
+        auto late = sample;
+        late.observedAt = MediaMonitor::monotonicSeconds();
+        late.position = (late.observedAt - sample.observedAt) * sample.rate;
+        QTest::qSleep(350); // Model a sample waiting for the GUI, without advancing its raw position.
+        send(late, false);
+        QVERIFY(renderer.snapshotCount() > 0);
+        QVERIFY(controller.position() > late.position + 0.5);
+        sample.observedAt = MediaMonitor::monotonicSeconds();
+        send(sample, false);
+        QCOMPARE(controller.position(), 0.0);
+        QCOMPARE(renderer.snapshotCount(), 0);
         sample.playback = MediaSample::Playback::Stopped;
         send(sample);
         QCOMPARE(controller.playbackState(), AppController::PlayerStopped);
@@ -359,21 +372,25 @@ private slots:
         layers.attach(&panel, &overlay, &toolbar);
         QVERIFY(layers.reconcile(1, true, true, true));
         QCOMPARE(calls.size(), std::size_t(3));
-        QCOMPARE(calls[0].window, overlay.winId());
+        QCOMPARE(calls[0].window, panel.winId());
         QCOMPARE(calls[0].after, topmost);
-        QCOMPARE(calls[1].window, panel.winId());
-        QCOMPARE(calls.back().window, toolbar.winId());
+        QCOMPARE(calls[1].window, toolbar.winId());
+        QCOMPARE(calls.back().window, overlay.winId());
+        QCOMPARE(calls.back().after, panel.winId()); // Insert below the panel, even during repair.
         for (const auto& call : calls) QCOMPARE(call.flags, unsigned(0x213)); // NOMOVE|NOSIZE|NOACTIVATE|NOOWNERZORDER
         calls.clear();
         QVERIFY(layers.reconcile(1, false, true, true));
         QCOMPARE(calls.front().window, panel.winId());
         QCOMPARE(calls.front().after, notTopmost);
-        QCOMPARE(calls.back().window, toolbar.winId());
-        QCOMPARE(calls.back().after, topmost);
+        QCOMPARE(calls[1].window, toolbar.winId());
+        QCOMPARE(calls[1].after, topmost);
+        QCOMPARE(calls.back().window, overlay.winId());
+        QCOMPARE(calls.back().after, toolbar.winId());
         calls.clear();
         QVERIFY(layers.reconcile(0, true, true));
-        QCOMPARE(calls[calls.size() - 2].window, panel.winId());
-        QCOMPARE(calls.back().after, quintptr(0)); // HWND_TOP, ordinary band
+        QCOMPARE(calls[0].window, panel.winId());
+        QCOMPARE(calls[1].window, toolbar.winId());
+        QCOMPARE(calls[1].after, quintptr(0)); // HWND_TOP, ordinary band
         QVERIFY(layers.reconcile(1, true, true));
         calls.clear();
         const auto oldHandle = panel.winId();

@@ -2710,6 +2710,19 @@ ApplicationWindow {
             QCOMPARE(bool(GetWindowLongPtrW(overlayHandle, GWL_EXSTYLE) & WS_EX_TOPMOST), strategy > 0);
             QVERIFY(!panel.flags().testFlag(Qt::WindowStaysOnTopHint));
             QCOMPARE(GetForegroundWindow(), foreground);
+            if (strategy == 1) {
+                QSignalSpy adjustments(&layers, &WindowLayerController::orderAdjusted);
+                toolbar.hide();
+                QVERIFY(layers.reconcile(true, true, true));
+                QCOMPARE(adjustments.count(), 0); // Hiding a control must not re-raise the overlay or panel.
+                QVERIFY(above(panelHandle, overlayHandle));
+                const auto refresh = connect(&layers, &WindowLayerController::invalidated, &layers,
+                    [&] { layers.reconcile(true, true, true); });
+                toolbar.show();
+                QTRY_VERIFY(above(reinterpret_cast<HWND>(toolbar.winId()), panelHandle));
+                QVERIFY(above(panelHandle, overlayHandle));
+                disconnect(refresh);
+            }
             QVERIFY(layers.reconcile(strategy, false, true, true));
             QVERIFY(!(GetWindowLongPtrW(panelHandle, GWL_EXSTYLE) & WS_EX_TOPMOST));
         }

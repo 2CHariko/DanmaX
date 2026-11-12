@@ -260,7 +260,6 @@ class AppController final : public QObject {
     danmaku::Engine engine_;
     std::vector<danmaku::Item> rawItems_;
     danmaku::MediaClock mediaClock_;
-    QElapsedTimer monotonicTime_;
     QPointer<DanmakuItem> renderer_;
     QPointer<QWindow> overlay_;
     QPointer<QWindow> toolbarWindow_;
@@ -292,7 +291,7 @@ class AppController final : public QObject {
     bool awaitingInitialExposure_{};
     bool loading_{}, running_{}, playing_{}, manual_{}, visible_{}, snapshotDirty_{true}, demo_{}, danmakuVisible_{true};
     int progress_{}, frames_{};
-    double position_{}, duration_{}, loadedDuration_{}, rate_{1}, samplePosition_{};
+    double position_{}, duration_{}, loadedDuration_{}, rate_{1};
     std::vector<double> frameTimes_;
     double engineMs_{}, snapshotMs_{};
     quint64 renderedFrames_{};

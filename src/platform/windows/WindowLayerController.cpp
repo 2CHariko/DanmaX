@@ -17,11 +17,35 @@ thread_local std::map<HWINEVENTHOOK, QPointer<WindowLayerController>> eventTarge
 // overlay) above the panel. Keep each owner's already reconciled position.
 constexpr unsigned positioningFlags = SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER;
 quintptr insertion(HWND value) { return reinterpret_cast<quintptr>(value); }
+bool above(quintptr upper, quintptr lower) {
+    if (!upper || !lower) return false;
+    for (auto window = GetWindow(reinterpret_cast<HWND>(lower), GW_HWNDPREV); window;
+         window = GetWindow(window, GW_HWNDPREV))
+        if (insertion(window) == upper) return true;
+    return false;
+}
+bool nativeTopmost(quintptr id) {
+    return GetWindowLongPtrW(reinterpret_cast<HWND>(id), GWL_EXSTYLE) & WS_EX_TOPMOST;
+}
 bool ourWindow(quintptr value) {
     const auto window = reinterpret_cast<HWND>(value);
     DWORD process{};
     return window && IsWindow(window) && GetWindowThreadProcessId(window, &process) &&
            process == GetCurrentProcessId();
+}
+quintptr competingTopmostAbove(quintptr overlayId) {
+    const auto overlay = reinterpret_cast<HWND>(overlayId);
+    RECT bounds{};
+    if (!overlay || !GetWindowRect(overlay, &bounds)) return 0;
+    for (auto window = GetTopWindow(nullptr); window && window != overlay; window = GetWindow(window, GW_HWNDNEXT)) {
+        const auto id = insertion(window);
+        if (ourWindow(id) || !IsWindowVisible(window) || IsIconic(window) || !nativeTopmost(id)) continue;
+        DWORD cloaked{};
+        if (SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) continue;
+        RECT other{}, overlap{};
+        if (GetWindowRect(window, &other) && IntersectRect(&overlap, &bounds, &other)) return id;
+    }
+    return 0;
 }
 struct OwnedWindow { quintptr handle; int depth; };
 std::vector<OwnedWindow> visibleOwnedWindows(quintptr main) {
@@ -82,7 +106,7 @@ quintptr WindowLayerController::handle(QWindow* window) const {
 bool WindowLayerController::topmost(QWindow* window) const {
     const auto id = handle(window);
     if (ourWindow(id))
-        return GetWindowLongPtrW(reinterpret_cast<HWND>(id), GWL_EXSTYLE) & WS_EX_TOPMOST;
+        return nativeTopmost(id);
     return window && window->flags().testFlag(Qt::WindowStaysOnTopHint);
 }
 
@@ -204,21 +228,7 @@ bool WindowLayerController::needsRepair(bool panel) const {
         if (current == windows.end() || (previous != windows.end() && current >= previous)) return true;
         previous = current;
     }
-    // Only competing, visible topmost windows above the overlay and on its
-    // monitor area matter. A topmost flag alone does not prove correct Z order.
-    const auto overlay = reinterpret_cast<HWND>(group.front());
-    RECT bounds{};
-    if (!GetWindowRect(overlay, &bounds)) return true;
-    for (const auto window : windows) {
-        if (window == overlay) break;
-        if (ourWindow(reinterpret_cast<quintptr>(window)) || !IsWindowVisible(window) || IsIconic(window) ||
-            !(GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST)) continue;
-        DWORD cloaked{};
-        if (SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) continue;
-        RECT other{}, overlap{};
-        if (GetWindowRect(window, &other) && IntersectRect(&overlap, &bounds, &other)) return true;
-    }
-    return false;
+    return competingTopmostAbove(group.front()) != 0;
 }
 
 void WindowLayerController::scheduleInvalidation() {
@@ -255,10 +265,14 @@ bool WindowLayerController::eventFilter(QObject* watched, QEvent* event) {
         scheduleInvalidation();
     } else if (event->type() == QEvent::Show || event->type() == QEvent::Hide ||
                event->type() == QEvent::WinIdChange || event->type() == QEvent::WindowStateChange) {
-        dirty_ = true;
-        // Show is synchronous: correct Z order before the first rendered frame.
-        if (event->type() == QEvent::Show)
+        if (type == QEvent::Show && window == overlay_) {
+            // Prepare the overlay below the panel before first exposure.
+            dirty_ = true;
             reconcile(onTop_, panelForeground_, overlayAllowed_);
+        }
+        dirty_ = true;
+        // QWindow sends Show before the platform shows the HWND. Reconcile
+        // again after native visibility (including owned tooltips) has caught up.
         scheduleInvalidation();
     }
     return false;
@@ -287,44 +301,66 @@ bool WindowLayerController::reconcile(bool onTop, bool panelForeground, bool ove
         baselineTopmost_ = topmost(main_);
         modified_ = false;
     }
-    bool success = true;
-    if (!panel || !onTop) success = restoreMain();
+    bool success = true, adjusted = false;
+    if (!panel || !onTop) {
+        adjusted = modified_;
+        success = restoreMain();
+    }
     if (panel && !modified_) baselineTopmost_ = topmost(main_);
 
-    if (overlayAllowed && overlay_ && overlay_->isVisible()) {
-        const auto overlayId = handle(overlay_);
-        if (onTop)
-            success = position(overlayId, insertion(HWND_TOPMOST)) && success;
-        if (!onTop && topmost(overlay_))
-            success = position(overlayId, insertion(HWND_NOTOPMOST)) && success;
-    }
+    const auto overlayId = overlayAllowed && overlay_ && overlay_->isVisible() ? handle(overlay_) : 0;
+    const auto toolbarId = overlayAllowed && toolbar_ && toolbar_->isVisible() ? handle(toolbar_) : 0;
+    const auto competitor = onTop && !injected_ ? competingTopmostAbove(overlayId) : 0;
+    const auto move = [&](quintptr window, HWND after) {
+        adjusted = true;
+        success = position(window, insertion(after)) && success;
+    };
+    // Demoting an owner can also demote its owned windows. Do it before
+    // arranging the toolbar group and leave healthy windows where they are.
+    if (overlayId && !onTop && topmost(overlay_)) move(overlayId, HWND_NOTOPMOST);
+    quintptr lower = competitor;
+    const auto ensureAbove = [&](quintptr id, bool top) {
+        if (injected_ || !id || (top && !nativeTopmost(id)) || (lower && !above(id, lower)))
+            move(id, top ? HWND_TOPMOST : HWND_TOP);
+        lower = id;
+    };
 
     if (panel) {
         modified_ = modified_ || (onTop && !baselineTopmost_);
-        const auto after = insertion(onTop || baselineTopmost_ ? HWND_TOPMOST : HWND_TOP);
-        success = position(mainId, after) && success;
+        ensureAbove(mainId, onTop || baselineTopmost_);
     }
 
-    // Raise the toolbar after the panel so it remains usable with a maximized
-    // panel. Its native tips/popups follow it; panel dialogs retain precedence.
-    if (overlayAllowed && toolbar_ && toolbar_->isVisible()) {
-        const auto toolbarId = handle(toolbar_);
-        if (!onTop && !(panel && baselineTopmost_) && topmost(toolbar_))
-            success = position(toolbarId, insertion(HWND_NOTOPMOST)) && success;
-        const auto after = insertion(onTop || (panel && baselineTopmost_) ? HWND_TOPMOST : HWND_TOP);
-        success = position(toolbarId, after) && success;
+    if (toolbarId) {
+        const bool top = onTop || (panel && baselineTopmost_);
+        if (!top && nativeTopmost(toolbarId)) move(toolbarId, HWND_NOTOPMOST);
+        ensureAbove(toolbarId, top);
         for (const auto& owned : visibleOwnedWindows(toolbarId))
-            success = position(owned.handle, after) && success;
+            ensureAbove(owned.handle, top);
     }
 
     if (panel) {
-        const auto after = insertion(onTop || baselineTopmost_ ? HWND_TOPMOST : HWND_TOP);
         // Native dialogs do not necessarily have a QWindow.
         for (const auto& owned : visibleOwnedWindows(mainId))
-            success = position(owned.handle, after) && success;
+            ensureAbove(owned.handle, onTop || baselineTopmost_);
+    }
+
+    // The lowest window must never be raised above its own controls as an
+    // intermediate step. In the same band, insert it directly behind the
+    // lowest control; if there are no controls, it can lead the band itself.
+    if (overlayId) {
+        const auto anchor = panel ? mainId : toolbarId;
+        const bool anchorTop = onTop || (panel && baselineTopmost_);
+        const bool repair = (onTop && (injected_ || !nativeTopmost(overlayId))) ||
+                            (anchor && above(overlayId, anchor)) || (competitor && above(competitor, overlayId));
+        if (repair) {
+            if (anchor && anchorTop == onTop)
+                move(overlayId, reinterpret_cast<HWND>(anchor));
+            else if (onTop)
+                move(overlayId, HWND_TOPMOST);
+        }
     }
     ready_ = success;
-    if (success) emit orderAdjusted();
+    if (success && adjusted) emit orderAdjusted();
     if (!success && !failureReported_) {
         failureReported_ = true;
         emit operationFailed(QStringLiteral("窗口层级调整失败；面板操作期间暂时隐藏弹幕并重试"));

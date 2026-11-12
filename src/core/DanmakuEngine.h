@@ -42,7 +42,9 @@ class Engine {
     // Unload the file and release all pool/occupancy storage; keep playback options.
     void unload();
     void updateItemTexts(const std::vector<std::string>& texts);
-    void tick(double position, double elapsed, bool playing, const Measure& measure, bool emitNew = true);
+    enum class Discontinuity { Detect, Explicit };
+    void tick(double position, double elapsed, bool playing, const Measure& measure, bool emitNew = true,
+              Discontinuity discontinuity = Discontinuity::Detect);
     [[nodiscard]] const std::vector<Item>& items() const {
         return items_;
     }

@@ -115,7 +115,6 @@ AppController::AppController(QString dataDirectory, QObject* parent, ForegroundQ
         if (fontsLoaded_) refreshFontFamilies();
     });
     timer_.setTimerType(Qt::PreciseTimer);
-    monotonicTime_.start();
     timer_.setInterval(33);
     disconnectCleanup_.setSingleShot(true);
     disconnectCleanup_.setInterval(1500);
@@ -278,7 +277,7 @@ void AppController::configure() {
     logs_.configure(s["logToFile"].toBool(), s["logLevel"].toString());
     if (running_ && !manual_ && lastSettings_.value("timeOffset") != s["timeOffset"]) {
         if (syncConnected_) {
-            mediaClock_.advance(monotonicTime_.nsecsElapsed() * 1e-9);
+            mediaClock_.advance(MediaMonitor::monotonicSeconds());
             position_ = mediaClock_.position();
         }
         resetDanmakuTimeline();
@@ -663,7 +662,7 @@ void AppController::resetPlayback(bool unloadSource) {
     mediaGeneration_ = monitor_.select(boundSession(), !automaticSource_);
     mediaIdentity_.clear();
     mediaTitle_.clear();
-    position_ = samplePosition_ = 0;
+    position_ = 0;
     duration_ = loadedDuration_;
     rate_ = 1;
     frameTime_.invalidate();
@@ -710,7 +709,7 @@ void AppController::setRenderTestSession(const QString& id) {
     targetSessionConnected_ = false; connectionObservedAt_ = 0;
     if (!manual_) {
         syncConnected_ = false; mediaClock_ = {}; lastSampleObservedAt_ = 0;
-        position_ = samplePosition_ = 0; duration_ = 0; mediaIdentity_.clear(); sampleTime_.invalidate();
+        position_ = 0; duration_ = 0; mediaIdentity_.clear(); sampleTime_.invalidate();
         if (running_) {
             playing_ = false; resetDanmakuTimeline(); setPlaybackState(WaitingForPlayer);
             updatePresentationVisibility(true, false); emit stateChanged(); emit metricsChanged();
@@ -778,13 +777,14 @@ void AppController::onSample(const MediaSample& s) {
         s.id != boundSession() ||
         !std::isfinite(s.observedAt) || s.observedAt <= lastSampleObservedAt_)
         return;
-    const double age = MediaMonitor::monotonicSeconds() - s.observedAt;
+    const double receivedAt = MediaMonitor::monotonicSeconds();
+    const double age = receivedAt - s.observedAt;
     if (age < 0 || age > 2.5) return;
     lastSampleObservedAt_ = s.observedAt;
     sampleAgeAtReceive_ = age;
     ++mediaSamples_;
     if (!s.usableTimeline() && s.playback != MediaSample::Playback::Stopped) {
-        mediaClock_.freeze(monotonicTime_.nsecsElapsed() * 1e-9);
+        mediaClock_.freeze(receivedAt);
         if (syncConnected_) position_ = mediaClock_.position();
         syncConnected_ = false;
         playing_ = false;
@@ -799,9 +799,8 @@ void AppController::onSample(const MediaSample& s) {
     if (!std::isfinite(s.position) || !std::isfinite(s.duration)) return;
     const bool samplePlaying = s.playback == MediaSample::Playback::Playing;
     const double rate = std::isfinite(s.rate) && s.rate > 0 ? s.rate : 1;
-    // The adapter already projects SMTC's LastUpdatedTime to acquisition time.
-    // Keep that sampled boundary exact: a second projection here would turn a
-    // time-zero seek into a positive seek and discard its comments.
+    // Seek confirmation sees the raw backend sample. The overlay clock compares
+    // it with its prediction at acquisition, before projecting for presentation.
     double actual = std::max(0.0, s.position);
     if (s.duration > 0) actual = std::min(actual, s.duration);
     const bool stopped = s.playback == MediaSample::Playback::Stopped;
@@ -809,15 +808,14 @@ void AppController::onSample(const MediaSample& s) {
         ? boundSession() + ':' + QString::number(media_.taskId()) : s.identity;
     const bool changed = !syncConnected_ || mediaIdentity_ != identity ||
                          (stopped && playbackState_ != PlayerStopped);
-    const bool reset = mediaClock_.synchronize(actual, rate, samplePlaying,
-                                monotonicTime_.nsecsElapsed() * 1e-9, changed);
+    const bool reset = mediaClock_.synchronize(actual, rate, samplePlaying, s.observedAt, receivedAt, changed);
     if (reset) {
         ++sampleResets_;
     }
     mediaIdentity_ = identity;
     mediaTitle_ = s.title;
     duration_ = s.duration;
-    position_ = samplePosition_ = actual;
+    position_ = s.duration > 0 ? std::min(mediaClock_.position(), s.duration) : mediaClock_.position();
     rate_ = rate;
     playing_ = samplePlaying;
     syncConnected_ = true;
@@ -850,7 +848,7 @@ void AppController::tick() {
     }
     if (!manual_ && syncConnected_ && sampleTime_.isValid() &&
         sampleTime_.elapsed() * 1e-3 + sampleAgeAtReceive_ > 2.5) {
-        mediaClock_.freeze(monotonicTime_.nsecsElapsed() * 1e-9);
+        mediaClock_.freeze(MediaMonitor::monotonicSeconds());
         playing_ = false;
         position_ = mediaClock_.position();
         syncConnected_ = false;
@@ -861,8 +859,8 @@ void AppController::tick() {
         if (manual_)
             position_ += elapsed;
         else if (sampleTime_.isValid()) {
-            mediaClock_.advance(monotonicTime_.nsecsElapsed() * 1e-9);
-            position_ = mediaClock_.position();
+            mediaClock_.advance(MediaMonitor::monotonicSeconds());
+            position_ = duration_ > 0 ? std::min(mediaClock_.position(), duration_) : mediaClock_.position();
         }
     }
     if (manual_ && demo_ && position_ > duration_) {
@@ -874,7 +872,8 @@ void AppController::tick() {
     QElapsedTimer stage;
     stage.start();
     engine_.tick(danmakuPosition(), motion, playing_,
-                 [this](const auto& item) { return renderer_->measure(item); }, renderable);
+                 [this](const auto& item) { return renderer_->measure(item); }, renderable,
+                 manual_ ? danmaku::Engine::Discontinuity::Detect : danmaku::Engine::Discontinuity::Explicit);
     engineMs_ += stage.nsecsElapsed() * 1e-6;
     stage.restart();
     if (renderable && (playing_ || visibilityChanged || snapshotDirty_)) {

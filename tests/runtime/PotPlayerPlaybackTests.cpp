@@ -246,7 +246,10 @@ private slots:
         QVERIFY(stable >= 3);
         AppController app(data, nullptr, [](const QString&) { return true; }, directory.filePath("cache"));
         auto* settings = qobject_cast<SettingsStore*>(app.settings()); settings->setDanmakuServers({});
-        auto* players = qobject_cast<ExternalPlayerStore*>(app.players()); QVERIFY(players->setExecutable(executable));
+        auto* players = qobject_cast<ExternalPlayerStore*>(app.players());
+        const auto selection = players->saveDraft(players->profiles(), "potplayer", players->revision());
+        QVERIFY2(selection.value("ok").toBool(), qPrintable(selection.value("error").toString()));
+        QVERIFY2(players->setExecutable(executable), qPrintable(players->error()));
         QQuickWindow overlay; overlay.resize(800, 600); DanmakuItem renderer; renderer.setParentItem(overlay.contentItem());
         renderer.setSize({800, 600}); app.attach(&renderer, &overlay);
         auto* media = qobject_cast<MediaSession*>(app.media()); auto* now = qobject_cast<NowPlayingModel*>(app.nowPlaying());

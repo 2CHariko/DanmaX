@@ -61,5 +61,17 @@ int main() {
           "Media switch while hidden and paused does not emit a comment");
     engine.tick(0, 0, true, measure);
     check(engine.activeCount() == 1, "Playback after media switch admits the new media's first comment");
+
+    engine.load({{0, Mode::Scroll, "active"}, {1, Mode::Scroll, "future"}});
+    engine.tick(0, 0, true, measure);
+    engine.tick(0.8, 0.8, true, measure);
+    const auto id = live(engine, 0).id;
+    engine.tick(0.3, 0, false, measure, true, Engine::Discontinuity::Explicit);
+    check(engine.activeCount() == 1 && live(engine, 0).id == id,
+          "A late pause can correct presentation backwards without discarding the active comment");
+    engine.seek(0.9);
+    engine.tick(1, 0.1, true, measure, true, Engine::Discontinuity::Explicit);
+    check(engine.activeCount() == 1 && live(engine, 0).id != id && live(engine, 0).item == 1,
+          "An explicit seek still clears active comments and starts from the new cursor");
     return failed ? 1 : 0;
 }

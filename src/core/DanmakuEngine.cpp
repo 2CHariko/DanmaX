@@ -164,11 +164,12 @@ void Engine::seek(double position) {
                          [](const Item& item, double time) { return item.time < time; }) -
         items_.begin());
 }
-void Engine::tick(double position, double elapsed, bool playing, const Measure& measure, bool emitNew) {
+void Engine::tick(double position, double elapsed, bool playing, const Measure& measure, bool emitNew,
+                  Discontinuity discontinuity) {
     if (!std::isfinite(position) || !std::isfinite(elapsed))
         return;
-    if (!initialized_ || position < lastPosition_ - 0.25 ||
-        std::abs(position - lastPosition_ - (playing ? elapsed : 0)) > 1.0)
+    if (!initialized_ || (discontinuity == Discontinuity::Detect &&
+        (position < lastPosition_ - 0.25 || std::abs(position - lastPosition_ - (playing ? elapsed : 0)) > 1.0)))
         seek(position);
     position_ = position;
     if (!playing) {
