@@ -42,6 +42,7 @@ docs/
 - **[看板娘设计设定集 (MASCOT_DESIGN.md)](MASCOT_DESIGN.md)**：官方拟人化形象“艾克斯（DanmaX）”的视觉人设、功能映射、二游立绘 Prompt 与 UI 状态差分规范。
 
 ### 2.3 部署、分发与开源合规
+- **[libVLC 单文件分发可行性 (LIBVLC_SINGLE_FILE_FEASIBILITY.md)](LIBVLC_SINGLE_FILE_FEASIBILITY.md)**：比较真正静态单 EXE 与运行时自解压，记录锁定包体积、Windows 工具链与静态插件边界，以及下一步验证门槛；不代表已经完成分发验收。
 - **[Windows 便携分发 (PACKAGING.md)](PACKAGING.md)**：详解静态单 EXE（`/MT`）、配套材料包、零外部运行时解压与目录权限隔离。
 - **[第三方组件与开源合规 (THIRD_PARTY.md)](THIRD_PARTY.md)**：阐述 GPL-3.0 与 LGPLv3 静态链接合规流水线（源码包、SBOM、重编译脚本与 Map 文件）及依赖许可范围。
 - **[开发与构建脚本手册 (SCRIPTS.md)](SCRIPTS.md)**：包含全量 24 个 PowerShell 脚本参数详解、环境准备、静态编译、一键发布与基准测试端到端工作流。

@@ -114,3 +114,5 @@ pwsh -NoProfile -File scripts/release.ps1
 ## libVLC 开发构建边界
 
 `windows-libvlc-debug/release` 只用于开发验证，通过 `DANMAKU_ENABLE_LIBVLC` 启用并在开发运行目录携带 DLL／插件。现有发布格式不包含该运行库；package 脚本检查配置并拒绝内置构建，禁止把缺失运行库的程序标为可用内置播放器。无需释放运行库的单 EXE 方案及可分发插件清单另行研究。
+
+源码机制、现有运行库体积、真正静态链接与自解压路线的比较见 [libVLC 单文件分发可行性](LIBVLC_SINGLE_FILE_FEASIBILITY.md)。该分析尚未完成静态 libVLC 构建或分发验收，不改变上述打包保护。
