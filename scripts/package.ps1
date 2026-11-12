@@ -16,6 +16,18 @@ function Copy-AnitomyMaterials([string] $Destination) {
     Copy-Item -LiteralPath (Get-ProjectPath 'toolchain/anitomy.lock.json') -Destination $parserMaterials
     Copy-Item -LiteralPath (Get-ProjectPath ".deps/anitomy/$($parserLock.sourceDirectory)/LICENSE") -Destination $parserMaterials
 }
+function Copy-QWindowKitMaterials([string] $Destination) {
+    $lockPath = Get-ProjectPath 'toolchain/qwindowkit.lock.json'
+    $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+    $archive = Get-ProjectPath ".cache/qwindowkit/$($lock.archive)"
+    if (!(Test-Path -LiteralPath $archive -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $lock.sha256) {
+        throw 'Matching QWindowKit source archive missing or changed; explicitly prepare the dependency before packaging.'
+    }
+    $materials = Join-Path $Destination 'qwindowkit'
+    New-Item -ItemType Directory -Force $materials | Out-Null
+    Copy-Item -LiteralPath $archive,$lockPath,(Get-ProjectPath '.deps/qwindowkit/LICENSE') -Destination $materials
+}
 Invoke-ProjectEnvironment {
     if ($Preset -like 'windows-libvlc-*') {
         throw 'Embedded libVLC builds are development-only. DLL/plugin redistribution and pure single-EXE delivery are not validated; this build cannot be packaged.'
@@ -43,6 +55,7 @@ Invoke-ProjectEnvironment {
         $materials = Get-ProjectPath "out/packages/materials-static-$timestamp"
         New-Item -ItemType Directory -Force $output,$materials | Out-Null
         Copy-AnitomyMaterials $materials
+        Copy-QWindowKitMaterials $materials
         $destination = Join-Path $output 'DanmaX.exe'
         Copy-Item -LiteralPath $exe -Destination $destination
         # Audit the actual executable before reporting it as static. System DLLs remain normal dependencies.
@@ -53,7 +66,7 @@ Invoke-ProjectEnvironment {
         if (($imports -join "`n") -match '(?im)^\s+(Qt\d.*|MSVCP\d.*|VCRUNTIME\d.*|CONCRT\d.*|dxcompiler|dxil)\.dll\s*$') {
             throw 'Static package still imports a Qt, compiler-runtime or external shader-compiler DLL.'
         }
-        foreach ($notice in @('LICENSE','docs/THIRD_PARTY.md','docs/PACKAGING.md')) {
+        foreach ($notice in @('LICENSE','DISCLAIMER.md','docs/THIRD_PARTY.md','docs/PACKAGING.md')) {
             Copy-Item -LiteralPath (Get-ProjectPath $notice) -Destination $materials
         }
         Copy-Item -LiteralPath (Get-ProjectPath 'resources/fluent/LICENSE') -Destination (Join-Path $materials 'Fluent-System-Icons-LICENSE.txt')
@@ -77,7 +90,7 @@ Invoke-ProjectEnvironment {
         # Archives, generated files and private local configuration are not release sources.
         $applicationSource = Join-Path $materials 'application-source'
         New-Item -ItemType Directory -Force $applicationSource | Out-Null
-        $sourcePaths = @('CMakeLists.txt','CMakePresets.json','README.md','LICENSE','AGENTS.md',
+        $sourcePaths = @('CMakeLists.txt','CMakePresets.json','README.md','LICENSE','DISCLAIMER.md','AGENTS.md',
             'src','qml','cmake','scripts','toolchain','tests','docs','assets','resources')
         foreach ($relative in $sourcePaths) {
             $original = Get-ProjectPath $relative
@@ -92,9 +105,10 @@ Invoke-ProjectEnvironment {
         if (Test-Path -LiteralPath $sbom) { Copy-Item -LiteralPath $sbom -Destination $materials -Recurse }
         @'
 This folder is separate from the portable executable. Preserve it for distribution/relinking review.
-The application source and verified Qt source archives match this build; Qt sources were not patched.
+The application source and verified dependency archives are included; Qt sources were not patched.
 Rebuild instructions are in application-source/docs/PACKAGING.md. Place the Qt archives under
 .cache/downloads, then prepare-qt-static.ps1 -Offline and build-qt-static.ps1 before building the app.
+Place qwindowkit/qwindowkit-1.5.0.zip under .cache/qwindowkit and run prepare-qwindowkit.ps1 -Offline.
 MSVC and Windows SDK require an explicit .local/toolchain.local.json for your installation.
 Qt modifications can be rebuilt and relinked into the application; there is no runtime Qt hash gate
 in static-exe. These materials are not a completed component-by-component licensing audit.
@@ -105,7 +119,7 @@ in static-exe. These materials are not a completed component-by-component licens
             sha256=(Get-FileHash -LiteralPath $destination).Hash.ToLowerInvariant()
             staticQtLockSha256=(Get-FileHash -LiteralPath (Get-ProjectPath 'toolchain/qt-static.lock.json')).Hash
             extraction='none'; data='annotated UTF-8 settings.ini and app.log beside EXE'; cache='cache/ beside EXE'
-            relinkingMaterials='Matching application source, verified Qt sources, lockfiles and rebuild scripts in this folder'
+            relinkingMaterials='Application source, verified dependency archives, lockfiles and rebuild scripts in this folder'
             publicDistribution='Development validation; component-license review and clean-machine validation still pending'
         } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $materials 'package-report.json') -Encoding utf8
         Write-Host "Static portable executable: $destination"

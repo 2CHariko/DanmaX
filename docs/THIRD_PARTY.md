@@ -58,7 +58,7 @@ DanmaX 的默认发布格式为 **静态单 EXE**（`static-exe`），主程序�
 每次执行打包脚本 `pwsh -NoProfile -File scripts/package.ps1`，自动化流水线在生成主程序 `DanmaX.exe` 的同时，均会在同级目录自动创建配套分发材料目录 `out/packages/materials-static-<时间戳>/`：
 1. **项目许可与版权**：包含本项目的 `LICENSE` (GPL-3.0) 与 `DISCLAIMER.md`。
 2. **Qt 官方许可集**：包含静态编译所使用的 Qt 源码中完整的 `LICENSES/` 目录与各模块 REUSE 元数据。
-3. **匹配的 Qt 源码归档**：包含经过 SHA-256 校验的官方 `qtbase`, `qtshadertools`, `qtdeclarative` 源码包。
+3. **匹配的依赖源码归档**：包含经过 SHA-256 校验的 Qt、Anitomy 和 QWindowKit 源码归档。`qwindowkit/` 同时包含锁文件和许可证，离线重建时将该归档放到 `.cache/qwindowkit/` 后运行 `scripts/prepare-qwindowkit.ps1 -Offline`。
 4. **应用源码快照与 SBOM**：包含生成该 EXE 时当前工作区的完整源码与配置清单（自动排除 `.local/` 用户私有配置与历史归档）。
 5. **静态链接符号表 (Map File)**：生成主程序的链接 Map 文件（如 `danmaku_app.map`），便于符号核验与重定位。
 6. **离线重建指引与脚本**：提供脱机重新编译 Qt 与重新链接主程序的清晰指令与说明。
