@@ -8,6 +8,7 @@ ColumnLayout {
     id: pane
     required property QtObject library
     property string loadActionText: ""
+    property bool nested: false
     readonly property string effectiveServer: pane.library.activeServer.length > 0
         ? pane.library.activeServer
         : (pane.library.servers.length > 0 ? pane.library.servers[0] : "")
@@ -132,6 +133,22 @@ ColumnLayout {
                 onAccepted: if (text.trim().length > 0) pane.library.searchAnime(text)
             }
 
+            ToolButton {
+                visible: keyword.text.length > 0 && !pane.library.busy
+                icon.source: Ui.icon("dismiss")
+                icon.width: Math.round(14 * Ui.textScale)
+                icon.height: Math.round(14 * Ui.textScale)
+                display: AbstractButton.IconOnly
+                text: "清空关键词"
+                ToolTip.visible: hovered
+                ToolTip.text: text
+                Accessible.name: text
+                onClicked: {
+                    keyword.clear()
+                    keyword.forceActiveFocus()
+                }
+            }
+
             Button {
                 text: I18n.online.searchBtn
                 highlighted: keyword.text.trim().length > 0
@@ -160,16 +177,28 @@ ColumnLayout {
             id: onlineResults
             visible: pane.library.animes.length > 0
             Layout.fillWidth: true
-            leftPadding: Ui.cardPaddingX
-            rightPadding: Ui.cardPaddingX
+            leftPadding: pane.nested ? 0 : Ui.cardPaddingX
+            rightPadding: pane.nested ? 0 : Ui.cardPaddingX
             topPadding: 12
-            bottomPadding: 12
+            bottomPadding: pane.nested ? 0 : 12
 
-            background: Rectangle {
-                radius: Ui.cardRadius
-                color: Ui.cardBackground
-                border.width: 1
-                border.color: Ui.cardBorder
+            background: Item {
+                Rectangle {
+                    anchors.fill: parent
+                    visible: !pane.nested
+                    radius: Ui.cardRadius
+                    color: Ui.cardBackground
+                    border.width: 1
+                    border.color: Ui.cardBorder
+                }
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    visible: pane.nested
+                    height: 1
+                    color: Ui.cardBorder
+                }
             }
 
             contentItem: ColumnLayout {

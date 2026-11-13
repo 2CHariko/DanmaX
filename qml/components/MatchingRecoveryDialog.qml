@@ -23,8 +23,8 @@ Dialog {
     parent: Overlay.overlay
     x: parent ? Math.max(8, (parent.width - width) / 2) : 0
     y: parent ? Math.max(8, (parent.height - height) / 2) : 0
-    width: parent ? Math.min(parent.width - 24, Math.round(720 * Ui.textScale)) : 720
-    height: parent ? Math.min(parent.height - 24, Math.round(640 * Ui.textScale)) : 640
+    width: parent ? Math.min(parent.width - 24, Math.round(700 * Ui.textScale)) : 700
+    height: parent ? Math.min(parent.height - 24, Math.round((manualSearch ? 420 : 600) * Ui.textScale)) : (manualSearch ? 420 : 600)
     modal: true
     focus: true
     title: manualSearch ? "搜索弹幕" : "手动匹配弹幕"

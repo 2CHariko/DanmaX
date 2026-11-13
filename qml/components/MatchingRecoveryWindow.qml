@@ -26,7 +26,7 @@ ApplicationWindow {
         if (visible && task === media.taskId) return
         task = media.taskId
         initialFocus = true
-        backend.showMatchingWindow(dialog, Math.round(720 * Ui.textScale), Math.round(640 * Ui.textScale))
+        backend.showMatchingWindow(dialog, Math.round(700 * Ui.textScale), Math.round(600 * Ui.textScale))
     }
     function cancelMatching() {
         if (task === media.taskId && recovery.active) media.cancelMatching()
