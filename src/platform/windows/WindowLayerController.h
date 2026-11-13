@@ -14,6 +14,8 @@ public:
     explicit WindowLayerController(QObject* parent = nullptr, Positioner positioner = {});
     ~WindowLayerController() override;
     void attach(QWindow* main, QWindow* overlay, QWindow* toolbar);
+    void attachMatching(QWindow* window, std::function<bool(quintptr)> playerMatches = {});
+    void showMatching(QWindow* window, bool activate);
     void invalidate();
     bool reconcile(bool onTop, bool panelForeground, bool overlayAllowed, bool checkOrder = false);
 signals:
@@ -32,7 +34,10 @@ private:
     void stopMaintenance();
     void maintain();
     bool needsRepair(bool panel) const;
-    QPointer<QWindow> main_, overlay_, toolbar_;
+    void reconcileMatching(quintptr foreground, quintptr lower);
+    QPointer<QWindow> main_, overlay_, toolbar_, matching_;
+    std::function<bool(quintptr)> matchingPlayer_;
+    bool matchingFailureReported_{};
     Positioner positioner_;
     bool injected_{};
     quintptr baselineHandle_{};

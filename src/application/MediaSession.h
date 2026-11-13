@@ -42,7 +42,7 @@ class MediaSession final : public QObject {
     QObject* videoOpen() { return service_; }
     QString videoPath() const { return video_; }
     QString title() const;
-    QString status() const { return status_; }
+    QString status() const;
     QString error() const { return error_; }
     QString sourceTitle() const { return sourceTitle_; }
     int total() const { return total_; }
@@ -65,6 +65,8 @@ class MediaSession final : public QObject {
     void searchForAnime(const QString& title, const QString& episodeTitle = {}, double episodeNumber = 0);
     Q_INVOKABLE void unload();
     Q_INVOKABLE void retryMatching();
+    Q_INVOKABLE void cancelMatching();
+    Q_INVOKABLE void cancelOnlineSearch();
     Q_INVOKABLE void showAutomaticDanmakuChoice();
     Q_INVOKABLE void searchDanmaku();
     Q_INVOKABLE void copyRecoveryTitle();
@@ -87,6 +89,8 @@ class MediaSession final : public QObject {
     void beginRestore();
     void restoreError(const QString& error);
     void prepared();
+    void startAutomaticMatching();
+    void showSourceFailure(const QString& error);
     void accept(std::vector<danmaku::Item> items, const QString& title, const QVariantMap& source);
     void cancelLoader();
     bool sameContent(const MediaSample& sample) const;
@@ -110,4 +114,6 @@ class MediaSession final : public QObject {
     double restorePosition_{}, lastObservedAt_{};
     int intent_{Normal}, total_{};
     bool active_{}, confirmed_{}, ready_{}, loading_{}, restoring_{}, restoreFailed_{}, writing_{}, manualSource_{}, opening_{}, starting_{};
+    bool automaticStartPending_{};
+    bool restoringOnlineSource_{};
 };

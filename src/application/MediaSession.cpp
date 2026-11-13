@@ -39,10 +39,13 @@ MediaSession::MediaSession(const QString& data, const QString& cache, AppControl
     });
     connect(automatic_.playbackRecovery(), &PlaybackRecovery::controlRequested, monitor_, &MediaMonitor::requestPlayback);
     connect(monitor_, &MediaMonitor::playbackControlFinished, automatic_.playbackRecovery(), &PlaybackRecovery::controlFinished);
-    connect(automatic_.playbackRecovery(), &PlaybackRecovery::showRequested, app_, &AppController::showMainWindow);
+    connect(automatic_.playbackRecovery(), &PlaybackRecovery::changed, this, &MediaSession::stateChanged);
+    connect(automatic_.playbackRecovery(), &PlaybackRecovery::showRequested, this, [this] {
+        if (monitor_->embedded(bound_)) app_->showMainWindow();
+    });
     connect(&automatic_, &AutomaticDanmaku::changed, this, &MediaSession::stateChanged);
     connect(&automatic_, &AutomaticDanmaku::sourceReady, this, [this] {
-        if (!active_ || !ready_ || manualSource_) return;
+        if (!active_ || !ready_ || (manualSource_ && !automatic_.playbackRecovery()->active())) return;
         const auto result = automatic_.takeReadyResult(); if (!result) return;
         if (contentMetadata_.isEmpty()) contentMetadata_ = result->metadata;
         accept(std::move(result->items), result->metadata.value("animeTitle").toString() + QStringLiteral(" · ")
@@ -50,6 +53,7 @@ MediaSession::MediaSession(const QString& data, const QString& cache, AppControl
     });
     connect(&library_, &DanmakuLibrary::sourceReady, this, [this] {
         const auto result = library_.takeReadyResult(); if (!result || !active_ || !ready_) return;
+        restoringOnlineSource_ = false;
         const auto title = result->metadata.value("animeTitle").toString() + QStringLiteral(" · ")
             + result->metadata.value("episodeTitle").toString();
         const QVariantMap source{{"kind", "online"}, {"metadata", result->metadata}};
@@ -58,21 +62,27 @@ MediaSession::MediaSession(const QString& data, const QString& cache, AppControl
         accept(std::move(result->items), title, source);
     });
     connect(&library_, &DanmakuLibrary::operationStarted, this, [this] {
-        if (active_) { cancelLoader(); automatic_.suspend(false); manualSource_ = true; }
+        if (active_) { cancelLoader(); automatic_.suspend(false); manualSource_ = true; automaticStartPending_ = false; }
     });
-    connect(&library_, &DanmakuLibrary::changed, this, [this] {
-        if (active_ && ready_ && !library_.busy() && !library_.error().isEmpty()) {
-            error_ = library_.error(); automatic_.playbackRecovery()->begin(latest_, error_); emit stateChanged();
-        }
+    connect(&library_, &DanmakuLibrary::operationFailed, this, [this](const QString& error) {
+        if (active_ && ready_ && manualSource_) showSourceFailure(error);
     });
 }
 MediaSession::~MediaSession() { flush(); cancelLoader(); automatic_.reset(); library_.cancel(); }
 QString MediaSession::title() const { return video_.isEmpty() ? confirmedSample_.title : QFileInfo(video_).fileName(); }
+QString MediaSession::status() const {
+    const auto warning = automatic_.playbackRecovery()->controlWarning();
+    return warning.isEmpty() ? status_ : status_ + QStringLiteral(" · ") + warning;
+}
 bool MediaSession::connected() const { return active_ && app_->targetSessionConnected(); }
 void MediaSession::configure(const QStringList& servers) {
     if (servers_ == servers) return;
-    servers_ = servers; library_.setServers(servers);
+    servers_ = servers;
     automatic_.configure(active_ && ready_ && !manualSource_, servers);
+    library_.setServers(servers);
+    if (restoringOnlineSource_ && !library_.busy()) {
+        showSourceFailure(QStringLiteral("在线弹幕服务已更改，请重新选择来源"));
+    }
 }
 void MediaSession::openVideo(const QString& file, int intent) {
     if (app_->closingApplication_) return;
@@ -83,7 +93,7 @@ void MediaSession::openVideo(const QString& file, int intent) {
 }
 void MediaSession::beginTask(const QString& path) {
     app_->handoff(PlaybackCoordinator::Media);
-    ++task_; active_ = starting_ = true; confirmed_ = ready_ = writing_ = manualSource_ = false;
+    ++task_; active_ = starting_ = true; confirmed_ = ready_ = writing_ = manualSource_ = automaticStartPending_ = restoringOnlineSource_ = false;
     restoring_ = restoreFailed_ = false; latest_ = {}; confirmedSample_ = {}; lastObservedAt_ = 0; bound_.clear(); video_ = path;
     total_ = 0; sourceTitle_.clear(); error_.clear(); source_ = recent_.lookup(path).value("source").toMap();
     const auto record = recent_.lookup(path);
@@ -107,7 +117,7 @@ bool MediaSession::sameContent(const MediaSample& sample) const {
 }
 void MediaSession::adoptContent(const MediaSample& sample) {
     flush(); ++task_; ++seekRequest_; app_->seek_.cancelAll();
-    cancelLoader(); automatic_.reset(); library_.cancel();
+    cancelLoader(); automatic_.reset(); library_.cancel(); automaticStartPending_ = false;
     restoring_ = restoreFailed_ = false;
     source_.clear(); contentMetadata_.clear(); total_ = 0; sourceTitle_.clear(); error_.clear();
     app_->clearMediaItems();
@@ -120,7 +130,7 @@ void MediaSession::adoptContent(const MediaSample& sample) {
         recent_.opened(video_);
         automatic_.setFileTitle(QFileInfo(video_).fileName());
         status_ = QStringLiteral("已连接当前视频，正在准备弹幕");
-        automatic_.configure(true, servers_); automatic_.observe(sample);
+        startAutomaticMatching();
     } else {
         automatic_.setFileTitle({});
         status_ = QStringLiteral("播放器已载入新内容，可选择弹幕来源");
@@ -144,16 +154,34 @@ void MediaSession::prepared() {
     if (!active_ || !confirmed_ || !connected()) { restoreError(QStringLiteral("播放器连接已断开，请重新打开视频")); return; }
     restoring_ = restoreFailed_ = false; ready_ = writing_ = true; error_.clear();
     status_ = QStringLiteral("视频已就绪，正在准备弹幕"); emit stateChanged();
-    if (source_.value("kind") == "xml") { loadFile(source_.value("path").toString()); return; }
-    if (source_.value("kind") == "disabled") { manualSource_ = true; status_ = QStringLiteral("弹幕已卸载，可手动选源或重新匹配"); return; }
-    if (source_.value("kind") == "online") {
+    const auto kind = source_.value("kind").toString();
+    if (kind == "disabled") { manualSource_ = true; status_ = QStringLiteral("弹幕已卸载，可手动选源或重新匹配"); emit stateChanged(); return; }
+    if (kind == "xml" || kind == "online") automatic_.playbackRecovery()->prepare(latest_);
+    if (kind == "xml") { loadFile(source_.value("path").toString()); return; }
+    if (kind == "online") {
         manualSource_ = true; const auto metadata = source_.value("metadata").toMap();
         const auto key = danmakuCacheKey(metadata.value("server").toString(), metadata.value("episodeId").toLongLong());
         if (QFileInfo(QDir(cacheRoot_).filePath("danmaku/" + key + ".json")).isFile()) library_.loadCached(key);
         else library_.loadKnownEpisode(metadata);
+        restoringOnlineSource_ = library_.busy();
         return;
     }
-    automatic_.configure(true, servers_); automatic_.observe(latest_);
+    startAutomaticMatching();
+}
+void MediaSession::startAutomaticMatching() {
+    automatic_.configure(true, servers_);
+    const auto age = MediaMonitor::monotonicSeconds() - latest_.observedAt;
+    automaticStartPending_ = automatic_.playbackRecovery()->resumeInFlight() ||
+        !connected() || !latest_.usableTimeline() || age < 0 || age > 2.5;
+    if (automaticStartPending_) return;
+    automatic_.playbackRecovery()->prepare(latest_);
+    automatic_.observe(latest_);
+}
+void MediaSession::showSourceFailure(const QString& error) {
+    restoringOnlineSource_ = false;
+    error_ = error;
+    automatic_.showRecovery(latest_, error);
+    emit stateChanged();
 }
 void MediaSession::observe(const MediaSample& sample) {
     if (!active_ || sample.id != bound_ || sample.generation != app_->mediaGeneration_) return;
@@ -163,19 +191,26 @@ void MediaSession::observe(const MediaSample& sample) {
     if (!confirmed_) { service_->observe(sample); return; }
     if (!sample.sameConnection(confirmedSample_)) { app_->nowPlaying_.endPlayback(); return; }
     if (sample.playback == MediaSample::Playback::Stopped || sample.playback == MediaSample::Playback::Closed) {
+        const bool showingMatch = automatic_.playbackRecovery()->active();
+        automatic_.playbackRecovery()->invalidate();
+        if (showingMatch || automaticStartPending_ || loading_ || library_.busy() || total_ == 0) cancelMatching();
         if (monitor_->embedded(bound_)) latest_ = sample;
         flush(); latest_.playing = false;
         status_ = QStringLiteral("播放器已停止，观看进度已保留"); emit stateChanged(); return;
     }
-    if (!sample.usableTimeline()) { flush(); automatic_.observe(sample); emit stateChanged(); return; }
+    if (!sample.usableTimeline()) { flush(); automatic_.observe(sample, false); emit stateChanged(); return; }
     if (!sameContent(sample)) {
         adoptContent(sample); return;
     }
     const bool paused = latest_.playing && !sample.playing;
     latest_ = sample;
     if (sample.evidence == MediaSample::Evidence::Verified) confirmedSample_ = sample;
-    if (ready_ && !manualSource_) automatic_.observe(sample);
-    else automatic_.playbackRecovery()->observe(sample);
+    if (automaticStartPending_) {
+        automatic_.observe(sample, false);
+        startAutomaticMatching();
+    }
+    else if (ready_ && (!manualSource_ || automatic_.playbackRecovery()->active())) automatic_.observe(sample);
+    else automatic_.observe(sample, false);
     if (preparedSource_ && connected()) {
         auto prepared = std::move(*preparedSource_); preparedSource_.reset();
         accept(std::move(prepared.items), prepared.title, prepared.source);
@@ -189,22 +224,22 @@ void MediaSession::flush() {
 void MediaSession::deactivate() {
     flush(); ++task_; saveTimer_.stop(); ++seekRequest_; app_->seek_.cancelAll();
     monitor_->closeOwnedPlayer(bound_);
-    cancelLoader(); automatic_.reset(); library_.cancel();
+    cancelLoader(); automatic_.reset(); library_.cancel(); automaticStartPending_ = false;
     active_ = confirmed_ = ready_ = writing_ = restoring_ = restoreFailed_ = false;
     total_ = 0; sourceTitle_.clear();
     status_ = video_.isEmpty() ? QString() : monitor_->closesWithTask(bound_)
         ? QStringLiteral("已结束本次播放，正在关闭播放器") : QStringLiteral("弹幕任务已交接，播放器保持原状态"); emit stateChanged();
 }
 void MediaSession::cancelLoader() {
+    restoringOnlineSource_ = false;
     preparedSource_.reset();
     ++loadGeneration_; loader_.request_stop(); if (loader_.joinable()) loader_.join(); loading_ = false;
 }
 void MediaSession::loadFile(const QString& input) {
     if (!requireSource()) return;
-    const auto path = RecentVideoStore::normalizedPath(input); cancelLoader(); library_.cancel(); automatic_.suspend(false); manualSource_ = true;
+    const auto path = RecentVideoStore::normalizedPath(input); cancelLoader(); library_.cancel(); automatic_.suspend(false); manualSource_ = true; automaticStartPending_ = false;
     if (path.isEmpty() || !QFileInfo(path).isFile()) {
-        error_ = QStringLiteral("指定的 XML 不存在，请重新选择");
-        automatic_.playbackRecovery()->begin(latest_, error_); emit stateChanged(); return;
+        showSourceFailure(QStringLiteral("指定的 XML 不存在，请重新选择")); return;
     }
     loading_ = true; error_.clear(); const auto task = task_, generation = loadGeneration_; emit stateChanged();
     auto result = std::make_shared<XmlResult>();
@@ -215,8 +250,7 @@ void MediaSession::loadFile(const QString& input) {
             loading_ = false;
             if (result->cancelled) return;
             if (!result->error.isEmpty() || result->items.empty()) {
-                error_ = result->error.isEmpty() ? QStringLiteral("XML 没有可用弹幕") : result->error;
-                automatic_.playbackRecovery()->begin(latest_, error_); emit stateChanged(); return;
+                showSourceFailure(result->error.isEmpty() ? QStringLiteral("XML 没有可用弹幕") : result->error); return;
             }
             accept(std::move(result->items), path, {{"kind", "xml"}, {"path", path}});
         }, Qt::QueuedConnection);
@@ -231,11 +265,14 @@ void MediaSession::accept(std::vector<danmaku::Item> items, const QString& title
     total_ = static_cast<int>(items.size()); sourceTitle_ = title; source_ = source;
     app_->presentMedia(std::move(items), title, latest_);
     latest_.generation = app_->mediaGeneration_;
-    automatic_.playbackRecovery()->finish(true); status_ = QStringLiteral("弹幕已载入，正在跟随视频"); error_.clear(); flush(); emit stateChanged(); emit sourceCommitted();
+    status_ = QStringLiteral("弹幕已载入，正在跟随视频"); error_.clear(); flush();
+    const auto task = task_, sourceGeneration = loadGeneration_;
+    emit stateChanged(); emit sourceCommitted();
+    if (task == task_ && sourceGeneration == loadGeneration_) automatic_.playbackRecovery()->finish(true);
 }
 void MediaSession::unload() {
     if (!active_) return;
-    cancelLoader(); automatic_.suspend(); library_.cancel(); manualSource_ = true;
+    cancelLoader(); automatic_.suspend(false); library_.cancel(); manualSource_ = true; automaticStartPending_ = false;
     automatic_.playbackRecovery()->finish(true);
     total_ = 0; sourceTitle_.clear(); source_ = {{"kind", "disabled"}};
     app_->clearMediaItems(); status_ = QStringLiteral("弹幕已卸载，播放器连接保留"); flush(); emit stateChanged();
@@ -243,7 +280,21 @@ void MediaSession::unload() {
 void MediaSession::retryMatching() {
     if (!active_ || !ready_) return;
     cancelLoader(); library_.cancel();
-    source_.clear(); manualSource_ = false; automatic_.configure(true, servers_); automatic_.retry(); automatic_.observe(latest_);
+    automatic_.playbackRecovery()->dismissPrompt();
+    source_.clear(); error_.clear(); manualSource_ = false;
+    status_ = QStringLiteral("正在重新匹配弹幕");
+    automatic_.resetForRetry(); startAutomaticMatching(); emit stateChanged();
+}
+void MediaSession::cancelMatching() {
+    if (!active_ || !ready_) return;
+    automaticStartPending_ = false; cancelLoader(); library_.cancel(); automatic_.cancelRecovery();
+    error_.clear(); status_ = QStringLiteral("已跳过本次弹幕匹配"); emit stateChanged();
+}
+void MediaSession::cancelOnlineSearch() {
+    if (active_ && manualSource_ && !loading_ && !automatic_.playbackRecovery()->active()) {
+        cancelLoader(); automatic_.playbackRecovery()->finish(true);
+    }
+    library_.cancel();
 }
 void MediaSession::showAutomaticDanmakuChoice() { automatic_.openRecovery(); }
 bool MediaSession::requireSource() {
@@ -252,9 +303,14 @@ bool MediaSession::requireSource() {
     emit stateChanged(); emit app_->requestNavigateToPage(1, -1); return false;
 }
 void MediaSession::loadCached(const QString& key) { if (!key.isEmpty() && requireSource()) library_.loadCached(key); }
-void MediaSession::searchDanmaku() { if (requireSource()) emit requestOnlineDanmakuSearch(); }
+void MediaSession::searchDanmaku() {
+    if (!requireSource()) return;
+    if (automatic_.playbackRecovery()->active()) cancelMatching();
+    emit requestOnlineDanmakuSearch();
+}
 void MediaSession::searchForAnime(const QString& title, const QString& episodeTitle, double episodeNumber) {
     if (!requireSource()) return;
+    if (automatic_.playbackRecovery()->active()) cancelMatching();
     app_->showMainWindow(); emit requestOnlineDanmakuSearch();
     if (title.trimmed().isEmpty()) return;
     if (episodeNumber > 0 || !episodeTitle.trimmed().isEmpty()) library_.searchAnimeForEpisode(title.trimmed(), episodeTitle, episodeNumber);

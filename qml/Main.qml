@@ -299,6 +299,7 @@ ApplicationWindow {
         // This is a sibling of the captured UI, outside the popup overlay.
         enabled: root.visible && root.visibility !== Window.Minimized
             && !root.Overlay.overlay.children.some(item => item.visible)
+            && !(matchingWindow.item && matchingWindow.item.visible)
             && !missingPlayerDialog.visible
     }
 
@@ -327,6 +328,25 @@ ApplicationWindow {
         backend: root.backend.media
         onOpenSettings: root.navigate(3)
         onManualSourceLoaded: root.navigate(1)
+    }
+    Loader {
+        id: matchingWindow
+        // Defer the independent window and its dialogs until an external task needs them.
+        active: false
+        sourceComponent: Component {
+            MatchingRecoveryWindow {
+                backend: root.backend
+                onOpenSettings: { root.backend.showMainWindow(); root.navigate(3) }
+            }
+        }
+        Connections {
+            target: root.backend.media.automatic.recovery
+            function onShowRequested() {
+                if (root.backend.embeddedVideo) return
+                matchingWindow.active = true
+                if (matchingWindow.item) matchingWindow.item.present()
+            }
+        }
     }
     DanmakuSearchDialog { backend: root.backend.standalone; onOpenSettings: root.navigate(3) }
     CachedDanmakuDialog { id: cachedDanmakuDialog; player: root.backend.nowPlaying }

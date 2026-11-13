@@ -67,6 +67,50 @@ struct Harness {
 class WorkflowSessionTests final : public QObject {
     Q_OBJECT
 private slots:
+    void restoredSourceCommitsBeforeLatePauseResumes() {
+        Fixture f; f.seed(); Harness h(f);
+        auto* automatic = qobject_cast<AutomaticDanmaku*>(h.media->automatic());
+        auto* recovery = automatic->playbackRecovery();
+        disconnect(recovery, &PlaybackRecovery::controlRequested, h.monitor, &MediaMonitor::requestPlayback);
+        QSignalSpy commands(recovery, &PlaybackRecovery::controlRequested), prompts(recovery, &PlaybackRecovery::showRequested);
+        QSignalSpy committed(h.media, &MediaSession::sourceCommitted);
+        h.open(); QCOMPARE(commands.size(), 1); QVERIFY(!commands.first()[1].toBool());
+        QTRY_COMPARE(committed.size(), 1); QCOMPARE(h.media->total(), 2); QCOMPARE(commands.size(), 1);
+        const auto pause = commands.first()[2].toULongLong();
+        h.monitor->playbackControlFinished(pause, true, {}); QCOMPARE(commands.size(), 1);
+        h.sample.playing = false; h.sample.playback = MediaSample::Playback::Paused; h.send();
+        QCOMPARE(commands.size(), 2); QVERIFY(commands.last()[1].toBool()); QVERIFY(prompts.isEmpty());
+    }
+    void failedMatchingAndManualXmlShareOnePause() {
+        Fixture f; Harness h(f);
+        auto* recovery = qobject_cast<AutomaticDanmaku*>(h.media->automatic())->playbackRecovery();
+        disconnect(recovery, &PlaybackRecovery::controlRequested, h.monitor, &MediaMonitor::requestPlayback);
+        QSignalSpy commands(recovery, &PlaybackRecovery::controlRequested), prompts(recovery, &PlaybackRecovery::showRequested);
+        h.open(); QCOMPARE(commands.size(), 1); QVERIFY(prompts.isEmpty());
+        h.monitor->playbackControlFinished(commands.first()[2].toULongLong(), true, {});
+        h.sample.playing = false; h.sample.playback = MediaSample::Playback::Paused; h.send();
+        QTRY_COMPARE(prompts.size(), 1); QCOMPARE(commands.size(), 1);
+        h.media->loadFile(f.directory.filePath("missing.xml"));
+        QCOMPARE(prompts.size(), 1); QCOMPARE(commands.size(), 1);
+        h.media->loadFile(f.xml); QVERIFY(recovery->active());
+        QTRY_COMPARE(h.media->total(), 2); QCOMPARE(commands.size(), 2);
+        QVERIFY(commands.last()[1].toBool()); QVERIFY(!recovery->active());
+    }
+    void retryWaitsForPreviousResumeReadback() {
+        Fixture f; f.seed(); Harness h(f);
+        auto* recovery = qobject_cast<AutomaticDanmaku*>(h.media->automatic())->playbackRecovery();
+        disconnect(recovery, &PlaybackRecovery::controlRequested, h.monitor, &MediaMonitor::requestPlayback);
+        QSignalSpy commands(recovery, &PlaybackRecovery::controlRequested), prompts(recovery, &PlaybackRecovery::showRequested);
+        h.open(); QCOMPARE(commands.size(), 1); QTRY_COMPARE(h.media->total(), 2);
+        h.monitor->playbackControlFinished(commands.first()[2].toULongLong(), true, {});
+        h.sample.playing = false; h.sample.playback = MediaSample::Playback::Paused; h.send();
+        QCOMPARE(commands.size(), 2); QVERIFY(commands.last()[1].toBool());
+        h.media->retryMatching(); h.send(); QCOMPARE(commands.size(), 2); QVERIFY(prompts.isEmpty());
+        h.monitor->playbackControlFinished(commands.last()[2].toULongLong(), true, {});
+        h.sample.playing = true; h.sample.playback = MediaSample::Playback::Playing; h.send();
+        QCOMPARE(commands.size(), 3); QVERIFY(!commands.last()[1].toBool());
+        QTRY_COMPARE(prompts.size(), 1);
+    }
     void relativeSeekAccumulatesPendingIntentAndClamps() {
         Fixture f; f.seed(); Harness h(f); h.open(); QTRY_VERIFY(h.media->canSelectSource());
         auto* player = qobject_cast<NowPlayingModel*>(h.app.nowPlaying());

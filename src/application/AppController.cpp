@@ -157,6 +157,7 @@ AppController::~AppController() {
     seek_.cancelAll();
     danmaku_.deactivate();
     media_.deactivate();
+    windowLayers_.attachMatching(nullptr);
     windowLayers_.attach(nullptr, nullptr, nullptr);
     settings_.flushPending();
     discardLoad();
@@ -1066,6 +1067,28 @@ void AppController::showMainWindow() {
     // Explicitly opening an already-active panel can raise it without an
     // activation change. Reapply the toolbar order after the QML raise.
     windowLayers_.invalidate();
+}
+void AppController::showMatchingWindow(QObject* object, int width, int height) {
+    auto* window = qobject_cast<QWindow*>(object);
+    if (!window || closingApplication_ || embeddedVideo() || !media_.active() || !media_.automatic_.playbackRecovery()->active()) return;
+    const auto task = media_.taskId();
+    const auto session = media_.boundSession();
+    const bool activate = MediaMonitor::playerWindowForeground(session);
+    const auto name = MediaMonitor::playerScreenName(session);
+    auto* screen = mainWindow_ && mainWindow_->screen() ? mainWindow_->screen() : qGuiApp->primaryScreen();
+    for (auto* candidate : qGuiApp->screens()) if (candidate->name() == name) { screen = candidate; break; }
+    if (screen) {
+        window->setScreen(screen);
+        const auto area = screen->availableGeometry().adjusted(16, 24, -16, -24);
+        const QSize size(std::clamp(width, 1, std::max(1, area.width())), std::clamp(height, 1, std::max(1, area.height())));
+        window->resize(size);
+        window->setPosition(area.center() - QPoint(size.width() / 2, size.height() / 2));
+    }
+    windowLayers_.attachMatching(window, [this, task, session](quintptr foreground) {
+        return media_.active() && media_.taskId() == task && MediaMonitor::windowMatchesSession(foreground, session);
+    });
+    windowLayers_.showMatching(window, activate);
+    updatePresentationVisibility(true);
 }
 void AppController::showOnlineDanmakuForAnime(const QString& title, const QString& episodeTitle, double episodeNumber) {
     if (danmaku_.active()) danmaku_.searchForAnime(title, episodeTitle, episodeNumber);

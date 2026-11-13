@@ -16,9 +16,15 @@ public:
     QString title() const { return origin_.title; }
     QString reason() const { return reason_; }
     QString pauseStatus() const { return status_; }
+    QString controlWarning() const { return warning_ ? status_ : QString(); }
+    bool resumeInFlight() const { return pending_ && playingCommand_; }
+    bool resuming() const { return resumeWanted_ || resumeInFlight(); }
+    void prepare(const MediaSample& sample);
+    void dismissPrompt();
     void begin(const MediaSample& sample, const QString& reason);
     void observe(const MediaSample& sample);
     void finish(bool resume);
+    void manualPlaybackRequested();
     void invalidate();
     void controlFinished(quint64 request, bool success, const QString& error);
 signals:
@@ -27,10 +33,12 @@ signals:
     void controlRequested(MediaSample expected, bool play, quint64 request);
 private:
     bool same(const MediaSample& sample) const;
+    void confirmControl();
     void resumeIfOwned();
     MediaSample origin_, latest_;
     QTimer deadline_;
     quint64 request_{};
-    bool active_{}, pending_{}, awaitingPause_{}, owned_{}, resumeWanted_{}, playingCommand_{};
+    double requestedAt_{};
+    bool active_{}, preparing_{}, pending_{}, acknowledged_{}, owned_{}, resumeWanted_{}, playingCommand_{}, warning_{}, manualOverride_{};
     QString reason_, status_;
 };

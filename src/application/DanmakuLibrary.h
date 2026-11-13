@@ -69,6 +69,7 @@ class DanmakuLibrary final : public QObject {
     void cacheChanged();
     void sourceLoadStarted();
     void operationStarted();
+    void operationFailed(const QString& error);
     void sourceReady();
   private:
     struct Work {

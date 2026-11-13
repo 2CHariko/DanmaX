@@ -78,6 +78,7 @@ MediaSample media(QString title = "Test - 01.mkv") {
     MediaSample sample;
     sample.id = "Test.Player"; sample.title = title; sample.identity = title + "\n100";
     sample.position = 12; sample.duration = 100; sample.found = true;
+    sample.canPause = sample.canPlay = true;
     sample.playback = MediaSample::Playback::Playing;
     sample.observedAt = MediaMonitor::monotonicSeconds();
     return sample;
@@ -203,9 +204,13 @@ private slots:
         recovery.finish(true); // Cancel before the pause acknowledgement arrives.
         recovery.controlFinished(pause, true, {});
         QCOMPARE(commands.size(), 1);
+        QTest::qWait(2); sample.observedAt = MediaMonitor::monotonicSeconds();
         sample.playback = MediaSample::Playback::Paused; recovery.observe(sample);
         QCOMPARE(commands.size(), 2); QVERIFY(commands[1][1].toBool());
         recovery.controlFinished(commands[1][2].toULongLong(), true, {});
+        QTest::qWait(2); sample.observedAt = MediaMonitor::monotonicSeconds();
+        sample.playback = MediaSample::Playback::Playing; recovery.observe(sample);
+        sample.playback = MediaSample::Playback::Paused;
         recovery.finish(true); recovery.observe(sample); QCOMPARE(commands.size(), 2);
 
         commands.clear(); recovery.begin(sample, "already paused"); recovery.finish(true);
@@ -235,6 +240,7 @@ private slots:
         }
         PlaybackRecovery recovery; QSignalSpy commands(&recovery, &PlaybackRecovery::controlRequested);
         auto sample = media(); recovery.begin(sample, "failure");
+        QTest::qWait(2); sample.observedAt = MediaMonitor::monotonicSeconds();
         sample.playback = MediaSample::Playback::Paused; recovery.observe(sample);
         recovery.controlFinished(commands[0][2].toULongLong(), true, {});
         sample.playback = MediaSample::Playback::Playing; recovery.observe(sample);
@@ -293,7 +299,9 @@ private slots:
         library->searchAnime("Test"); QTRY_COMPARE(library->animes().size(), 1);
         library->selectAnime("42"); QTRY_COMPARE(library->episodes().size(), 5);
         library->selectEpisode("42002"); library->downloadEpisode();
-        QTRY_COMPARE(ready.size(), 1); QVERIFY(!automatic.playbackRecovery()->active());
+        QTRY_COMPARE(ready.size(), 1);
+        QVERIFY(automatic.playbackRecovery()->active()); // The session closes it after committing.
+        automatic.playbackRecovery()->finish(true);
         QCOMPARE(automatic.takeReadyResult()->metadata.value("episodeId").toString(), QString("42002"));
         heartbeat.stop(); automatic.configure(false, {});
         AutomaticDanmaku offline(directory.path(), directory.path(), nullptr, 10);

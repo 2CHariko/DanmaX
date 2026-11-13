@@ -18,6 +18,11 @@ ColumnLayout {
         keyword.forceActiveFocus()
         return true
     }
+    function closeChoicePopup() {
+        if (episodeBox.popup.visible) { episodeBox.popup.close(); return true }
+        if (animeBox.popup.visible) { animeBox.popup.close(); return true }
+        return false
+    }
     spacing: 10
 
     // 1. 无服务器配置时的引导横幅

@@ -33,6 +33,7 @@ void AutomaticDanmaku::offerRecovery() {
 }
 void AutomaticDanmaku::openRecovery() {
     if (!fresh()) return;
+    recovery_.dismissPrompt();
     offeredIdentity_.clear(); offerRecovery();
 }
 void AutomaticDanmaku::cancelRecovery() {
@@ -42,16 +43,16 @@ void AutomaticDanmaku::cancelRecovery() {
     state(Skipped, QStringLiteral("已跳过当前内容的弹幕匹配；下一集继续自动识别"));
 }
 bool AutomaticDanmaku::fresh() const {
+    return enabled_ && !suspended_ && freshTimeline();
+}
+bool AutomaticDanmaku::freshTimeline() const {
     const double age = MediaMonitor::monotonicSeconds() - latest_.observedAt;
-    return enabled_ && !suspended_ && latest_.usableTimeline() && age >= 0 && age <= 2.5 &&
-        (latest_.playback == MediaSample::Playback::Playing || latest_.playback == MediaSample::Playback::Paused) &&
-        std::isfinite(latest_.position) && std::isfinite(latest_.duration);
+    return latest_.usableTimeline() && age >= 0 && age <= 2.5;
 }
 void AutomaticDanmaku::configure(bool enabled, const QStringList& servers) {
     if (enabled_ == enabled && servers_ == servers) return;
     const bool wasEnabled = enabled_;
     const bool wasSuspended = suspended_ && wasEnabled && enabled;
-    recovery_.finish(true);
     reset(false); enabled_ = enabled; servers_ = servers;
     { QScopedValueRollback guard(changing_, true); library_.setServers(servers); }
     if (enabled) library_.refreshCache();
@@ -59,6 +60,7 @@ void AutomaticDanmaku::configure(bool enabled, const QStringList& servers) {
     state(Waiting, enabled ? QStringLiteral("等待指定播放器提供标题") : QStringLiteral("自动匹配未开启"));
     if (wasEnabled && !enabled) suspended_ = false;
     if (suspended_) state(Waiting, QStringLiteral("自动匹配已暂停；手动操作优先，可点击继续自动匹配"));
+    if (recovery_.active()) state(Choice, recovery_.reason());
 }
 void AutomaticDanmaku::reset(bool invalidateRecovery) {
     QScopedValueRollback guard(changing_, true);
@@ -77,9 +79,12 @@ void AutomaticDanmaku::suspend(bool resume) {
 void AutomaticDanmaku::retry() {
     if (!enabled_) return;
     const auto previous = latest_;
+    resetForRetry();
+    if (!previous.id.isEmpty()) observe(previous);
+}
+void AutomaticDanmaku::resetForRetry() {
     reset(false);
     library_.refreshCache();
-    if (!previous.id.isEmpty()) observe(previous);
 }
 void AutomaticDanmaku::forgetAssociation() {
     const auto error = associations_.forget(parsed_);
@@ -96,11 +101,19 @@ void AutomaticDanmaku::forgetAssociation() {
     emit contentInvalidated();
     state(Choice, QStringLiteral("已忘记本番关联，请搜索并选择正确的动画和剧集"));
 }
-void AutomaticDanmaku::observe(const MediaSample& sample) {
+void AutomaticDanmaku::showRecovery(const MediaSample& sample, const QString& reason) {
+    latest_ = sample;
+    recovery_.begin(sample, reason);
+    phase_ = Choice; status_ = reason; emit changed();
+}
+void AutomaticDanmaku::observe(const MediaSample& sample, bool allowAutomatic) {
     recovery_.observe(sample);
     const bool sameTitle = sample.title == latest_.title && sample.sameConnection(latest_) && !sample.contentDiffers(latest_);
     latest_ = sample;
-    if (!enabled_ || suspended_) return;
+    if (!allowAutomatic || !enabled_ || suspended_) {
+        if (allowAutomatic && deferred_ && recovery_.active() && freshTimeline()) acceptResult(std::exchange(deferred_, {}));
+        return;
+    }
     if (!fresh()) return; // A temporary sampling gap does not cancel this task's preparation.
     if (sameTitle && phase_ != Waiting && !identity_.isEmpty()) { continuePreparation(); return; }
     const auto report = identifyMediaTitle(matchingTitle());
@@ -192,7 +205,7 @@ void AutomaticDanmaku::libraryChanged() {
 void AutomaticDanmaku::accept() {
     auto result = library_.takeReadyResult();
     if (!result) return;
-    if (!fresh()) {
+    if (!fresh() && !(recovery_.active() && freshTimeline())) {
         deferred_ = std::move(result); status_ = QStringLiteral("弹幕已准备，等待播放器恢复同步"); emit changed(); return;
     }
     acceptResult(std::move(result));
@@ -211,7 +224,6 @@ void AutomaticDanmaku::acceptResult(std::shared_ptr<OnlineDanmakuResult> result)
     ready_ = std::move(result);
     state(Loaded, QStringLiteral("已自动载入 %1").arg(recognizedTitle()) + (error.isEmpty() ? QString() : QStringLiteral("；") + error));
     emit sourceReady();
-    recovery_.finish(true);
 }
 std::shared_ptr<OnlineDanmakuResult> AutomaticDanmaku::takeReadyResult() {
     return std::exchange(ready_, {});

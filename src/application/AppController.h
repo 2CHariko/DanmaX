@@ -103,6 +103,7 @@ class AppController final : public QObject {
     QObject* presentation() { return &presentation_; }
     bool embeddedVideo() const { return media_.active() && monitor_.embedded(media_.boundSession()); }
     Q_INVOKABLE bool requestClose();
+    bool closingApplication() const { return closingApplication_; }
     QString sourceTitle() const { return sourceTitle_; }
     QVariantList sessions() const {
         return sessions_;
@@ -183,6 +184,7 @@ class AppController final : public QObject {
      Q_INVOKABLE void stepTimeOffset(double delta);
      Q_INVOKABLE void stepFontSize(int delta);
      Q_INVOKABLE void showMainWindow();
+     Q_INVOKABLE void showMatchingWindow(QObject* window, int width, int height);
     Q_INVOKABLE void showOnlineDanmakuForAnime(const QString& animeTitle, const QString& episodeTitle = {}, double episodeNumber = 0);
     Q_INVOKABLE void loadCachedDanmaku(const QString& key);
     Q_INVOKABLE void showAutomaticDanmakuChoice();

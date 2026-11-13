@@ -78,6 +78,7 @@ void DanmakuLibrary::begin(const QString& status, bool sourceLoad, Operation ope
 }
 void DanmakuLibrary::fail(const QString& error) {
     busy_ = false; progress_ = -1; error_ = error; status_ = QStringLiteral("操作失败");
+    emit operationFailed(error);
     emit changed();
 }
 void DanmakuLibrary::setServers(const QStringList& addresses) {

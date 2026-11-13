@@ -1,7 +1,5 @@
 import QtQuick
 import QtQuick.Controls.FluentWinUI3
-import QtQuick.Layouts
-import QtQuick.Dialogs
 import "../theme"
 
 Dialog {
@@ -9,20 +7,18 @@ Dialog {
     id: dialog
     objectName: "matchingRecoveryDialog"
     required property QtObject backend
-    property QtObject workflow: backend
     readonly property QtObject automatic: backend.automatic
     readonly property QtObject recovery: automatic.recovery
     property bool manualSearch: false
     property bool allowLocalXml: false
     property bool manualBoundToPlayer: false
     property double task: -1
-    readonly property QtObject activeLibrary: manualSearch ? backend.library : automatic.library
     signal openSettings()
     signal manualSourceLoaded()
     function cancelMatching() {
         if (backend.taskId !== task) { close(); return }
-        if (manualSearch) { backend.library.cancel(); close() }
-        else automatic.cancelRecovery()
+        if (manualSearch) { backend.cancelOnlineSearch(); close() }
+        else backend.cancelMatching()
     }
     parent: Overlay.overlay
     x: parent ? Math.max(8, (parent.width - width) / 2) : 0
@@ -33,10 +29,10 @@ Dialog {
     focus: true
     title: manualSearch ? "搜索弹幕" : "手动匹配弹幕"
     closePolicy: Popup.CloseOnEscape
-    leftPadding: Ui.scrollInset(verticalBar.implicitWidth, padding)
-    rightPadding: leftPadding
-    topPadding: leftPadding
-    bottomPadding: leftPadding
+    leftPadding: 0
+    rightPadding: 0
+    topPadding: 0
+    bottomPadding: 0
     onRejected: cancelMatching()
     footer: DialogButtonBox {
         alignment: Qt.AlignRight
@@ -48,7 +44,15 @@ Dialog {
     }
     Connections {
         target: dialog.recovery
-        function onShowRequested() { dialog.task = dialog.backend.taskId; dialog.manualSearch = false; dialog.open() }
+        function onShowRequested() {
+            if (!Ui.embeddedVideoActive) {
+                if (dialog.manualSearch) dialog.close()
+                return
+            }
+            dialog.task = dialog.backend.taskId
+            dialog.manualSearch = false
+            dialog.open()
+        }
         function onChanged() { if (!dialog.manualSearch && !dialog.recovery.active) dialog.close() }
     }
     Connections {
@@ -56,12 +60,12 @@ Dialog {
         function onRequestOnlineDanmakuSearch() {
             dialog.manualSearch = true
             dialog.task = dialog.backend.taskId
-            dialog.manualBoundToPlayer = !dialog.workflow.manualMode && dialog.workflow.targetSessionConnected
+            dialog.manualBoundToPlayer = dialog.backend.targetSessionConnected
             dialog.open()
         }
         function onStateChanged() {
             if (dialog.visible && (!dialog.backend.active || dialog.backend.taskId !== dialog.task)) { dialog.close(); return }
-            if (dialog.visible && dialog.manualSearch && dialog.manualBoundToPlayer && !dialog.workflow.targetSessionConnected)
+            if (dialog.visible && dialog.manualSearch && dialog.manualBoundToPlayer && !dialog.backend.targetSessionConnected)
                 dialog.cancelMatching()
         }
     }
@@ -74,88 +78,16 @@ Dialog {
             }
         }
     }
-    Component.onCompleted: if (recovery.active) { task = backend.taskId; open() }
+    Component.onCompleted: if (Ui.embeddedVideoActive && recovery.active) { task = backend.taskId; open() }
     Binding { target: dialog.enter; property: "enabled"; value: Ui.motionEnabled }
     Binding { target: dialog.exit; property: "enabled"; value: Ui.motionEnabled }
-    contentItem: ScrollView {
-        id: scroll
-        objectName: "recoveryScroll"
-        clip: true
-        contentWidth: availableWidth
-        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-        ScrollBar.vertical: AppScrollBar {
-            id: verticalBar
-            objectName: "recoveryVerticalScrollBar"
-            viewport: scroll
-            scrollTarget: scroll.contentItem
-            wheelRegion: scroll.parent
-            wheelBottom: dialog.footer.y
-            Accessible.name: "手动匹配内容滚动条"
-        }
-        ColumnLayout {
-            width: scroll.availableWidth
-            spacing: 12
-            Label {
-                Layout.fillWidth: true
-                text: dialog.recovery.reason
-                visible: !dialog.manualSearch
-                wrapMode: Text.WordWrap
-                Accessible.role: Accessible.AlertMessage
-            }
-            Label {
-                Layout.fillWidth: true
-                text: dialog.recovery.pauseStatus
-                visible: !dialog.manualSearch
-                wrapMode: Text.WordWrap
-                color: Ui.secondaryText
-            }
-            Label { text: "当前播放文件名／媒体标题"; font.weight: Font.DemiBold; visible: !dialog.manualSearch }
-            TextArea {
-                objectName: "recoveryFileName"
-                visible: !dialog.manualSearch
-                Layout.fillWidth: true
-                text: dialog.recovery.title
-                readOnly: true
-                selectByMouse: true
-                wrapMode: TextEdit.WrapAnywhere
-                Accessible.name: "当前播放文件名，可选择并复制"
-            }
-            Button {
-                visible: dialog.allowLocalXml
-                objectName: "chooseRecoveryXml"
-                text: "选择本地 XML"
-                onClicked: { xmlDialog.task = dialog.backend.taskId; xmlDialog.open() }
-            }
-            Button {
-                objectName: "copyRecoveryFileName"
-                visible: !dialog.manualSearch
-                text: "复制完整文件名"
-                onClicked: dialog.backend.copyRecoveryTitle()
-            }
-            Label {
-                Layout.fillWidth: true
-                text: dialog.manualSearch ? "搜索并确认动画与剧集后，为当前视频载入弹幕。"
-                    : "输入番名搜索，确认动画与剧集后载入弹幕。仅当本次操作自动暂停了播放器，完成或取消时才恢复播放。取消后下一集仍会自动识别。"
-                color: Ui.secondaryText
-                wrapMode: Text.WordWrap
-            }
-            OnlineDanmakuPane {
-                Layout.fillWidth: true
-                library: dialog.activeLibrary
-                loadActionText: "确认并载入弹幕"
-                onCancelled: dialog.cancelMatching()
-                onOpenSettings: {
-                    dialog.cancelMatching()
-                    dialog.openSettings()
-                }
-            }
-        }
-    }
-    FileDialog {
-        id: xmlDialog
-        property double task: -1
-        title: "为当前视频选择弹幕 XML"
-        nameFilters: ["弹幕 XML (*.xml)"]
-        onAccepted: { if (task === dialog.backend.taskId && dialog.backend.canSelectSource) { dialog.manualSearch = false; dialog.backend.loadFile(selectedFile) } }
+    contentItem: MatchingRecoveryPane {
+        backend: dialog.backend
+        manualSearch: dialog.manualSearch
+        allowLocalXml: dialog.allowLocalXml
+        presented: dialog.visible
+        minimumInset: dialog.padding
+        onCancelMatching: dialog.cancelMatching()
+        onOpenSettings: dialog.openSettings()
     }
 }

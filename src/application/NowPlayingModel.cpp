@@ -52,7 +52,8 @@ bool NowPlayingModel::ownsPlayer() const { return video() && app_->monitor_.clos
 bool NowPlayingModel::external() const { return video(); }
 bool NowPlayingModel::active() const { return standalone() || app_->media_.active(); }
 bool NowPlayingModel::playing() const { return standalone() ? app_->danmaku_.playing() : fresh() && sample_.playing; }
-bool NowPlayingModel::busy() const { return standalone() ? app_->danmaku_.preparing() : pending_ || app_->videoOpen_.pending() || app_->media_.restoring_ || app_->media_.loading_ || (!video() && openingStandalone()); }
+bool NowPlayingModel::busy() const { return standalone() ? app_->danmaku_.preparing() : pending_ || app_->videoOpen_.pending() || app_->media_.restoring_ || app_->media_.loading_ ||
+    (video() && app_->media_.automatic_.playbackRecovery()->resuming()) || (!video() && openingStandalone()); }
 bool NowPlayingModel::fresh() const {
     const double age = MediaMonitor::monotonicSeconds() - sample_.observedAt;
     return video() && active() && app_->media_.confirmed_ && app_->media_.sameContent(sample_)
@@ -100,11 +101,12 @@ QString NowPlayingModel::status() const {
         : count() == 0 ? app_->danmaku_.status() : playing() ? QStringLiteral("正在独立播放弹幕") : QStringLiteral("独立弹幕已暂停");
     if (!video() && openingStandalone()) return QStringLiteral("正在读取独立弹幕 XML…");
     if (pending_) return desiredPosition_ >= 0 ? QStringLiteral("正在确认定位…") : QStringLiteral("正在确认播放状态…");
+    if (video() && app_->media_.automatic_.playbackRecovery()->resuming()) return app_->media_.automatic_.playbackRecovery()->pauseStatus();
     if (!seekNotice_.isEmpty() && MediaMonitor::monotonicSeconds() < noticeUntil_) return seekNotice_;
     if (!video()) return app_->media_.error().isEmpty() ? QStringLiteral("打开视频，或从更多菜单独立播放弹幕") : app_->media_.status();
     if (active() && app_->media_.confirmed_ && !fresh() && !busy()) return QStringLiteral("等待播放器恢复同步，仍可选择弹幕来源");
-    if (fresh() && !busy()) return (playing() ? QStringLiteral("正在播放 · ") : QStringLiteral("已暂停 · ")) + app_->media_.status_;
-    return app_->media_.status_;
+    if (fresh() && !busy()) return (playing() ? QStringLiteral("正在播放 · ") : QStringLiteral("已暂停 · ")) + app_->media_.status();
+    return app_->media_.status();
 }
 QString NowPlayingModel::error() const { return !error_.isEmpty() ? error_ : standalone() ? app_->danmaku_.error_ : app_->media_.error_; }
 QString NowPlayingModel::controlHint() const {
@@ -159,7 +161,10 @@ void NowPlayingModel::togglePlayback() {
     if (!canPlay()) return;
     if (completed()) { app_->media_.openVideo(app_->media_.videoPath(), MediaSession::FromStart); return; }
     if (standalone()) { if (!app_->running_) app_->start(true); else app_->togglePause(); }
-    else request(!playing());
+    else {
+        app_->media_.automatic_.playbackRecovery()->manualPlaybackRequested();
+        request(!playing());
+    }
 }
 void NowPlayingModel::seek(double seconds) {
     if (!canSeek() || !std::isfinite(seconds) || seconds < 0 || seconds > duration()) return;

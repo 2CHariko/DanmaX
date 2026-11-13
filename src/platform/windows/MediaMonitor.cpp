@@ -126,6 +126,32 @@ bool MediaMonitor::windowMatchesSession(quintptr handle, const QString& id) {
     return (id.startsWith("danmax-vlc:") || id.startsWith("danmax-potplayer:"))
         && PlayerProcessIdentity::matchesWindow(handle, id);
 }
+bool MediaMonitor::playerWindowForeground(const QString& id) {
+    return windowMatchesSession(reinterpret_cast<quintptr>(GetForegroundWindow()), id);
+}
+QString MediaMonitor::playerScreenName(const QString& id) {
+    HMONITOR monitor{};
+    if (const auto window = GetForegroundWindow(); windowMatchesSession(reinterpret_cast<quintptr>(window), id)) {
+        monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONULL);
+    } else {
+        // Prefer a verified foreground window. In the background use a screen
+        // only if the instance's visible top-level windows agree on it.
+        struct Scan { const QString& id; HMONITOR monitor{}; bool ambiguous{}; } scan{id};
+        EnumWindows([](HWND window, LPARAM context) -> BOOL {
+            auto& scan = *reinterpret_cast<Scan*>(context);
+            if (!IsWindowVisible(window) || IsIconic(window) || GetWindow(window, GW_OWNER) ||
+                !windowMatchesSession(reinterpret_cast<quintptr>(window), scan.id)) return TRUE;
+            const auto screen = MonitorFromWindow(window, MONITOR_DEFAULTTONULL);
+            if (screen && scan.monitor && screen != scan.monitor) { scan.ambiguous = true; return FALSE; }
+            if (screen) scan.monitor = screen;
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&scan));
+        if (!scan.ambiguous) monitor = scan.monitor;
+    }
+    MONITORINFOEXW info{}; info.cbSize = sizeof(info);
+    if (!monitor || !GetMonitorInfoW(monitor, &info)) return {};
+    return QString::fromWCharArray(info.szDevice);
+}
 QVariantMap MediaMonitor::processMetrics() {
     PROCESS_MEMORY_COUNTERS mem{};
     GetProcessMemoryInfo(GetCurrentProcess(), &mem, sizeof(mem));

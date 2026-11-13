@@ -180,6 +180,10 @@ int main(int argc, char* argv[]) {
         if (parser.isSet("window-width"))
             mainWindow->setWidth(parser.value("window-width").toInt());
         backdrop.attach(mainWindow);
+        QObject::connect(mainWindow, &QWindow::visibleChanged, &app, [&](bool visible) {
+            if (!visible && controller.closingApplication())
+                QMetaObject::invokeMethod(&app, [&app] { app.exit(0); }, Qt::QueuedConnection);
+        });
         bool overlayCaptured = false;
         mainWindow->show();
         if (parser.isSet("video")) {

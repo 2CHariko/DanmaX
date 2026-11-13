@@ -52,6 +52,7 @@
 #include "infrastructure/SettingsStore.h"
 #include "infrastructure/LogModel.h"
 #include "platform/windows/WindowBackdropController.h"
+#include "platform/windows/PlayerProcessIdentity.h"
 #include <QWKQuick/qwkquickglobal.h>
 
 class UiWorkflowTests : public QObject {
@@ -249,6 +250,173 @@ private:
         QCOMPARE(warnings.count(), 0);
     }
 private slots:
+    void independentMatchingWindow() {
+        QTemporaryDir directory;
+        const auto executable = directory.filePath("PotPlayerMini64.exe"), video = directory.filePath("unrecognized.avi");
+        { QFile file(executable); QVERIFY(file.open(QIODevice::WriteOnly)); file.write(playerExecutableFixture()); }
+        { QFile file(video); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("fixture"); }
+        VideoOpenService::Hooks hooks{[=] { return executable; }, [](const QString&) { return QString(); },
+            [](const QString&, const QStringList&) { return QString(); }};
+        ExternalPlayerStore presets(directory.path());
+        QVERIFY(presets.saveDraft(presets.profiles(), "potplayer", presets.revision()).value("ok").toBool());
+        AppController backend(directory.path(), nullptr, {}, directory.filePath("cache"), {}, {}, {}, hooks);
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings()); settings->setDanmakuServers({});
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        auto* monitor = backend.findChild<MediaMonitor*>();
+        disconnect(monitor, &MediaMonitor::sampleReceived, &backend, nullptr);
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto* main = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(main);
+        QVERIFY(!main->findChild<QQuickWindow*>("mediaMatchingRecoveryWindow"));
+        auto* media = qobject_cast<MediaSession*>(backend.media());
+        auto* service = qobject_cast<VideoOpenService*>(backend.videoOpen());
+        QSignalSpy showMain(&backend, &AppController::requestShowMainWindow);
+        media->openVideo(video);
+        MediaSample sample; sample.id = service->sessionId(); sample.found = true;
+        sample.playback = MediaSample::Playback::Paused; sample.duration = 120; sample.sessionToken = 1;
+        sample.evidence = MediaSample::Evidence::Verified; sample.title = QFileInfo(video).fileName();
+        sample.mediaUri = QUrl::fromLocalFile(video).toString(QUrl::FullyEncoded); sample.contentId = "first";
+        const auto inject = [&] {
+            sample.generation = monitor->generation(); sample.observedAt = MediaMonitor::monotonicSeconds();
+            QVERIFY(QMetaObject::invokeMethod(&backend, "onSample", Qt::DirectConnection, Q_ARG(MediaSample, sample)));
+        };
+        QTest::qWait(2); inject();
+        QTRY_VERIFY(main->findChild<QQuickWindow*>("mediaMatchingRecoveryWindow"));
+        auto* matching = main->findChild<QQuickWindow*>("mediaMatchingRecoveryWindow");
+        QTRY_VERIFY(matching->isVisible()); QVERIFY(!main->isVisible()); QVERIFY(!backend.overlayVisible());
+        QVERIFY(!matching->transientParent()); QCOMPARE(showMain.size(), 0);
+        QVERIFY(matching->findChild<QObject*>("recoveryFileName"));
+        auto* xml = matching->findChild<QObject*>("recoveryXmlDialog"); QVERIFY(xml);
+        QCOMPARE(xml->property("parentWindow").value<QWindow*>(), matching);
+        if (QGuiApplication::platformName() == "windows") {
+            matching->resize(440, 300);
+            auto* scroll = matching->findChild<QQuickItem*>("recoveryScroll"); QVERIFY(scroll);
+            auto* bar = matching->findChild<QQuickItem*>("recoveryVerticalScrollBar"); QVERIFY(bar);
+            auto* flick = scroll->property("contentItem").value<QQuickItem*>(); QVERIFY(flick);
+            for (const auto& theme : {QStringLiteral("light"), QStringLiteral("dark")}) {
+                QVERIFY(settings->setValue("theme", theme));
+                QTRY_VERIFY(flick->property("contentHeight").toReal() > flick->height());
+                checkWheelMargins(matching, bar, flick);
+            }
+        }
+        matching->requestActivate();
+        if (QTest::qWaitForWindowActive(matching, 1200)) QTest::keyClick(matching, Qt::Key_Escape);
+        else matching->close();
+        QTRY_VERIFY(!matching->isVisible()); QVERIFY(media->active());
+        main->showMinimized(); media->retryMatching(); inject();
+        QTRY_VERIFY(matching->isVisible()); QCOMPARE(main->visibility(), QWindow::Minimized);
+        QVERIFY(QMetaObject::invokeMethod(xml, "open")); QTRY_VERIFY(xml->property("visible").toBool());
+        sample.contentId = "second"; inject(); QVERIFY(!matching->isVisible());
+        QTRY_VERIFY(!xml->property("visible").toBool());
+        QTRY_VERIFY(matching->isVisible()); QCOMPARE(showMain.size(), 0);
+        matching->close(); QTRY_VERIFY(!matching->isVisible()); QVERIFY(media->active());
+        backend.requestClose(); QTRY_VERIFY(!matching->isVisible());
+        QStringList errors; for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) errors << error.toString();
+        QVERIFY2(warnings.isEmpty(), qPrintable(errors.join('\n')));
+    }
+
+    void nativeMatchingWindowLayer() {
+        if (QGuiApplication::platformName() != "windows") QSKIP("Requires native Windows Z order.");
+        WindowLayerController layers;
+        QWindow player, unrelated, overlay, toolbar, matching, child;
+        toolbar.setTransientParent(&overlay); child.setTransientParent(&matching);
+        overlay.setFlags(Qt::Tool | Qt::WindowDoesNotAcceptFocus);
+        toolbar.setFlags(Qt::Tool | Qt::WindowDoesNotAcceptFocus);
+        matching.setFlags(Qt::Tool); child.setFlags(Qt::Tool);
+        for (auto* window : {&player, &unrelated, &overlay, &toolbar, &matching, &child}) window->setGeometry(120, 120, 420, 260);
+        const auto hwnd = [](QWindow& window) { return reinterpret_cast<HWND>(window.winId()); };
+        const auto top = [&](QWindow& window) { return (GetWindowLongPtrW(hwnd(window), GWL_EXSTYLE) & WS_EX_TOPMOST) != 0; };
+        const auto above = [&](QWindow& a, QWindow& b) {
+            for (auto w = GetWindow(hwnd(b), GW_HWNDPREV); w; w = GetWindow(w, GW_HWNDPREV)) if (w == hwnd(a)) return true;
+            return false;
+        };
+        player.setFlags(Qt::Tool | Qt::WindowDoesNotAcceptFocus);
+        unrelated.setFlags(Qt::Tool | Qt::WindowDoesNotAcceptFocus);
+        player.show();
+        // Real Z order, with an injected verified-player predicate for CI desktops
+        // that cannot activate a test window while another app has foreground.
+        const auto originalForeground = GetForegroundWindow();
+        bool followsPlayer = true;
+        layers.attach(nullptr, &overlay, &toolbar);
+        layers.attachMatching(&matching, [&](quintptr) { return followsPlayer; });
+        layers.showMatching(&matching, false);
+        QVERIFY(layers.reconcile(true, false, false));
+        QTRY_VERIFY2_WITH_TIMEOUT(top(matching), qPrintable(QString("foreground=%1 player=%2 matching=%3")
+            .arg(quintptr(GetForegroundWindow())).arg(quintptr(hwnd(player))).arg(quintptr(hwnd(matching)))), 2500);
+        QVERIFY(above(matching, player));
+        QCOMPARE(GetForegroundWindow(), originalForeground);
+        overlay.show(); toolbar.show(); child.show();
+        QVERIFY(layers.reconcile(true, false, true, true));
+        QTRY_VERIFY(above(child, matching) && above(matching, toolbar) && above(toolbar, overlay));
+        followsPlayer = false;
+        unrelated.show();
+        QTRY_VERIFY(!top(matching) && !top(child)); QVERIFY(matching.isVisible());
+        followsPlayer = true;
+        QTRY_VERIFY(top(matching) && top(child) && above(matching, toolbar));
+        QVERIFY(layers.reconcile(false, false, true));
+        QTRY_VERIFY(!top(matching) && !top(child)); QVERIFY(above(child, matching));
+    }
+
+    void realExternalMatchingWindow_data() {
+        QTest::addColumn<QString>("adapter");
+        QTest::newRow("PotPlayer") << QStringLiteral("potplayer");
+        QTest::newRow("VLC") << QStringLiteral("vlc");
+    }
+    void realExternalMatchingWindow() {
+        QFETCH(QString, adapter);
+        const auto video = qEnvironmentVariable("DANMAKU_MATCHING_TEST_VIDEO");
+        const auto executable = qEnvironmentVariable(adapter == "potplayer" ? "DANMAKU_REAL_POTPLAYER" : "DANMAKU_REAL_VLC_EXECUTABLE");
+        if (video.isEmpty() || executable.isEmpty()) QSKIP("Explicit real video and player required.");
+        QTemporaryDir directory;
+        const auto xml = directory.filePath("selected.xml");
+        { QFile file(xml); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("<i><d p=\"0,1,25,16777215\">match</d></i>"); }
+        AppController backend(directory.path());
+        auto* settings = qobject_cast<SettingsStore*>(backend.settings());
+        settings->setDanmakuServers({}); settings->setValue("onTop", 1);
+        auto* players = qobject_cast<ExternalPlayerStore*>(backend.players());
+        ExternalPlayerDraft draft(players); draft.edit(adapter); draft.enterExecutable(executable); draft.setDefault(adapter);
+        QVERIFY2(draft.save(), qPrintable(draft.issue()));
+        qobject_cast<AnimeMetadataService*>(backend.metadata())->setBaseUrl("http://127.0.0.1:1");
+        QQmlApplicationEngine engine; QSignalSpy warnings(&engine, &QQmlApplicationEngine::warnings);
+        const auto cleanup = qScopeGuard([&] { backend.requestClose(); });
+        engine.setInitialProperties({{"backend", QVariant::fromValue(&backend)}});
+        engine.load(QUrl::fromLocalFile(QStringLiteral(DANMAKU_UI_DIR "/Main.qml")));
+        QVERIFY(!engine.rootObjects().isEmpty()); auto* main = qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(main);
+        auto* media = qobject_cast<MediaSession*>(backend.media());
+        auto* recovery = qobject_cast<AutomaticDanmaku*>(media->automatic())->playbackRecovery();
+        auto* now = qobject_cast<NowPlayingModel*>(backend.nowPlaying());
+        QSignalSpy controls(recovery, &PlaybackRecovery::controlRequested);
+        QSignalSpy showMain(&backend, &AppController::requestShowMainWindow);
+        main->showMinimized(); media->openVideo(video);
+        QTRY_VERIFY2_WITH_TIMEOUT(main->findChild<QQuickWindow*>("mediaMatchingRecoveryWindow"), qPrintable(media->error() + media->status()), 15000);
+        auto* matching = main->findChild<QQuickWindow*>("mediaMatchingRecoveryWindow");
+        QTRY_VERIFY2_WITH_TIMEOUT(matching->isVisible(), qPrintable(media->error() + media->status()), 15000);
+        QTRY_VERIFY_WITH_TIMEOUT(!recovery->pauseStatus().startsWith(QStringLiteral("正在请求")), 4500);
+        if (controls.isEmpty()) {
+            // Some player launches already report Paused. Explicitly start them
+            // before exercising the default pause on a rematch.
+            QVERIFY(recovery->pauseStatus().contains(QStringLiteral("原本已暂停")));
+            if (!now->playing()) {
+                QTRY_VERIFY(now->canPlay()); now->togglePlayback();
+                QTRY_VERIFY_WITH_TIMEOUT(now->playing(), 5000);
+            }
+            media->retryMatching();
+            QTRY_VERIFY(matching->isVisible());
+        }
+        QTRY_VERIFY2_WITH_TIMEOUT(recovery->pauseStatus().contains(QStringLiteral("指定播放器已暂停")), qPrintable(recovery->pauseStatus()), 4500);
+        QVERIFY(!controls.isEmpty()); QVERIFY(!controls.last()[1].toBool());
+        QVERIFY(!now->playing()); QVERIFY(!backend.overlayVisible()); QCOMPARE(main->visibility(), QWindow::Minimized);
+        const auto session = media->boundSession();
+        media->loadFile(xml);
+        QTRY_COMPARE(now->count(), 1); QTRY_VERIFY_WITH_TIMEOUT(now->playing(), 5000);
+        QVERIFY(!matching->isVisible()); QCOMPARE(showMain.size(), 0);
+        backend.requestClose();
+        QTRY_VERIFY_WITH_TIMEOUT(!PlayerProcessIdentity::alive(session), 7000);
+        QCOMPARE(warnings.size(), 0);
+    }
+
     void realEmbeddedFullscreenDraftAndMenus() {
 #ifndef DANMAKU_ENABLE_LIBVLC
         QSKIP("This build does not include embedded playback.");
@@ -270,7 +438,8 @@ private slots:
         window->show(); QVERIFY(QTest::qWaitForWindowExposed(window)); window->requestActivate();
         auto* player = qobject_cast<NowPlayingModel*>(backend.nowPlaying());
         auto* media = qobject_cast<MediaSession*>(backend.media()); media->openVideo(video);
-        QTRY_VERIFY_WITH_TIMEOUT(player->canSeek() && !player->busy() && player->count() == 2, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(player->playing() && player->canSeek() && !player->busy() && player->count() == 2,
+                                 qPrintable(media->status()), 15000);
         QVERIFY(window->property("watching").toBool());
         auto* viewport = qobject_cast<VideoViewportController*>(backend.videoViewport());
         auto* overlay = window->findChild<QQuickWindow*>("danmakuOverlay"); QVERIFY(overlay);

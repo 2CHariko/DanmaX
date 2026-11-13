@@ -26,6 +26,8 @@ class MediaMonitor final : public QObject {
     static double monotonicSeconds();
     static bool targetForeground(const QString& applicationId);
     static bool windowMatchesSession(quintptr handle, const QString& id);
+    static bool playerWindowForeground(const QString& id);
+    static QString playerScreenName(const QString& id);
     static QVariantMap processMetrics();
     static bool windowOrOwnerForeground(quintptr handle);
     static QVariantMap windowMetrics(quintptr handle);

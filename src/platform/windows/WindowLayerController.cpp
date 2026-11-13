@@ -1,7 +1,9 @@
 #include "platform/windows/WindowLayerController.h"
+#include "platform/windows/MediaMonitor.h"
 #include <QGuiApplication>
 #include <QPlatformSurfaceEvent>
 #include <QScopedValueRollback>
+#include <QStyleHints>
 #include <QTimer>
 #include <algorithm>
 #include <vector>
@@ -10,6 +12,11 @@
 #include <map>
 
 namespace {
+void applyMatchingCaption(quintptr id) {
+    if (!id) return;
+    const BOOL dark = qGuiApp->styleHints()->colorScheme() == Qt::ColorScheme::Dark;
+    DwmSetWindowAttribute(reinterpret_cast<HWND>(id), DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+}
 // OUTOFCONTEXT callbacks run on the registering GUI thread. Each controller
 // owns its hooks; there is no process-wide singleton or cross-thread Qt access.
 thread_local std::map<HWINEVENTHOOK, QPointer<WindowLayerController>> eventTargets;
@@ -79,6 +86,9 @@ WindowLayerController::WindowLayerController(QObject* parent, Positioner positio
             reinterpret_cast<HWND>(after), 0, 0, 0, 0, flags);
     };
     if (qGuiApp) qGuiApp->installEventFilter(this);
+    if (qGuiApp) connect(qGuiApp->styleHints(), &QStyleHints::colorSchemeChanged, this, [this] {
+        if (QGuiApplication::platformName() == "windows") applyMatchingCaption(handle(matching_));
+    });
     maintenanceTimer_.setInterval(100);
     maintenanceTimer_.setParent(this);
     maintenanceTimer_.setObjectName(QStringLiteral("windowLayerWatchdog"));
@@ -91,6 +101,7 @@ WindowLayerController::WindowLayerController(QObject* parent, Positioner positio
 }
 
 WindowLayerController::~WindowLayerController() {
+    attachMatching(nullptr);
     stopMaintenance();
     if (qGuiApp) qGuiApp->removeEventFilter(this);
     restoreMain();
@@ -147,11 +158,44 @@ void WindowLayerController::attach(QWindow* main, QWindow* overlay, QWindow* too
         if (!window) continue;
         connect(window, &QObject::destroyed, this, [this] {
             dirty_ = true;
-            if (!overlay_) stopMaintenance();
+            if (!overlay_ && !matching_) stopMaintenance();
             if (!main_) { baselineHandle_ = 0; modified_ = false; }
             scheduleInvalidation();
         });
     }
+}
+void WindowLayerController::attachMatching(QWindow* window, std::function<bool(quintptr)> playerMatches) {
+    if (matching_ && matching_ != window) {
+        disconnect(matching_, nullptr, this, nullptr);
+        if (const auto id = handle(matching_); id && nativeTopmost(id)) position(id, insertion(HWND_NOTOPMOST));
+    }
+    if (window && matching_ != window) connect(window, &QObject::destroyed, this, [this] {
+        matchingPlayer_ = {}; invalidate();
+    });
+    matching_ = window;
+    matchingPlayer_ = std::move(playerMatches);
+    matchingFailureReported_ = false;
+    invalidate();
+}
+void WindowLayerController::showMatching(QWindow* window, bool activate) {
+    if (!window || matching_ != window) return;
+    if (QGuiApplication::platformName() == "windows") {
+        // Qt::Tool shows without taking focus on Windows. Give this interactive
+        // tool a taskbar entry so users can reach it even with the main window hidden.
+        const auto hwnd = reinterpret_cast<HWND>(window->winId());
+        if (ourWindow(insertion(hwnd))) {
+            const auto style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (style & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW);
+            applyMatchingCaption(insertion(hwnd));
+        }
+    }
+    window->show();
+    invalidate();
+    if (activate && matchingPlayer_ && matchingPlayer_(insertion(GetForegroundWindow()))) window->requestActivate();
+    QPointer<QWindow> shown(window);
+    QTimer::singleShot(250, this, [this, shown] {
+        if (shown && shown == matching_ && shown->isVisible() && !shown->isActive()) shown->alert(4000);
+    });
 }
 
 void WindowLayerController::stopMaintenance() {
@@ -167,7 +211,8 @@ void WindowLayerController::stopMaintenance() {
 
 void WindowLayerController::updateMaintenance() {
     if (!injected_ && QGuiApplication::platformName() != "windows") { stopMaintenance(); return; }
-    const bool enabled = onTop_ && overlayAllowed_ && overlay_ && overlay_->isVisible();
+    const bool enabled = (onTop_ && overlayAllowed_ && overlay_ && overlay_->isVisible()) ||
+                         (matching_ && matching_->isVisible());
     if (!enabled) { stopMaintenance(); return; }
     if (maintenanceTimer_.isActive()) return;
     maintenanceTimer_.start();
@@ -248,11 +293,11 @@ bool WindowLayerController::eventFilter(QObject* watched, QEvent* event) {
         type != QEvent::WinIdChange && type != QEvent::WindowStateChange) return false;
     auto* window = qobject_cast<QWindow*>(watched);
     if (!window) return false;
-    bool managed = window == main_ || window == overlay_ || window == toolbar_;
+    bool managed = window == main_ || window == overlay_ || window == toolbar_ || window == matching_;
     // Native QML tooltip windows are created lazily. Reconcile their first show
     // too, otherwise a newly opened tooltip can rise above an existing dialog.
     for (auto* owner = window->transientParent(); !managed && owner; owner = owner->transientParent())
-        managed = owner == main_ || owner == toolbar_;
+        managed = owner == main_ || owner == toolbar_ || owner == matching_;
     if (!managed) return false;
     if (event->type() == QEvent::PlatformSurface) {
         const auto surfaceType = static_cast<QPlatformSurfaceEvent*>(event)->surfaceEventType();
@@ -290,7 +335,13 @@ bool WindowLayerController::reconcile(bool onTop, bool panelForeground, bool ove
     updateMaintenance();
     const bool panel = panelForeground && overlayAllowed && main_ && main_->isVisible() &&
                        main_->windowState() != Qt::WindowMinimized;
-    if (!changed && ready_ && (!checkOrder || !onTop || !needsRepair(panel))) return ready_;
+    if (!changed && ready_ && (!checkOrder || !onTop || !needsRepair(panel))) {
+        if (matching_ && (injected_ || QGuiApplication::platformName() == "windows")) {
+            QScopedValueRollback guard(reconciling_, true);
+            reconcileMatching(foreground, overlayAllowed && toolbar_ && toolbar_->isVisible() ? handle(toolbar_) : 0);
+        }
+        return ready_;
+    }
     QScopedValueRollback guard(reconciling_, true);
     dirty_ = false;
     if (!injected_ && QGuiApplication::platformName() != "windows") return ready_ = true;
@@ -359,6 +410,7 @@ bool WindowLayerController::reconcile(bool onTop, bool panelForeground, bool ove
                 move(overlayId, HWND_TOPMOST);
         }
     }
+    if (matching_) reconcileMatching(foreground, toolbarId ? toolbarId : overlayId);
     ready_ = success;
     if (success && adjusted) emit orderAdjusted();
     if (!success && !failureReported_) {
@@ -366,4 +418,49 @@ bool WindowLayerController::reconcile(bool onTop, bool panelForeground, bool ove
         emit operationFailed(QStringLiteral("窗口层级调整失败；面板操作期间暂时隐藏弹幕并重试"));
     } else if (success) failureReported_ = false;
     return ready_;
+}
+
+void WindowLayerController::reconcileMatching(quintptr foreground, quintptr lower) {
+    const auto id = handle(matching_);
+    if (!id) return;
+    const bool shown = matching_->isVisible() && matching_->windowState() != Qt::WindowMinimized;
+    const bool player = shown && matchingPlayer_ && matchingPlayer_(foreground);
+    const bool relevant = shown && (player || MediaMonitor::windowOrOwnerForeground(id));
+    const bool top = onTop_ && relevant;
+    bool success = true;
+    const auto move = [&](quintptr target, HWND after) { success = position(target, insertion(after)) && success; };
+    const auto owned = visibleOwnedWindows(id);
+    if (!top) {
+        bool demoted = nativeTopmost(id);
+        if (demoted) move(id, HWND_NOTOPMOST);
+        for (const auto& child : owned) {
+            if (!nativeTopmost(child.handle)) continue;
+            move(child.handle, HWND_NOTOPMOST); demoted = true;
+        }
+        if (!relevant && shown && demoted && foreground && !nativeTopmost(foreground)) {
+            if (above(id, foreground))
+                move(id, reinterpret_cast<HWND>(foreground));
+            for (const auto& child : owned) if (above(child.handle, foreground)) move(child.handle, reinterpret_cast<HWND>(foreground));
+        }
+    }
+    if (relevant) {
+        if (!lower && overlayAllowed_ && overlay_ && overlay_->isVisible()) lower = handle(overlay_);
+        // Respect the toolbar's actual band. With topmost disabled a third-party
+        // topmost window cannot be overtaken without changing bands.
+        const auto raiseOver = [&](quintptr window, quintptr anchor) {
+            if ((top && !nativeTopmost(window)) ||
+                (anchor && (top || !nativeTopmost(anchor)) && !above(window, anchor)))
+                move(window, top ? HWND_TOPMOST : HWND_TOP);
+        };
+        if (player) raiseOver(id, foreground);
+        if (lower && toolbar_ && handle(toolbar_) == lower) {
+            for (const auto& child : visibleOwnedWindows(lower)) raiseOver(id, child.handle);
+        }
+        raiseOver(id, lower);
+        auto anchor = id;
+        for (const auto& child : owned) { raiseOver(child.handle, anchor); anchor = child.handle; }
+    }
+    if (!success && !matchingFailureReported_)
+        emit operationFailed(QStringLiteral("手动匹配窗口层级调整失败，将继续重试"));
+    matchingFailureReported_ = !success;
 }
