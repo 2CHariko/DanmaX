@@ -68,7 +68,7 @@ function Sync-DevelopmentRuntime([string] $Executable, [string] $Directory, [str
     $identity = (@($ProjectRoot, $Directory, $Preset, $Tools.Qt) + @(
         foreach ($inputFile in @($Executable, (Get-ProjectPath 'scripts/deployment.ps1'),
             (Get-ProjectPath 'toolchain/dependencies.lock.json'), (Get-ProjectPath 'toolchain/libvlc.lock.json'), (Get-ProjectPath 'LICENSE'),
-            (Get-ProjectPath 'docs/THIRD_PARTY.md'), (Get-ProjectPath 'docs/PACKAGING.md'),
+            (Get-ProjectPath 'docs/release/third-party.md'), (Get-ProjectPath 'docs/release/packaging.md'),
             (Get-ProjectPath 'resources/fluent/LICENSE'))) {
             (Get-FileHash -LiteralPath $inputFile -Algorithm SHA256).Hash
         }
@@ -144,7 +144,7 @@ function Sync-DevelopmentRuntime([string] $Executable, [string] $Directory, [str
         Copy-Item -LiteralPath $pdb -Destination $targetPdb -Force
         $managed += $targetPdb
     }
-    foreach ($notice in @('LICENSE', 'docs/THIRD_PARTY.md', 'docs/PACKAGING.md', 'resources/fluent/LICENSE')) {
+    foreach ($notice in @('LICENSE', 'docs/release/third-party.md', 'docs/release/packaging.md', 'resources/fluent/LICENSE')) {
         $name = if ($notice -eq 'resources/fluent/LICENSE') { 'Fluent-System-Icons-LICENSE.txt' } else { Split-Path $notice -Leaf }
         $target = Join-Path $Directory $name
         Copy-Item -LiteralPath (Get-ProjectPath $notice) -Destination $target -Force

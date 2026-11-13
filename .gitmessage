@@ -1,0 +1,9 @@
+# <type>(<scope>): <简体中文主题（不超过 72 字符，末尾不加句号）>
+#
+# 可选正文：说明修改动机、影响范围与设计权衡。
+#
+# 可选脚注：Closes #123 / BREAKING CHANGE: ...
+#
+# type 可选值：feat | fix | docs | refactor | perf | style | test | build | ci | chore | revert
+# scope 示例：core | engine | player | potplayer | vlc | libvlc | seek | overlay | ui | docs | scripts | package
+# 规范详情：docs/engineering/git-commit-convention.md

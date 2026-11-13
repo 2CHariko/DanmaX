@@ -9,7 +9,7 @@ $fixtureScripts = Join-Path $fixture 'scripts'
 New-Item -ItemType Directory -Force $fixtureScripts | Out-Null
 Copy-Item -LiteralPath (Join-Path $root 'scripts/run.ps1') -Destination $fixtureScripts
 foreach ($inputFile in @('CMakePresets.json', 'toolchain/dependencies.lock.json', 'toolchain/qt-static.lock.json',
-    '.local/toolchain.local.json', 'LICENSE', 'docs/THIRD_PARTY.md', 'docs/PACKAGING.md', 'resources/fluent/LICENSE')) {
+    '.local/toolchain.local.json', 'LICENSE', 'docs/release/third-party.md', 'docs/release/packaging.md', 'resources/fluent/LICENSE')) {
     $destination = Join-Path $fixture $inputFile
     New-Item -ItemType Directory -Force (Split-Path $destination) | Out-Null
     if ($inputFile -eq '.local/toolchain.local.json') { Set-Content $destination '{}' }

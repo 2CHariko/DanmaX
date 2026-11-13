@@ -25,7 +25,7 @@
 
 **DanmaX** 是一款专为 Windows 平台打造的原生高性能外挂弹幕工具。它能够将弹幕以完全鼠标穿透、自适应刷新率、低系统资源开销的方式，悬浮置顶在任意本地视频播放器（如 PotPlayer、MPC-HC、VLC、mpv 等）或网页浏览器之上。
 
-可选开发构建已接入 libVLC 内置播放：文字底栏、后退 10 秒／前进 30 秒、隐藏侧栏的观看页、局部深色主题及 F11 全屏，播放中空闲 3 秒隐藏全屏控制条。默认发布预设仍不包含内置播放器，开发运行和实测边界见 [观看布局说明](docs/PLAYBACK_PRESENTATION.md)。
+可选开发构建已接入 libVLC 内置播放：文字底栏、后退 10 秒／前进 30 秒、隐藏侧栏的观看页、局部深色主题及 F11 全屏，播放中空闲 3 秒隐藏全屏控制条。默认发布预设仍不包含内置播放器，开发运行和实测边界见 [观看布局说明](docs/playback/playback-presentation.md)。
 
 ### 解决的核心痛点
 
@@ -91,7 +91,7 @@ DanmaX 遵循严格的高内聚、低耦合分层架构设计，各层职责边�
 
 ## 典型使用场景
 
-当前开发版本支持视频同步与独立弹幕两种任务：播放页和全宽底部条展示当前视频，媒体库提供打开视频与最近播放。浏览不打断播放，启动应用不自动播放。提供 PotPlayer x64 与 VLC 3.x x64 预设，支持自动发现和路径校验；详见[播放说明](docs/NOW_PLAYING.md)及[播放器配置](docs/EXTERNAL_PLAYERS.md)。尚未重打正式发布包。
+当前开发版本支持视频同步与独立弹幕两种任务：播放页和全宽底部条展示当前视频，媒体库提供打开视频与最近播放。浏览不打断播放，启动应用不自动播放。提供 PotPlayer x64 与 VLC 3.x x64 预设，支持自动发现和路径校验；详见[播放说明](docs/architecture/now-playing.md)及[播放器配置](docs/playback/external-players.md)。尚未重打正式发布包。
 
 1. 在设置中选择默认播放器，然后通过“打开视频”或拖入本地视频开始播放。
 2. 视频就绪后自动匹配弹幕；已有 XML、搜索或缓存均从底部“弹幕”菜单选择。首页卡片／详情选集也将弹幕载入当前视频。
@@ -166,25 +166,25 @@ DanmaX 的构建与良好体验离不开以下优秀开源项目、平台服务�
 - **[Ninja](https://ninja-build.org/) (ninja-build contributors)**：Apache-2.0，高效并行构建底层工具。
 - **Microsoft Windows SDK & C++/WinRT**：Windows 受控进程、窗口消息、高精度时钟与扩展窗口样式支持。
 
-详细第三方许可证说明与合规体系请参阅 **[第三方组件说明 (docs/THIRD_PARTY.md)](docs/THIRD_PARTY.md)**。
+详细第三方许可证说明与合规体系请参阅 **[第三方组件说明 (docs/release/third-party.md)](docs/release/third-party.md)**。
 
 ---
 
 ## 完整文档导航
 
-更多进阶用法、架构细节与工程规范请查阅 [`docs/`](docs/) 目录下的专题文档：
+更多进阶用法、架构细节与工程规范请查阅 **[文档中心 (docs/README.md)](docs/README.md)** 及以下专题文档：
 
 | 文档名称 | 核心内容概要 |
 |---|---|
-| [用户实操指南 (docs/USER_GUIDE.md)](docs/USER_GUIDE.md) | 新手入门、便携目录结构、双模播放技巧、外观微调与常见问题 FAQ |
-| [配置文件手册 (docs/CONFIGURATION.md)](docs/CONFIGURATION.md) | `settings.ini` 21 项全量参数速查字典、字段类型、合法区间与手工编辑规范 |
-| [默认配置模板 (docs/settings.example.ini)](docs/settings.example.ini) | 首次启动生成的完整 UTF-8 INI 配置文件模板与中文注释 |
-| [C++ / Qt 架构设计 (docs/CPP_QT_ARCHITECTURE.md)](docs/CPP_QT_ARCHITECTURE.md) | 系统设计原则、分层边界、线程安全、帧时钟模型与系统隔离规则 |
-| [UI 设计系统规范 (docs/UI_DESIGN_SYSTEM.md)](docs/UI_DESIGN_SYSTEM.md) | Qt 官方 FluentWinUI3 默认控件与平台适配约束、4 单位布局节奏与下拉弹出层边界 |
-| [Windows 便携分发 (docs/PACKAGING.md)](docs/PACKAGING.md) | 静态单 EXE 架构、依赖精简、配套重编译材料及三种分发格式区别 |
-| [第三方组件与合规说明 (docs/THIRD_PARTY.md)](docs/THIRD_PARTY.md) | 第三方许可证清单、LGPLv3 静态分发合规流水线与重新链接保障 |
-| [开发与构建脚本手册 (docs/SCRIPTS.md)](docs/SCRIPTS.md) | 全量 24 个 PowerShell 脚本参数手册、环境准备、静态 SDK 编译与基准测试 |
-| [交付状态与实机证据 (docs/FRAMEWORK_STATUS.md)](docs/FRAMEWORK_STATUS.md) | 历史里程碑演进记录、全量 CTest 覆盖率与真机实测数据链 |
+| [用户指南 (docs/user/user-guide.md)](docs/user/user-guide.md) | 新手入门、便携目录结构、双模播放技巧、外观微调与常见问题 FAQ |
+| [配置文件参考 (docs/user/configuration.md)](docs/user/configuration.md) | `settings.ini` 21 项全量参数速查字典、字段类型、合法区间与手工编辑规范 |
+| [示例配置文件 (docs/user/settings.example.ini)](docs/user/settings.example.ini) | 首次启动生成的完整 UTF-8 INI 配置文件模板与中文注释 |
+| [C++ / Qt 核心架构 (docs/architecture/cpp-qt-architecture.md)](docs/architecture/cpp-qt-architecture.md) | 系统设计原则、分层边界、线程安全、帧时钟模型与系统隔离规则 |
+| [FluentWinUI3 界面设计系统 (docs/ui/ui-design-system.md)](docs/ui/ui-design-system.md) | Qt 官方 FluentWinUI3 默认控件与平台适配约束、4 单位布局节奏与下拉弹出层边界 |
+| [Windows 便携分发 (docs/release/packaging.md)](docs/release/packaging.md) | 静态单 EXE 架构、依赖精简、配套重编译材料及三种分发格式区别 |
+| [第三方组件与合规说明 (docs/release/third-party.md)](docs/release/third-party.md) | 第三方许可证清单、LGPLv3 静态分发合规流水线与重新链接保障 |
+| [PowerShell 脚本手册 (docs/engineering/scripts-manual.md)](docs/engineering/scripts-manual.md) | 全量 42 个 PowerShell 脚本参数手册、环境准备、静态 SDK 编译与基准测试 |
+| [当前交付状态与验收边界 (docs/status/current-status.md)](docs/status/current-status.md) | 历史里程碑演进记录、全量 CTest 覆盖率与真机实测数据链 |
 | [开发贡献指南 (CONTRIBUTING.md)](CONTRIBUTING.md) | 源码编译环境搭建、本地调试、自动化测试与 PR 提交流程 |
 
 ---
@@ -193,5 +193,5 @@ DanmaX 的构建与良好体验离不开以下优秀开源项目、平台服务�
 
 - 本项目主程序及源代码采用 **[GNU General Public License v3.0 (GPL-3.0)](LICENSE)** 授权开源。
 - 使用本项目前请仔细阅读 **[免责声明与使用条款 (DISCLAIMER.md)](DISCLAIMER.md)**。
-- 本项目严格履行 LGPLv3 针对静态分发的合规义务，静态发行包配套提供源码快照、SBOM、符号表与脱机重新链接指引，详见 **[第三方组件说明 (docs/THIRD_PARTY.md)](docs/THIRD_PARTY.md)**。
+- 本项目严格履行 LGPLv3 针对静态分发的合规义务，静态发行包配套提供源码快照、SBOM、符号表与脱机重新链接指引，详见 **[第三方组件说明 (docs/release/third-party.md)](docs/release/third-party.md)**。
 - 历史 Python 原型及早期计划文档已完整归档至独立的 **[archive 分支](https://github.com/2CHariko/DanmaX/tree/archive/archive)**，不参与主线代码构建。

@@ -66,7 +66,7 @@ Invoke-ProjectEnvironment {
         if (($imports -join "`n") -match '(?im)^\s+(Qt\d.*|MSVCP\d.*|VCRUNTIME\d.*|CONCRT\d.*|dxcompiler|dxil)\.dll\s*$') {
             throw 'Static package still imports a Qt, compiler-runtime or external shader-compiler DLL.'
         }
-        foreach ($notice in @('LICENSE','DISCLAIMER.md','docs/THIRD_PARTY.md','docs/PACKAGING.md')) {
+        foreach ($notice in @('LICENSE','DISCLAIMER.md','docs/release/third-party.md','docs/release/packaging.md')) {
             Copy-Item -LiteralPath (Get-ProjectPath $notice) -Destination $materials
         }
         Copy-Item -LiteralPath (Get-ProjectPath 'resources/fluent/LICENSE') -Destination (Join-Path $materials 'Fluent-System-Icons-LICENSE.txt')
@@ -106,7 +106,7 @@ Invoke-ProjectEnvironment {
         @'
 This folder is separate from the portable executable. Preserve it for distribution/relinking review.
 The application source and verified dependency archives are included; Qt sources were not patched.
-Rebuild instructions are in application-source/docs/PACKAGING.md. Place the Qt archives under
+Rebuild instructions are in application-source/docs/release/packaging.md. Place the Qt archives under
 .cache/downloads, then prepare-qt-static.ps1 -Offline and build-qt-static.ps1 before building the app.
 Place qwindowkit/qwindowkit-1.5.0.zip under .cache/qwindowkit and run prepare-qwindowkit.ps1 -Offline.
 MSVC and Windows SDK require an explicit .local/toolchain.local.json for your installation.
@@ -133,12 +133,12 @@ in static-exe. These materials are not a completed component-by-component licens
     Copy-Item -LiteralPath $exe -Destination $stage
     Invoke-QtDeployment $stage $tools | Out-Null
     Copy-Item -LiteralPath (Get-ProjectPath 'LICENSE') -Destination $stage
-    Copy-Item -LiteralPath (Get-ProjectPath 'docs/THIRD_PARTY.md') -Destination $stage
+    Copy-Item -LiteralPath (Get-ProjectPath 'docs/release/third-party.md') -Destination $stage
     Copy-Item -LiteralPath (Get-ProjectPath 'resources/fluent/LICENSE') -Destination (Join-Path $stage 'Fluent-System-Icons-LICENSE.txt')
-    Copy-Item -LiteralPath (Get-ProjectPath 'docs/PACKAGING.md') -Destination $stage
+    Copy-Item -LiteralPath (Get-ProjectPath 'docs/release/packaging.md') -Destination $stage
     $licenses = Join-Path $tools.Qt 'LICENSES'
     if (Test-Path -LiteralPath $licenses) { Copy-Item -LiteralPath $licenses -Destination (Join-Path $stage 'qt-licenses') -Recurse }
     Write-Host "Development deployment created: $stage"
     if ($Format -eq 'single-exe') { New-PortableExecutable -Stage $stage -Tools $tools -Timestamp $timestamp }
-    Write-Host 'Requires the official Microsoft Visual C++ 2015-2022 x64 runtime. Review THIRD_PARTY.md before public distribution.'
+    Write-Host 'Requires the official Microsoft Visual C++ 2015-2022 x64 runtime. Review docs/release/third-party.md before public distribution.'
 }

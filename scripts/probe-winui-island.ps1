@@ -102,7 +102,7 @@ Invoke-ProjectEnvironment {
                 Where-Object { $_.Name -match 'license|notice' }
             foreach ($file in $licenseFiles) { Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $licenses "$($package.id)-$($file.Name)") -Force }
         }
-        foreach ($notice in @('LICENSE','docs/THIRD_PARTY.md','docs/PACKAGING.md')) {
+        foreach ($notice in @('LICENSE','docs/release/third-party.md','docs/release/packaging.md')) {
             Copy-Item -LiteralPath (Get-ProjectPath $notice) -Destination $licenses -Force
         }
         if (!$StaticQt) {

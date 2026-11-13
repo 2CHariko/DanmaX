@@ -32,7 +32,7 @@ pwsh -File scripts/probe-libvlc.ps1 -Video '<本地视频完整路径>' -NoBuild
 
 libVLC 公开接口采用 LGPL-2.1-or-later。开发探针保留完整上游运行归档，其中还包含 GPL 插件及其他组件，保留 COPYING.txt、COPYING.LIB、THANKS.txt 等材料；本目录没有给出生产可分发插件清单。C API 使用动态加载与库自身的释放函数，避免 MSVC 与上游工具链之间交换分配器所有权。
 
-完整实机记录见 [LIBVLC_EMBEDDING_PROBE.md](../../docs/LIBVLC_EMBEDDING_PROBE.md)。
+完整实机记录见 [libvlc-embedding-probe.md](../../docs/research/probes/libvlc-embedding-probe.md)。
 
 ## 同父子窗对照
 
@@ -47,7 +47,7 @@ pwsh -File scripts/probe-libvlc.ps1 -Video '<本地视频完整路径>' -ChildLa
 
 自动检查增加移动、最大化／最小化恢复、父子关系、HWND 身份及原生样式，记录消息中两个子窗的物理矩形差；不是逐帧呈现延迟测量。界面“弹幕层”按钮只切换子窗显隐，便于对照同一视频输出；浮层仍用官方 `Popup.Window`。脚本拒绝覆盖或重启仍在运行的同一探针，不强制结束进程。
 
-本机结果是 **D3D11 Quick 透明子窗未通过；软件 Quick 子窗最小验证通过**。`result.json.passed` 仍仅表示自动状态／几何检查，必须结合前台目视检查。限制、失败轮次与证据见 [同父子窗验证记录](../../docs/LIBVLC_CHILD_WINDOWS_PROBE.md)，没有替换生产播放器或全局渲染后端。
+本机结果是 **D3D11 Quick 透明子窗未通过；软件 Quick 子窗最小验证通过**。`result.json.passed` 仍仅表示自动状态／几何检查，必须结合前台目视检查。限制、失败轮次与证据见 [同父子窗验证记录](../../docs/research/probes/libvlc-child-windows-probe.md)，没有替换生产播放器或全局渲染后端。
 
 ## 独立顶层覆盖窗跟随对照
 
@@ -61,4 +61,4 @@ pwsh -File scripts/probe-libvlc.ps1 -Video '<本地视频完整路径>' -FollowS
 pwsh -File scripts/probe-libvlc.ps1 -Video '<本地视频完整路径>' -FollowSync Qt -NoBuild -RunName follow-qt
 ```
 
-结果包含消息前后矩形差、播放／暂停／手动阶段、原生移动循环计数及窗口身份。历史同 EXE 对照中 Qt 为 16/18，Native 为 18/18，所列二进制哈希见 [顶层覆盖窗跟随验证](../../docs/OWNED_OVERLAY_FOLLOW_PROBE.md)。后续正式接入见 [生产记录](../../docs/OWNED_OVERLAY_FOLLOW_INTEGRATION.md)；几何同步不等于逐帧呈现保证。
+结果包含消息前后矩形差、播放／暂停／手动阶段、原生移动循环计数及窗口身份。历史同 EXE 对照中 Qt 为 16/18，Native 为 18/18，所列二进制哈希见 [顶层覆盖窗跟随验证](../../docs/research/probes/owned-overlay-follow-probe.md)。后续正式接入见 [生产记录](../../docs/playback/overlay-follow.md)；几何同步不等于逐帧呈现保证。

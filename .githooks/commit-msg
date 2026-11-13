@@ -1,0 +1,37 @@
+#!/usr/bin/env sh
+set -eu
+
+MSG_FILE="${1:-}"
+if [ -z "$MSG_FILE" ] || [ ! -f "$MSG_FILE" ]; then
+  echo "[commit-msg] 找不到提交信息文件。" >&2
+  exit 1
+fi
+
+HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PS_SCRIPT="$HOOK_DIR/validate-commit-msg.ps1"
+
+if command -v pwsh >/dev/null 2>&1; then
+  exec pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PS_SCRIPT" -MessageFile "$MSG_FILE"
+elif command -v powershell.exe >/dev/null 2>&1; then
+  exec powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PS_SCRIPT" -MessageFile "$MSG_FILE"
+fi
+
+HEADER=$(grep -v '^[[:space:]]*#' "$MSG_FILE" | sed '/^[[:space:]]*$/d' | head -n 1 || true)
+if [ -z "$HEADER" ]; then
+  echo "[commit-msg] 提交信息不能为空。详见 docs/engineering/git-commit-convention.md" >&2
+  exit 1
+fi
+
+case "$HEADER" in
+  "Merge "*|"Revert \""*|"fixup! "*|"squash! "*)
+    exit 0
+    ;;
+esac
+
+if ! printf '%s\n' "$HEADER" | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9-]+\))?: .+'; then
+  echo "[commit-msg] 提交标题不符合 Conventional Commits 规范: $HEADER" >&2
+  echo "示例: docs(agents): 精简规范并重建文档索引" >&2
+  exit 1
+fi
+
+exit 0

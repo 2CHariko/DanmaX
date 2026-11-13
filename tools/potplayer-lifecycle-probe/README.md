@@ -1,6 +1,6 @@
 # PotPlayer 生命周期最小探针
 
-正式接入现已另行实现于 `src/platform/windows/PotPlayerBackend.*`，见 [统一播放说明](../../docs/NOW_PLAYING.md) 和 [验收状态](../../docs/FRAMEWORK_STATUS.md)。本目录继续保留独立最小复现；下文“没有修改正式流程”描述当时探针验证的边界，不表示后续正式接入仍未完成。
+正式接入现已另行实现于 `src/platform/windows/PotPlayerBackend.*`，见 [统一播放说明](../../docs/architecture/now-playing.md) 和 [验收状态](../../docs/status/current-status.md)。本目录继续保留独立最小复现；下文“没有修改正式流程”描述当时探针验证的边界，不表示后续正式接入仍未完成。
 
 独立验证项目，不接入正式应用，也不修改正式播放器适配器、弹幕调度或用户设置页。覆盖层只是带文字的透明占位窗，工具栏是独立测试按钮；不代表真实弹幕渲染、进度保存或正式工作流已完成改造。
 

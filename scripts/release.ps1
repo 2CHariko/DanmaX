@@ -76,7 +76,7 @@ Invoke-ProjectEnvironment {
     Copy-Item -LiteralPath $staticSrc -Destination (Join-Path $stageDir 'DanmaX.exe')
     Copy-Item -LiteralPath (Get-ProjectPath 'LICENSE') -Destination $stageDir
     Copy-Item -LiteralPath (Get-ProjectPath 'README.md') -Destination $stageDir
-    Copy-Item -LiteralPath (Get-ProjectPath 'docs/THIRD_PARTY.md') -Destination $stageDir
+    Copy-Item -LiteralPath (Get-ProjectPath 'docs/release/third-party.md') -Destination $stageDir
     Copy-Item -LiteralPath (Get-ProjectPath 'resources/fluent/LICENSE') -Destination (Join-Path $stageDir 'Fluent-System-Icons-LICENSE.txt')
 
     $zipName = "DanmaX-v$version-windows-x64.zip"
