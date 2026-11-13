@@ -1,6 +1,7 @@
 
 #include "application/AppController.h"
 #include "platform/windows/WindowBackdropController.h"
+#include "platform/windows/RecoveryXmlPicker.h"
 #include "infrastructure/AppPaths.h"
 #include <QWKQuick/qwkquickglobal.h>
 #include "version.h"
@@ -135,6 +136,7 @@ int main(int argc, char* argv[]) {
         const auto paths =
             AppPaths::prepare(app.applicationFilePath(), parser.value("data-dir"), parser.value("cache-dir"));
         qmlRegisterType<DanmakuItem>("DanmaX.Native", 1, 0, "DanmakuCanvas");
+        qmlRegisterType<RecoveryXmlPicker>("DanmaX.Native", 1, 0, "RecoveryXmlPicker");
         AppController controller(paths.data, nullptr, {}, paths.cache);
         if (parser.isSet("theme"))
             qobject_cast<SettingsStore*>(controller.settings())->setValue("theme", parser.value("theme"));

@@ -28,7 +28,7 @@ Dialog {
     modal: true
     focus: true
     title: manualSearch ? "搜索弹幕" : "手动匹配弹幕"
-    closePolicy: Popup.CloseOnEscape
+    closePolicy: recoveryPane.choosingXml ? Popup.NoAutoClose : Popup.CloseOnEscape
     leftPadding: 0
     rightPadding: 0
     topPadding: 0
@@ -82,6 +82,7 @@ Dialog {
     Binding { target: dialog.enter; property: "enabled"; value: Ui.motionEnabled }
     Binding { target: dialog.exit; property: "enabled"; value: Ui.motionEnabled }
     contentItem: MatchingRecoveryPane {
+        id: recoveryPane
         backend: dialog.backend
         manualSearch: dialog.manualSearch
         allowLocalXml: dialog.allowLocalXml

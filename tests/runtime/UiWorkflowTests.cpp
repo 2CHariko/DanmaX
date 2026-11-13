@@ -49,6 +49,7 @@
 #endif
 #include "application/AppController.h"
 #include "renderer/DanmakuItem.h"
+#include "platform/windows/RecoveryXmlPicker.h"
 #include "infrastructure/SettingsStore.h"
 #include "infrastructure/LogModel.h"
 #include "platform/windows/WindowBackdropController.h"
@@ -288,8 +289,7 @@ private slots:
         QTRY_VERIFY(matching->isVisible()); QVERIFY(!main->isVisible()); QVERIFY(!backend.overlayVisible());
         QVERIFY(!matching->transientParent()); QCOMPARE(showMain.size(), 0);
         QVERIFY(matching->findChild<QObject*>("recoveryFileName"));
-        auto* xml = matching->findChild<QObject*>("recoveryXmlDialog"); QVERIFY(xml);
-        QCOMPARE(xml->property("parentWindow").value<QWindow*>(), matching);
+        auto* xml = matching->findChild<RecoveryXmlPicker*>("recoveryXmlPicker"); QVERIFY(xml);
         if (QGuiApplication::platformName() == "windows") {
             matching->resize(440, 300);
             auto* scroll = matching->findChild<QQuickItem*>("recoveryScroll"); QVERIFY(scroll);
@@ -307,12 +307,60 @@ private slots:
         QTRY_VERIFY(!matching->isVisible()); QVERIFY(media->active());
         main->showMinimized(); media->retryMatching(); inject();
         QTRY_VERIFY(matching->isVisible()); QCOMPARE(main->visibility(), QWindow::Minimized);
-        QVERIFY(QMetaObject::invokeMethod(xml, "open")); QTRY_VERIFY(xml->property("visible").toBool());
+        QSignalSpy accepted(xml, &RecoveryXmlPicker::accepted);
+        QSignalSpy failures(xml, &RecoveryXmlPicker::failed);
+        auto* choose = matching->findChild<QObject*>("chooseRecoveryXml"); QVERIFY(choose);
+        QVERIFY(QMetaObject::invokeMethod(choose, "clicked")); QVERIFY(xml->busy());
         sample.contentId = "second"; inject(); QVERIFY(!matching->isVisible());
-        QTRY_VERIFY(!xml->property("visible").toBool());
+        QTRY_VERIFY(!xml->busy());
+        QCOMPARE(accepted.size(), 0);
+        QCOMPARE(failures.size(), 0);
         QTRY_VERIFY(matching->isVisible()); QCOMPARE(showMain.size(), 0);
-        matching->close(); QTRY_VERIFY(!matching->isVisible()); QVERIFY(media->active());
-        backend.requestClose(); QTRY_VERIFY(!matching->isVisible());
+        bool endedWithPicker = false;
+#if defined(Q_OS_WIN)
+        if (QGuiApplication::platformName() == "windows") {
+            const auto owner = reinterpret_cast<HWND>(matching->winId());
+            struct Search { HWND owner; HWND found{}; };
+            const auto nativePicker = [owner] {
+                Search search{owner};
+                EnumWindows([](HWND hwnd, LPARAM context) -> BOOL {
+                    auto& search = *reinterpret_cast<Search*>(context);
+                    if (GetWindow(hwnd, GW_OWNER) != search.owner || !IsWindowVisible(hwnd)) return TRUE;
+                    wchar_t name[32]{};
+                    GetClassNameW(hwnd, name, 32);
+                    if (QString::fromWCharArray(name) != QStringLiteral("#32770")) return TRUE;
+                    search.found = hwnd;
+                    return FALSE;
+                }, reinterpret_cast<LPARAM>(&search));
+                return search.found;
+            };
+            QVERIFY(QMetaObject::invokeMethod(choose, "clicked"));
+            QTRY_VERIFY(nativePicker());
+            const auto hwnd = nativePicker();
+            QVERIFY(!IsWindowEnabled(owner));
+            sample.contentId = "third"; inject();
+            QTRY_VERIFY(!xml->busy());
+            QVERIFY(!IsWindow(hwnd));
+            QVERIFY(IsWindowEnabled(owner));
+            QCOMPARE(accepted.size(), 0);
+            QCOMPARE(failures.size(), 0);
+            QTRY_VERIFY(matching->isVisible());
+            QVERIFY(QMetaObject::invokeMethod(choose, "clicked"));
+            QTRY_VERIFY(nativePicker());
+            const auto endingPicker = nativePicker();
+            backend.requestClose();
+            QTRY_VERIFY(!matching->isVisible());
+            QTRY_VERIFY(!xml->busy());
+            QVERIFY(!IsWindow(endingPicker));
+            QCOMPARE(accepted.size(), 0);
+            QCOMPARE(failures.size(), 0);
+            endedWithPicker = true;
+        }
+#endif
+        if (!endedWithPicker) {
+            matching->close(); QTRY_VERIFY(!matching->isVisible()); QVERIFY(media->active());
+            backend.requestClose(); QTRY_VERIFY(!matching->isVisible());
+        }
         QStringList errors; for (const auto& signal : warnings) for (const auto& error : qvariant_cast<QList<QQmlError>>(signal.first())) errors << error.toString();
         QVERIFY2(warnings.isEmpty(), qPrintable(errors.join('\n')));
     }
@@ -4257,6 +4305,7 @@ int main(int argc, char** argv) {
     if (QFontDatabase::families().contains("Microsoft YaHei UI"))
         QFontDatabase::addApplicationFallbackFontFamily(QChar::Script_Han, "Microsoft YaHei UI");
     qmlRegisterType<DanmakuItem>("DanmaX.Native", 1, 0, "DanmakuCanvas");
+    qmlRegisterType<RecoveryXmlPicker>("DanmaX.Native", 1, 0, "RecoveryXmlPicker");
     QWK::registerTypes(nullptr);
     UiWorkflowTests tests;
     return QTest::qExec(&tests, argc, argv);

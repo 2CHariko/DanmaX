@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls.FluentWinUI3
 import QtQuick.Layouts
-import QtQuick.Dialogs
+import DanmaX.Native
 import "../theme"
 
 Item {
@@ -15,7 +15,8 @@ Item {
     property bool titleCopied: false
     readonly property QtObject activeLibrary: manualSearch ? backend.library : backend.automatic.library
     readonly property real inset: Ui.scrollInset(verticalBar.implicitWidth, minimumInset)
-    readonly property bool choosingXml: xmlDialog.visible
+    readonly property bool choosingXml: xmlPicker.busy
+    property string xmlPickerError: ""
     signal cancelMatching()
     signal openSettings()
 
@@ -24,9 +25,10 @@ Item {
         copiedTimer.stop()
         if (!presented) {
             closeChoicePopup()
-            xmlDialog.task = -1
-            xmlDialog.close()
+            xmlPicker.task = -1
+            xmlPicker.cancel()
         } else {
+            xmlPickerError = ""
             scroll.contentItem.contentY = scroll.contentItem.originY
         }
     }
@@ -269,8 +271,19 @@ Item {
                 Button {
                     objectName: "chooseRecoveryXml"
                     text: "选择本地 XML"
-                    onClicked: { xmlDialog.task = pane.backend.taskId; xmlDialog.open() }
+                    enabled: pane.presented && pane.backend.canSelectSource && !xmlPicker.busy
+                    onClicked: {
+                        pane.xmlPickerError = ""
+                        xmlPicker.task = pane.backend.taskId
+                        xmlPicker.open(pane.Window.window)
+                    }
                 }
+            }
+            Label {
+                visible: pane.allowLocalXml && pane.xmlPickerError.length > 0
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: pane.xmlPickerError
             }
 
             // 5. 底部规则脚注
@@ -284,20 +297,14 @@ Item {
             }
         }
     }
-    FileDialog {
-        id: xmlDialog
-        objectName: "recoveryXmlDialog"
+    RecoveryXmlPicker {
+        id: xmlPicker
+        objectName: "recoveryXmlPicker"
         property double task: -1
-        parentWindow: pane.Window.window
-        modality: Qt.WindowModal
-        // The Windows native picker runs on a helper thread. The task may
-        // change at any time, so use Qt's picker that can close synchronously.
-        options: FileDialog.DontUseNativeDialog
-        title: "为当前视频选择弹幕 XML"
-        nameFilters: ["弹幕 XML (*.xml)"]
-        onAccepted: {
+        onAccepted: function(file) {
             if (pane.presented && task === pane.backend.taskId && pane.backend.canSelectSource)
-                pane.backend.loadFile(selectedFile)
+                pane.backend.loadFile(file)
         }
+        onFailed: function(message) { pane.xmlPickerError = message }
     }
 }

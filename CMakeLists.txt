@@ -150,6 +150,7 @@ if(DANMAKU_BUILD_APP)
         src/platform/windows/ToolbarInputFilter.cpp src/platform/windows/ToolbarInputFilter.h
         src/platform/windows/ToolbarPointerMonitor.cpp src/platform/windows/ToolbarPointerMonitor.h
         src/platform/windows/WindowLayerController.cpp src/platform/windows/WindowLayerController.h
+        src/platform/windows/RecoveryXmlPicker.cpp src/platform/windows/RecoveryXmlPicker.h
         src/platform/windows/VideoViewportController.cpp src/platform/windows/VideoViewportController.h
         src/platform/windows/PlaybackPresentationController.cpp src/platform/windows/PlaybackPresentationController.h
         src/renderer/DanmakuItem.cpp src/renderer/DanmakuItem.h
@@ -157,7 +158,7 @@ if(DANMAKU_BUILD_APP)
         src/infrastructure/SettingsStore.cpp src/infrastructure/SettingsStore.h
         src/infrastructure/LogModel.cpp src/infrastructure/LogModel.h
         src/infrastructure/ChineseConverter.cpp src/infrastructure/ChineseConverter.h)
-    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi version iphlpapi ws2_32 comctl32 PRIVATE danmax_anitomy)
+    target_link_libraries(danmaku_runtime PUBLIC danmaku_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network windowsapp psapi shell32 ole32 dwmapi version iphlpapi ws2_32 comctl32 PRIVATE danmax_anitomy uuid)
     if(DANMAKU_ENABLE_LIBVLC)
         file(READ "${CMAKE_SOURCE_DIR}/toolchain/libvlc.lock.json" libvlc_lock)
         string(JSON libvlc_destination GET "${libvlc_lock}" destination)
